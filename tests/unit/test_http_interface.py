@@ -10,6 +10,7 @@ from starlette.types import Message
 from af.framework.errors import InvalidProviderConfiguration
 from af.interfaces.http import _BoundedBodyMiddleware, _trusted_hosts_for
 from af.interfaces.http_body import HTTP_MAX_BODY_BYTES
+from af.interfaces.http_trust import format_origin, parse_origin_value
 
 
 def test_trusted_hosts_for_loopback_and_non_loopback_hosts() -> None:
@@ -40,6 +41,42 @@ def test_trusted_hosts_for_accepts_ipv6_and_rejects_invalid_entries() -> None:
     for host in ("*", "evil.invalid/path", "user@evil.invalid"):
         with pytest.raises(InvalidProviderConfiguration):
             _trusted_hosts_for("0.0.0.0", (host,))
+
+
+def test_parse_origin_value_rejects_ambiguous_forms_and_canonicalizes_default_ports() -> None:
+    for origin in (
+        " http://af.internal",
+        "http://af.internal:",
+        "http://af.internal:/",
+        "http://af.internal?",
+        "http://af.internal#",
+        "http://af.internal/\n",
+    ):
+        with pytest.raises(InvalidProviderConfiguration):
+            parse_origin_value(origin, error_message="origin is invalid")
+
+    assert (
+        format_origin(parse_origin_value("http://af.internal", error_message="origin is invalid"))
+        == "http://af.internal"
+    )
+    assert (
+        format_origin(
+            parse_origin_value("http://af.internal:80", error_message="origin is invalid")
+        )
+        == "http://af.internal"
+    )
+    assert (
+        format_origin(
+            parse_origin_value("https://af.internal:443", error_message="origin is invalid")
+        )
+        == "https://af.internal"
+    )
+    assert (
+        format_origin(
+            parse_origin_value("https://af.internal:8443", error_message="origin is invalid")
+        )
+        == "https://af.internal:8443"
+    )
 
 
 def test_bounded_body_middleware_enforces_content_length_and_completion() -> None:

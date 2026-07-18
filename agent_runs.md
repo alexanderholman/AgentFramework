@@ -651,3 +651,43 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #012 - Supplemental MCP Origin Validation Correction
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `e93052e`
+- Supplemental request to preserve Run #011 byte-for-byte, append a new record only if source changes landed, and keep the PR in draft
+- Requested corrections for malformed MCP origin configuration rejection, loopback-time validation of explicit allowed hosts/origins, documented default-port canonicalization, and `*/*` Accept-precedence coverage with quote-aware parser regressions
+
+### Outputs
+- Hardened `parse_origin_value()` to reject malformed Origin spellings with whitespace, control characters, path/query/fragment delimiters, and ambiguous empty ports before URL normalization can erase them
+- Canonicalized default origin ports so `http://host:80` and `https://host:443` normalize to the same stored value as the browser-compatible default-port Origin form, while preserving non-default ports exactly
+- Validated explicit Streamable HTTP MCP `allowed_hosts` and `allowed_origins` even on loopback binds before preserving the SDK’s automatic loopback transport-security defaults
+- Added GraphQL regressions covering `*/*` precedence so less-specific wildcards cannot revive more-specific `q=0` rejections, plus a quoted-parameter parsing regression and focused MCP startup/parser tests
+
+### Verified Results
+- Ruff format check: 55 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 33 source files
+- Pytest: 203 passed, 1 warning
+- Coverage: 90.15 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed
+- Smoke: `uv run af hello` -> `Hello, world!`
+- Smoke: `uv run af ask 'how many rs in strawberry'` -> `3`
+
+### Issues Encountered
+- The sandbox clone started shallow, so the reviewed first-PR append-only topology test could not resolve `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; validation proceeded after `git fetch --unshallow origin` and `git fetch origin master:refs/remotes/origin/master`
+- The sandbox image did not initially provide `uv` on `PATH`; validation proceeded after installing `uv` for the current user
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning; the suite remained green and no new dependency was added
+- The latest visible workflow run for the last committed head remained `in_progress` at the time of this record: `https://github.com/alexanderholman/AgentFramework/actions/runs/29656142417`
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Workflow run: https://github.com/alexanderholman/AgentFramework/actions/runs/29656142417
+- Script: `[SCRIPT:af-dev]`
+
+---

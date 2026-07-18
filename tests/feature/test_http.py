@@ -971,6 +971,21 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
             json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
             headers={"accept": "application/json;q=0, application/*;q=1"},
         )
+        global_wildcard_with_exact_graphql_rejection = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/graphql-response+json;q=0, */*;q=1"},
+        )
+        global_wildcard_with_exact_json_rejection = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/json;q=0, */*;q=1"},
+        )
+        global_wildcard_with_application_rejection = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/*;q=0, */*;q=1"},
+        )
         unsupported = client.post(
             "/graphql",
             json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
@@ -1037,6 +1052,15 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
     assert wildcard_with_exact_json_rejection.headers["content-type"].startswith(
         "application/graphql-response+json"
     )
+    assert global_wildcard_with_exact_graphql_rejection.status_code == 200
+    assert global_wildcard_with_exact_graphql_rejection.headers["content-type"].startswith(
+        "application/json"
+    )
+    assert global_wildcard_with_exact_json_rejection.status_code == 200
+    assert global_wildcard_with_exact_json_rejection.headers["content-type"].startswith(
+        "application/graphql-response+json"
+    )
+    assert global_wildcard_with_application_rejection.status_code == 406
     assert unsupported.status_code == 406
     assert unsupported.json()["errors"][0]["extensions"] == {"code": "NOT_ACCEPTABLE"}
     assert malformed_accept.status_code == 406

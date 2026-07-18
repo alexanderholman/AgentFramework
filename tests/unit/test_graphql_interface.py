@@ -25,6 +25,7 @@ from af.interfaces.graphql import (
     _format_error,
     _graphql_response_media_type,
     _GraphQLRequestError,
+    _parse_content_type,
     _parse_query_document,
     _parse_request_payload,
     _read_bounded_body,
@@ -254,8 +255,16 @@ def test_graphql_response_media_type_honors_quality_and_rejects_invalid_ranges()
         _graphql_response_media_type("application/json;q=0, application/*;q=1")
         == GRAPHQL_RESPONSE_MEDIA_TYPE
     )
+    assert (
+        _graphql_response_media_type("application/graphql-response+json;q=0, */*;q=1")
+        == "application/json"
+    )
+    assert (
+        _graphql_response_media_type("application/json;q=0, */*;q=1") == GRAPHQL_RESPONSE_MEDIA_TYPE
+    )
 
     for accept in (
+        "application/*;q=0, */*;q=1",
         "application/graphql-response+json;q=0;q=1",
         "text/plain, application/json;q=0",
         "application/json;q=bogus",
@@ -263,6 +272,12 @@ def test_graphql_response_media_type_honors_quality_and_rejects_invalid_ranges()
         with pytest.raises(_GraphQLRequestError, match="Unsupported Accept header") as error_info:
             _graphql_response_media_type(accept)
         assert error_info.value.status_code == 406
+
+
+def test_parse_content_type_accepts_valid_quoted_parameter_values() -> None:
+    assert _parse_content_type('application/json; note="comma,semicolon;value"') == (
+        "application/json"
+    )
 
 
 @pytest.mark.anyio

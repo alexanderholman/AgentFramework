@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from af.framework.errors import InvalidProviderConfiguration
 
 _HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_DEFAULT_ORIGIN_PORTS = {"http": 80, "https": 443}
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,11 +63,25 @@ def parse_host_value(value: str, *, error_message: str) -> ParsedHost:
 
 
 def parse_origin_value(value: str, *, error_message: str) -> ParsedOrigin:
-    normalized = value.strip()
-    if not normalized or "*" in normalized:
+    if (
+        value != value.strip()
+        or not value
+        or "*" in value
+        or any(character.isspace() or _is_control_char(character) for character in value)
+    ):
+        raise InvalidProviderConfiguration(error_message)
+    scheme_separator = value.find("://")
+    if scheme_separator <= 0:
+        raise InvalidProviderConfiguration(error_message)
+    authority = value[scheme_separator + 3 :]
+    if (
+        not authority
+        or authority.endswith(":")
+        or any(delimiter in authority for delimiter in ("/", "?", "#"))
+    ):
         raise InvalidProviderConfiguration(error_message)
     try:
-        parsed = urlsplit(normalized)
+        parsed = urlsplit(value)
     except ValueError:
         raise InvalidProviderConfiguration(error_message) from None
     if (
@@ -74,7 +89,7 @@ def parse_origin_value(value: str, *, error_message: str) -> ParsedOrigin:
         or parsed.hostname is None
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.path not in {"", "/"}
+        or parsed.path
         or parsed.query
         or parsed.fragment
     ):
@@ -84,6 +99,8 @@ def parse_origin_value(value: str, *, error_message: str) -> ParsedOrigin:
     except ValueError:
         raise InvalidProviderConfiguration(error_message) from None
     host = _canonicalize_host(parsed.hostname, error_message=error_message)
+    if port is not None and _is_default_origin_port(parsed.scheme, port):
+        port = None
     return ParsedOrigin(parsed.scheme, host, port)
 
 
@@ -109,7 +126,7 @@ def origin_matches(allowed: ParsedOrigin, actual: ParsedOrigin) -> bool:
     return (
         actual.scheme == allowed.scheme
         and actual.host == allowed.host
-        and (allowed.port is None or actual.port == allowed.port)
+        and actual.port == allowed.port
     )
 
 
@@ -137,3 +154,13 @@ def _parse_port(value: str, *, error_message: str) -> int:
     if not 1 <= parsed <= 65_535:
         raise InvalidProviderConfiguration(error_message)
     return parsed
+
+
+def _is_default_origin_port(scheme: str, port: int) -> bool:
+    return _DEFAULT_ORIGIN_PORTS.get(scheme) == port
+
+
+def _is_control_char(character: str) -> bool:
+    """Reject ASCII control bytes (0x00-0x1F and DEL 0x7F) in trusted-origin input."""
+    codepoint = ord(character)
+    return codepoint < 0x20 or codepoint == 0x7F

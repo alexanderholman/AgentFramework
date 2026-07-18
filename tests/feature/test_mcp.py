@@ -378,6 +378,7 @@ def test_streamable_http_mcp_rejects_invalid_explicit_transport_entries() -> Non
         (("af.internal/path",), ("http://af.internal:8000",)),
         (("af.internal",), ("http://af.internal/path",)),
         (("af.internal",), ("http://*.invalid",)),
+        (("af.internal",), ("http://af.internal:",)),
     ):
         application = create_application(
             settings=Settings(
@@ -392,3 +393,42 @@ def test_streamable_http_mcp_rejects_invalid_explicit_transport_entries() -> Non
 
         with pytest.raises(InvalidProviderConfiguration):
             create_mcp_server(application)
+
+
+def test_streamable_http_mcp_validates_explicit_transport_entries_on_loopback_hosts() -> None:
+    for allowed_hosts, allowed_origins in (
+        (("af.internal/path",), ()),
+        ((), ("http://af.internal:",)),
+    ):
+        application = create_application(
+            settings=Settings(
+                host="127.0.0.1",
+                mcp_transport="streamable-http",
+                allowed_hosts=allowed_hosts,
+                allowed_origins=allowed_origins,
+            ),
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+        )
+
+        with pytest.raises(InvalidProviderConfiguration):
+            create_mcp_server(application)
+
+
+def test_streamable_http_mcp_canonicalizes_default_port_origins() -> None:
+    application = create_application(
+        settings=Settings(
+            host="0.0.0.0",
+            port=80,
+            mcp_transport="streamable-http",
+            allowed_hosts=("af.internal",),
+            allowed_origins=("http://af.internal:80", "http://af.internal"),
+        ),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    server = create_mcp_server(application)
+
+    assert server.settings.transport_security is not None
+    assert server.settings.transport_security.allowed_origins == ["http://af.internal"]

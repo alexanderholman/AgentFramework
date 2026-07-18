@@ -267,6 +267,10 @@ def _transport_security_for(
     settings = application.settings
     if settings.mcp_transport != "streamable-http":
         return None
+    if settings.allowed_hosts:
+        _canonical_transport_hosts(settings.allowed_hosts, port=settings.port)
+    if settings.allowed_origins:
+        _canonical_transport_origins(settings.allowed_origins)
     if _is_loopback_host(settings.host):
         return None
     if not settings.allowed_hosts or not settings.allowed_origins:
