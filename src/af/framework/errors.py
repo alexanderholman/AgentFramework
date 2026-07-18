@@ -25,6 +25,10 @@ class InvalidProviderConfiguration(AFError, ValueError):
     """Raised when an executable provider lacks its corresponding safety boundary."""
 
 
+class InvalidSelectionProposal(AFError, ValueError):
+    """Raised when a selector proposes an unsupported or malformed route."""
+
+
 class InvalidBinding(AFError):
     """Raised when a dependency binding would be replaced implicitly."""
 

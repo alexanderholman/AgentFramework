@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 
 
 class WorkTier(IntEnum):
     STATIC = 0
     PROCEDURAL = 1
     GENERATIVE = 2
+
+
+class SelectorLocality(StrEnum):
+    LOCAL = "local"
+    REMOTE = "remote"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +30,20 @@ class Classification:
     arguments: dict[str, str]
     confidence: float
     classifier: str
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionProposal:
+    procedure_id: str
+    intent: str
+    arguments: dict[str, str]
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionDecision:
+    proposal: SelectionProposal | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

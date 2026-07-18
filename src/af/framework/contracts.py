@@ -10,6 +10,8 @@ from af.framework.types import (
     ProcedureResult,
     RouteMetrics,
     RunTrace,
+    SelectionDecision,
+    SelectorLocality,
     VerificationResult,
     WorkRequest,
     WorkTier,
@@ -33,6 +35,8 @@ class Procedure(Protocol):
     metrics: RouteMetrics
 
     def supports(self, classification: Classification) -> bool: ...
+
+    def validate(self, classification: Classification) -> None: ...
 
     def execute(self, classification: Classification) -> ProcedureResult: ...
 
@@ -79,8 +83,11 @@ class RegressionGate(Protocol):
     ) -> bool: ...
 
 
-class ModelProvider(Protocol):
+class Selector(Protocol):
     @property
     def name(self) -> str: ...
 
-    def complete(self, prompt: str) -> str: ...
+    @property
+    def locality(self) -> SelectorLocality: ...
+
+    def select(self, prompt: str, catalogue: tuple[str, ...]) -> SelectionDecision: ...

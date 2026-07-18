@@ -30,6 +30,7 @@ def test_dev_dependencies_include_pyyaml_for_registry_scripts() -> None:
     dev_dependencies = pyproject["project"]["optional-dependencies"]["dev"]
 
     assert any(dependency.lower().startswith("pyyaml") for dependency in dev_dependencies)
+    assert all(not dependency.lower().startswith("httpx2") for dependency in dev_dependencies)
 
 
 def test_validate_agents_uses_uv_managed_python_for_yaml_registry_checks() -> None:

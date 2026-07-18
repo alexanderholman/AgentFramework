@@ -40,6 +40,9 @@ class ProcedureRegistry:
     def all(self) -> tuple[Procedure, ...]:
         return tuple(self._procedures.values())
 
+    def get(self, procedure_id: str) -> Procedure | None:
+        return self._procedures.get(procedure_id)
+
 
 class LadderRouter:
     def __init__(self, registry: ProcedureRegistry, policy: RoutingPolicy) -> None:

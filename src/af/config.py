@@ -13,6 +13,8 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     mcp_transport: str = "stdio"
+    allow_remote_inference: bool = False
+    selector_confidence_threshold: float = 0.8
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -24,4 +26,15 @@ class Settings:
             host=os.getenv("AF_HOST", defaults.host),
             port=int(os.getenv("AF_PORT", str(defaults.port))),
             mcp_transport=os.getenv("AF_MCP_TRANSPORT", defaults.mcp_transport),
+            allow_remote_inference=os.getenv(
+                "AF_ALLOW_REMOTE_INFERENCE",
+                str(defaults.allow_remote_inference),
+            ).lower()
+            in {"1", "true", "yes", "on"},
+            selector_confidence_threshold=float(
+                os.getenv(
+                    "AF_SELECTOR_CONFIDENCE_THRESHOLD",
+                    str(defaults.selector_confidence_threshold),
+                )
+            ),
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from af.bootstrap import create_application
-from af.framework.contracts import Procedure
+from af.config import Settings
 from af.framework.errors import (
     InvalidProviderConfiguration,
     InvalidRoutingPolicy,
@@ -12,9 +12,9 @@ from af.framework.errors import (
 )
 from af.framework.routing import OptimisationGoal, RoutingPolicy
 from af.framework.types import (
-    Classification,
-    ProcedureResult,
-    VerificationResult,
+    SelectionDecision,
+    SelectionProposal,
+    SelectorLocality,
     WorkRequest,
 )
 from af.infrastructure.repositories import InMemoryTaskRepository
@@ -51,85 +51,208 @@ def test_second_identical_request_reuses_but_still_verifies(application) -> None
     assert application.traces.get(second.trace_id).reused is True
 
 
-class ExplodingModel:
+class ExplodingSelector:
     @property
     def name(self) -> str:
-        return "exploding-test-model"
+        return "exploding-test-selector"
 
-    def complete(self, prompt: str) -> str:
-        raise AssertionError(f"model must not receive deterministic work: {prompt}")
+    @property
+    def locality(self) -> SelectorLocality:
+        return SelectorLocality.LOCAL
 
-
-class AcceptingModelVerifier:
-    def verify(
-        self,
-        request: WorkRequest,
-        classification: Classification,
-        procedure: Procedure,
-        result: ProcedureResult,
-    ) -> VerificationResult:
-        del request, classification, procedure
-        passed = bool(result.output.strip())
-        return VerificationResult(passed, "model output accepted" if passed else "empty output")
+    def select(self, prompt: str, catalogue: tuple[str, ...]) -> SelectionDecision:
+        raise AssertionError(
+            f"selector must not receive deterministic work: {prompt} / {catalogue!r}"
+        )
 
 
-def test_deterministic_work_never_invokes_installed_model() -> None:
+def test_deterministic_work_never_invokes_installed_selector() -> None:
     application = create_application(
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
-        model_provider=ExplodingModel(),
-        model_verifier=AcceptingModelVerifier(),
+        selector=ExplodingSelector(),
     )
 
     assert application.agent.handle(WorkRequest(prompt="how many rs in strawberry")).output == "3"
+    assert application.agent.handle(WorkRequest(prompt="hello")).output == "Hello, world!"
 
 
-class RecordingModel:
-    def __init__(self) -> None:
+class RecordingSelector:
+    def __init__(
+        self,
+        decision: SelectionDecision,
+        *,
+        locality: SelectorLocality = SelectorLocality.LOCAL,
+    ) -> None:
+        self._decision = decision
+        self._locality = locality
         self.prompts: list[str] = []
+        self.catalogues: list[tuple[str, ...]] = []
 
     @property
     def name(self) -> str:
-        return "recording-test-model"
+        return "recording-test-selector"
 
-    def complete(self, prompt: str) -> str:
+    @property
+    def locality(self) -> SelectorLocality:
+        return self._locality
+
+    def select(self, prompt: str, catalogue: tuple[str, ...]) -> SelectionDecision:
         self.prompts.append(prompt)
-        return "A model-generated but explicitly verified answer"
+        self.catalogues.append(catalogue)
+        return self._decision
 
 
-def test_explicit_model_route_requires_and_uses_its_verifier() -> None:
-    model = RecordingModel()
+def test_local_selector_can_route_unknown_work_through_registered_procedure() -> None:
+    selector = RecordingSelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="character-count",
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=0.95,
+            )
+        )
+    )
     application = create_application(
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
-        model_provider=model,
-        model_verifier=AcceptingModelVerifier(),
+        selector=selector,
     )
 
-    outcome = application.agent.handle(WorkRequest(prompt="invent a new universe"))
+    outcome = application.agent.handle(WorkRequest(prompt="count r please"))
     trace = application.traces.get(outcome.trace_id)
 
-    assert model.prompts == ["invent a new universe"]
-    assert outcome.route == "model-provider"
-    assert outcome.tier == "generative"
+    assert selector.prompts == ["count r please"]
+    assert selector.catalogues == [("hello", "character-count")]
+    assert outcome.route == "character-count"
+    assert outcome.tier == "procedural"
     assert outcome.verified is True
     assert outcome.reused is False
-    assert trace.regression_passed is False
-    assert trace.promoted is False
+    assert trace.regression_passed is True
+    assert trace.promoted is True
+    assert any(
+        event.stage == "select"
+        and "recording-test-selector" in event.detail
+        and "local" in event.detail
+        and "0.95" in event.detail
+        for event in trace.events
+    )
 
 
-def test_model_and_verifier_must_be_installed_together() -> None:
+def test_remote_selector_requires_explicit_opt_in() -> None:
+    selector = RecordingSelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="character-count",
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=0.95,
+            )
+        ),
+        locality=SelectorLocality.REMOTE,
+    )
+
     with pytest.raises(InvalidProviderConfiguration):
         create_application(
             task_repository=InMemoryTaskRepository(),
             trace_repository=InMemoryTraceRepository(),
-            model_provider=RecordingModel(),
+            selector=selector,
         )
 
+    application = create_application(
+        settings=Settings(allow_remote_inference=True),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
 
-def test_unknown_work_fails_when_no_generative_provider_is_installed(application) -> None:  # type: ignore[no-untyped-def]
+    outcome = application.agent.handle(WorkRequest(prompt="count r please"))
+    trace = application.traces.get(outcome.trace_id)
+
+    assert outcome.output == "3"
+    assert any(event.stage == "select" and "remote" in event.detail for event in trace.events)
+
+
+def test_unknown_work_fails_when_no_selector_is_installed(application) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(UnsupportedWork):
         application.agent.handle(WorkRequest(prompt="invent a new universe"))
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_reason"),
+    [
+        (
+            SelectionDecision(reason="ambiguous between registered procedures"),
+            "ambiguous",
+        ),
+        (
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=0.49,
+                )
+            ),
+            "confidence",
+        ),
+        (
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="missing",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=0.95,
+                )
+            ),
+            "unknown procedure",
+        ),
+        (
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="hello",
+                    intent="system.goodbye",
+                    arguments={},
+                    confidence=0.95,
+                )
+            ),
+            "unsupported intent",
+        ),
+        (
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "rr"},
+                    confidence=0.95,
+                )
+            ),
+            "invalid arguments",
+        ),
+    ],
+)
+def test_invalid_selector_proposals_fail_closed_without_execution(
+    decision: SelectionDecision,
+    expected_reason: str,
+) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(decision),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select" and expected_reason in event.detail for event in trace.events
+    )
 
 
 def test_routing_policy_requires_one_or_two_explicit_goals() -> None:

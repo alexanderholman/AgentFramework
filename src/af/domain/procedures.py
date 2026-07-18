@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from af.framework.contracts import ModelProvider
-from af.framework.errors import InvalidCharacter
+from af.framework.errors import InvalidCharacter, InvalidSelectionProposal
 from af.framework.types import (
     Classification,
     ProcedureResult,
@@ -44,6 +43,10 @@ class BaseProcedure(ABC):
     def execute(self, classification: Classification) -> ProcedureResult:
         raise NotImplementedError
 
+    @abstractmethod
+    def validate(self, classification: Classification) -> None:
+        raise NotImplementedError
+
 
 class PureProcedureMixin:
     """Python's trait-equivalent for side-effect-free, replay-safe procedures."""
@@ -67,6 +70,10 @@ class HelloProcedure(PureProcedureMixin, BaseProcedure):
             evidence={"source": "static"},
         )
 
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "system.hello" or classification.arguments:
+            raise InvalidSelectionProposal("unsupported intent or arguments for hello")
+
 
 class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
     id = "character-count"
@@ -85,23 +92,12 @@ class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
             evidence={"text": text, "character": character, "count": count},
         )
 
-
-class ModelProcedure(BaseProcedure):
-    """Explicit optional generative route; never registered as an implicit fallback."""
-
-    id = "model-provider"
-    tier = WorkTier.GENERATIVE
-    metrics = RouteMetrics(cost=5, latency=5, intelligence=5)
-
-    def __init__(self, provider: ModelProvider) -> None:
-        self._provider = provider
-
-    def supports(self, classification: Classification) -> bool:
-        return classification.intent == "unknown"
-
-    def execute(self, classification: Classification) -> ProcedureResult:
-        prompt = classification.arguments.get("prompt", "")
-        return ProcedureResult(
-            output=self._provider.complete(prompt),
-            evidence={"provider": self._provider.name},
-        )
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "text.character_count":
+            raise InvalidSelectionProposal("unsupported intent for character-count")
+        if set(classification.arguments) != {"text", "character"}:
+            raise InvalidSelectionProposal("invalid arguments for character-count")
+        text = classification.arguments["text"]
+        character = classification.arguments["character"]
+        if not text or len(character) != 1:
+            raise InvalidSelectionProposal("invalid arguments for character-count")

@@ -12,15 +12,16 @@ from af.domain.classifiers import (
     HelloClassifier,
     UnknownClassifier,
 )
-from af.domain.procedures import CharacterCountProcedure, HelloProcedure, ModelProcedure
+from af.domain.procedures import CharacterCountProcedure, HelloProcedure
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier, VerifierRouter
 from af.framework.container import Container, Scope, ServiceProvider
-from af.framework.contracts import ModelProvider, ReuseStore, TraceRepository, Verifier
+from af.framework.contracts import ReuseStore, Selector, TraceRepository
 from af.framework.errors import InvalidProviderConfiguration
 from af.framework.pipeline import PipelineAgent
 from af.framework.reuse import InMemoryReuseStore, ReplayRegressionGate
 from af.framework.routing import LadderRouter, ProcedureRegistry, RoutingPolicy
+from af.framework.types import SelectorLocality
 from af.infrastructure.database import Database
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
@@ -59,34 +60,35 @@ class _FrameworkProvider(ServiceProvider):
     def __init__(
         self,
         reuse_store: ReuseStore | None,
-        model_provider: ModelProvider | None,
-        model_verifier: Verifier | None,
+        selector: Selector | None,
     ) -> None:
         self._reuse_store = reuse_store
-        self._model_provider = model_provider
-        self._model_verifier = model_verifier
+        self._selector = selector
 
     def register(self, container: Container) -> None:
         registry = ProcedureRegistry()
         registry.register(HelloProcedure())
         registry.register(CharacterCountProcedure())
-        if self._model_provider is not None:
-            registry.register(ModelProcedure(self._model_provider))
         classifier = ClassifierChain(
             [HelloClassifier(), CharacterCountClassifier(), UnknownClassifier()]
         )
         verifier = DeterministicVerifier()
-        verifier_router = VerifierRouter(verifier, self._model_verifier)
+        verifier_router = VerifierRouter(verifier)
         reuse_store = self._reuse_store or InMemoryReuseStore()
         traces = container.resolve_token(TraceRepository)
         router = LadderRouter(registry, RoutingPolicy())
         agent = PipelineAgent(
             classifier=classifier,
+            registry=registry,
             router=router,
             verifier=verifier_router,
             traces=traces,
             regression_gate=ReplayRegressionGate(),
             reuse_store=reuse_store,
+            selector=self._selector,
+            selector_confidence_threshold=container.resolve_token(
+                Settings
+            ).selector_confidence_threshold,
         )
         container.instance(ProcedureRegistry, registry)
         container.instance(DeterministicVerifier, verifier)
@@ -127,20 +129,23 @@ def create_application(
     task_repository: TaskRepository | None = None,
     trace_repository: TraceRepository | None = None,
     reuse_store: ReuseStore | None = None,
-    model_provider: ModelProvider | None = None,
-    model_verifier: Verifier | None = None,
+    selector: Selector | None = None,
 ) -> AFApplication:
     """Build an isolated application; tests and hosts can replace any provider."""
-    if (model_provider is None) != (model_verifier is None):
-        raise InvalidProviderConfiguration(
-            "model_provider and model_verifier must be installed together"
-        )
     resolved_settings = settings or Settings.from_environment()
+    if (
+        selector is not None
+        and selector.locality is SelectorLocality.REMOTE
+        and not resolved_settings.allow_remote_inference
+    ):
+        raise InvalidProviderConfiguration(
+            "remote selector requires AF_ALLOW_REMOTE_INFERENCE=true"
+        )
     container = Container()
     container.instance(Settings, resolved_settings)
     providers: tuple[ServiceProvider, ...] = (
         _PersistenceProvider(resolved_settings, task_repository, trace_repository),
-        _FrameworkProvider(reuse_store, model_provider, model_verifier),
+        _FrameworkProvider(reuse_store, selector),
         _ApplicationProvider(),
     )
     for provider in providers:
