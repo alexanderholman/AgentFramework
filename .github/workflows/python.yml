@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 20
     env:
       AF_APPEND_ONLY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
+      AF_APPEND_ONLY_BASE_STRATEGY: ${{ github.event_name == 'push' && 'exact' || 'merge-base' }}
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
     steps:
@@ -29,6 +30,46 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Ensure push before commit is available
+        if: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          import re
+          import subprocess
+          import sys
+
+          sha = os.environ["AF_APPEND_ONLY_BASE_REF"]
+          if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+              raise SystemExit(f"invalid AF_APPEND_ONLY_BASE_REF: {sha!r}")
+          if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], check=False).returncode == 0:
+              raise SystemExit(0)
+          token = os.environ.get("GITHUB_TOKEN", "")
+          if not token:
+              raise SystemExit("missing GITHUB_TOKEN for push base fetch")
+          authorization = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+          fetch = subprocess.run(
+              [
+                  "git",
+                  "-c",
+                  f"http.https://github.com/.extraheader=AUTHORIZATION: basic {authorization}",
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  sha,
+              ],
+              check=False,
+          )
+          if fetch.returncode != 0:
+              raise SystemExit(fetch.returncode)
+          raise SystemExit(
+              subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], check=False).returncode
+          )
+          PY
 
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6

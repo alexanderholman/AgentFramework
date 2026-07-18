@@ -13,6 +13,8 @@ from pathlib import Path
 
 APPEND_ONLY_FILES = ("specs.md", "decisions.md", "agent_runs.md")
 NULL_GIT_SHA = "0" * 40
+MERGE_BASE_STRATEGY = "merge-base"
+EXACT_STRATEGY = "exact"
 # Reviewed bootstrap anchor for the first PR topology where the base predates
 # the governed files. Its frozen entries below are part of the governance proof.
 BOOTSTRAP_ANCHOR = "5457fcdd70aa50162fb798ba5e0efefc89809ea2"
@@ -38,6 +40,13 @@ class BlobReference:
     revision: str
     entry: TreeEntry
     content: bytes
+
+
+@dataclass(frozen=True)
+class BaseResolution:
+    revision: str | None
+    failure: str | None = None
+    use_bootstrap_topology: bool = False
 
 
 # Frozen reviewed bootstrap state for the imported governance history. These
@@ -87,11 +96,45 @@ def _resolve_base_ref(root: Path, explicit: str | None) -> str | None:
     return None
 
 
-def _resolve_base_revision(root: Path, base_ref: str) -> str | None:
-    completed = _git(root, "merge-base", "HEAD", base_ref)
+def _resolve_base_strategy(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    environment_strategy = os.environ.get("AF_APPEND_ONLY_BASE_STRATEGY", "").strip()
+    if environment_strategy:
+        return environment_strategy
+    return MERGE_BASE_STRATEGY
+
+
+def _resolve_commit(root: Path, revision: str) -> str | None:
+    completed = _git(root, "rev-parse", "--verify", f"{revision}^{{commit}}")
     if completed.returncode != 0:
         return None
     return completed.stdout.strip()
+
+
+def _resolve_base_revision(root: Path, base_ref: str, strategy: str) -> BaseResolution:
+    if strategy == EXACT_STRATEGY:
+        if _is_all_zero_ref(base_ref):
+            return BaseResolution(revision=None, use_bootstrap_topology=True)
+        commit = _resolve_commit(root, base_ref)
+        if commit is None:
+            return BaseResolution(
+                revision=None,
+                failure=f"append-only-check: failed to resolve base revision for {base_ref}",
+            )
+        if not _is_ancestor(root, commit, "HEAD"):
+            return BaseResolution(
+                revision=None,
+                failure=f"append-only-check: push base {commit} is not an ancestor of HEAD",
+            )
+        return BaseResolution(revision=commit)
+    completed = _git(root, "merge-base", "HEAD", base_ref)
+    if completed.returncode != 0:
+        return BaseResolution(
+            revision=None,
+            failure=f"append-only-check: failed to resolve base revision for {base_ref}",
+        )
+    return BaseResolution(revision=completed.stdout.strip())
 
 
 def _is_all_zero_ref(value: str) -> bool:
@@ -128,11 +171,11 @@ def _load_blob_bytes(root: Path, object_id: str) -> bytes:
 
 def _validate_bootstrap_anchor(
     root: Path,
-    base_revision: str,
+    base_revision: str | None,
 ) -> tuple[dict[str, BlobReference], list[str]]:
     """Validate the reviewed bootstrap anchor used when base predates governed files."""
     failures: list[str] = []
-    if not _is_ancestor(root, base_revision, BOOTSTRAP_ANCHOR):
+    if base_revision is not None and not _is_ancestor(root, base_revision, BOOTSTRAP_ANCHOR):
         failures.append(
             "bootstrap anchor "
             f"{BOOTSTRAP_ANCHOR} is not on the reviewed lineage after {base_revision}"
@@ -215,6 +258,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate append-only governance files.")
     parser.add_argument("--root", default=".", help="Repository root")
     parser.add_argument("--base-ref", default=None, help="Base ref or commit to compare against")
+    parser.add_argument(
+        "--base-strategy",
+        choices=(MERGE_BASE_STRATEGY, EXACT_STRATEGY),
+        default=None,
+        help="Whether to resolve the base ref by merge-base or as an exact ancestor",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -222,19 +271,18 @@ def main() -> int:
     if base_ref is None:
         print("append-only-check: skipped (no git base ref available)")
         return 0
-    if _is_all_zero_ref(base_ref):
-        print(
-            "append-only-check: all-zero push base ref is unsupported; "
-            "fetch and validate from the pre-push commit range"
-        )
+
+    base_strategy = _resolve_base_strategy(args.base_strategy)
+    base_resolution = _resolve_base_revision(root, base_ref, base_strategy)
+    if base_resolution.failure is not None:
+        print(base_resolution.failure)
         return 1
 
-    base_revision = _resolve_base_revision(root, base_ref)
-    if base_revision is None:
-        print(f"append-only-check: failed to resolve base revision for {base_ref}")
-        return 1
-
-    references, failures = _resolve_references(root, base_revision)
+    if base_resolution.use_bootstrap_topology:
+        references, failures = _validate_bootstrap_anchor(root, None)
+    else:
+        assert base_resolution.revision is not None
+        references, failures = _resolve_references(root, base_resolution.revision)
     for relative_path in APPEND_ONLY_FILES:
         reference = references.get(relative_path)
         if reference is None:

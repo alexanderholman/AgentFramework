@@ -144,6 +144,7 @@ def _run_append_only(
     root: Path,
     *,
     base_ref: str | None = None,
+    base_strategy: str | None = None,
     ci: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run the append-only script for a repo root with optional base-ref and CI mode."""
@@ -151,6 +152,8 @@ def _run_append_only(
     if base_ref is not None:
         command.extend(["--base-ref", base_ref])
     environment = {"PATH": environ.get("PATH", "")}
+    if base_strategy is not None:
+        environment["AF_APPEND_ONLY_BASE_STRATEGY"] = base_strategy
     if ci:
         environment["CI"] = "true"
     return subprocess.run(
@@ -234,19 +237,47 @@ def test_append_only_check_catches_multi_commit_push_mutation_from_before_sha(
     _git("add", "specs.md", cwd=tmp_path)
     _git("commit", "-m", "append after mutation", cwd=tmp_path)
 
-    completed = _run_append_only(tmp_path, base_ref=before_sha, ci=True)
+    completed = _run_append_only(tmp_path, base_ref=before_sha, base_strategy="exact", ci=True)
 
     assert completed.returncode == 1
     assert "specs.md: HEAD blob is not a pure append" in completed.stdout
 
 
-def test_append_only_check_rejects_all_zero_push_before_sha(tmp_path: Path) -> None:
+def test_append_only_check_rejects_non_ancestor_push_before_sha(tmp_path: Path) -> None:
     _init_append_only_repo(tmp_path)
+    before_sha = _git_stdout("rev-parse", "HEAD", cwd=tmp_path)
+    _git("checkout", "-b", "previous-tip", cwd=tmp_path)
+    (tmp_path / "specs.md").write_text("specs.md\nbase line\nold branch append\n", encoding="utf-8")
+    _git("add", "specs.md", cwd=tmp_path)
+    _git("commit", "-m", "old branch append", cwd=tmp_path)
+    before_sha = _git_stdout("rev-parse", "HEAD", cwd=tmp_path)
+    _git("checkout", "master", cwd=tmp_path)
+    (tmp_path / "specs.md").write_text("specs.md\nbase line\nnew branch append\n", encoding="utf-8")
+    _git("add", "specs.md", cwd=tmp_path)
+    _git("commit", "-m", "new branch append", cwd=tmp_path)
 
-    completed = _run_append_only(tmp_path, base_ref="0" * 40, ci=True)
+    completed = _run_append_only(tmp_path, base_ref=before_sha, base_strategy="exact", ci=True)
 
     assert completed.returncode == 1
-    assert "all-zero push base ref is unsupported" in completed.stdout
+    assert f"push base {before_sha} is not an ancestor of HEAD" in completed.stdout
+
+
+def test_append_only_check_rejects_all_zero_push_before_sha_without_bootstrap_lineage(
+    tmp_path: Path,
+) -> None:
+    _git("init", "-b", "master", cwd=tmp_path)
+    _git("config", "user.name", "Test User", cwd=tmp_path)
+    _git("config", "user.email", "test@example.com", cwd=tmp_path)
+    _git("commit", "--allow-empty", "-m", "base", cwd=tmp_path)
+    for name in ("specs.md", "decisions.md", "agent_runs.md"):
+        (tmp_path / name).write_text(f"{name}\nanchor line\nhead line\n", encoding="utf-8")
+    _git("add", "specs.md", "decisions.md", "agent_runs.md", cwd=tmp_path)
+    _git("commit", "-m", "head", cwd=tmp_path)
+
+    completed = _run_append_only(tmp_path, base_ref="0" * 40, base_strategy="exact", ci=True)
+
+    assert completed.returncode == 1
+    assert BOOTSTRAP_ANCHOR in completed.stdout
 
 
 def test_append_only_check_fails_when_worktree_differs_from_head_blob(tmp_path: Path) -> None:
@@ -284,9 +315,11 @@ def test_append_only_check_fails_when_head_changes_append_only_mode_to_symlink(
     assert "specs.md: HEAD mode 120000 does not match " in completed.stdout
 
 
-def test_python_workflow_uses_pr_and_push_base_shas_without_fetching_origin() -> None:
+def test_python_workflow_uses_pr_merge_base_and_push_exact_base_sha() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
 
     assert "github.event.pull_request.base.sha" in workflow
     assert "github.event.before" in workflow
-    assert "git fetch --no-tags origin" not in workflow
+    assert "AF_APPEND_ONLY_BASE_STRATEGY" in workflow
+    assert "github.event_name == 'push' && 'exact' || 'merge-base'" in workflow
+    assert "Ensure push before commit is available" in workflow
