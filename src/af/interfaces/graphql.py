@@ -177,6 +177,7 @@ class Query:
 class Mutation:
     @strawberry.mutation
     async def hello(self, info: Info[Any, Any]) -> str:
+        """Execute hello as a mutation because the shared pipeline records a trace."""
         outcome = await _run_graphql_operation(
             lambda: run_in_threadpool(_controller(info).execute, "hello")
         )

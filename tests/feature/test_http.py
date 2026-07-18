@@ -300,6 +300,7 @@ def test_rest_rejects_too_long_prompt(application) -> None:  # type: ignore[no-u
 
 def test_graphql_crud_shares_rest_repository(application) -> None:  # type: ignore[no-untyped-def]
     with _http_client(application) as client:
+        hello_response = client.post("/graphql", json={"query": "mutation { hello }"})
         create_response = client.post(
             "/graphql",
             json={
@@ -341,6 +342,8 @@ def test_graphql_crud_shares_rest_repository(application) -> None:  # type: igno
             },
         ).json()
 
+    assert hello_response.status_code == 200
+    assert hello_response.json() == {"data": {"hello": "Hello, world!"}}
     assert "errors" not in created_payload
     assert created["output"] == "3"
     assert rest_value["id"] == created["id"]
