@@ -489,7 +489,7 @@ class PipelineAgent:
         created_at: datetime,
         events: list[TraceEvent],
     ) -> float:
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+        if type(value) is bool or not isinstance(value, (int, float)) or not isfinite(value):
             self._fail_closed_selection(
                 error_detail,
                 trace_id=trace_id,
