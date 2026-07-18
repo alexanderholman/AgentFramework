@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum, StrEnum
 
+# Shared user-prompt ceiling enforced by the application boundary and reflected by adapters.
 PROMPT_MAX_LENGTH = 10_000
 
 
@@ -50,6 +51,8 @@ class SelectionDecision:
 
 @dataclass(frozen=True, slots=True)
 class ProcedureArgumentDescriptor:
+    """Selector-facing schema for one trusted textual procedure argument."""
+
     name: str
     value_type: type[str]
     min_length: int = 0
