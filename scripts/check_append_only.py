@@ -98,6 +98,7 @@ def _is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
 
 
 def _load_tree_entry(root: Path, revision: str, relative_path: str) -> TreeEntry | None:
+    """Return the Git tree entry for a path at a revision, or None when absent."""
     completed = _git(root, "ls-tree", revision, "--", relative_path)
     if completed.returncode != 0:
         return None
@@ -112,6 +113,7 @@ def _load_tree_entry(root: Path, revision: str, relative_path: str) -> TreeEntry
 
 
 def _load_blob_bytes(root: Path, object_id: str) -> bytes:
+    """Return raw Git blob bytes, raising ValueError when the object is missing."""
     completed = _git(root, "cat-file", "blob", object_id, text=False)
     if completed.returncode != 0:
         raise ValueError(f"missing git blob {object_id}")
@@ -122,6 +124,7 @@ def _validate_bootstrap_anchor(
     root: Path,
     base_revision: str,
 ) -> tuple[dict[str, BlobReference], list[str]]:
+    """Validate the reviewed bootstrap anchor used when base predates governed files."""
     failures: list[str] = []
     if not _is_ancestor(root, base_revision, BOOTSTRAP_ANCHOR):
         failures.append(
@@ -168,6 +171,7 @@ def _resolve_references(
     root: Path,
     base_revision: str,
 ) -> tuple[dict[str, BlobReference], list[str]]:
+    """Resolve append-only references from base history or the reviewed bootstrap anchor."""
     base_entries = {
         relative_path: _load_tree_entry(root, base_revision, relative_path)
         for relative_path in APPEND_ONLY_FILES
@@ -193,6 +197,7 @@ def _resolve_references(
 
 
 def _is_regular_non_symlink(path: Path) -> bool:
+    """Return True only for existing regular worktree files that are not symlinks."""
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:

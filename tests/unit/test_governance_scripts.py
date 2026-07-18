@@ -135,6 +135,7 @@ def _run_append_only(
     base_ref: str | None = None,
     ci: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    """Run the append-only script for a repo root with optional base-ref and CI mode."""
     command = [sys.executable, str(APPEND_ONLY_SCRIPT), "--root", str(root)]
     if base_ref is not None:
         command.extend(["--base-ref", base_ref])
