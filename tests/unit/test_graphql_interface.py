@@ -27,8 +27,8 @@ from af.interfaces.graphql import (
     _run_graphql_operation,
     _select_operation,
     _selection_depth,
-    _validate_get_operation,
     _validate_document_complexity,
+    _validate_get_operation,
     create_graphql_router,
 )
 
