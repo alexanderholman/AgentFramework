@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APPEND_ONLY_FILES = ("specs.md", "decisions.md", "agent_runs.md")
+NULL_GIT_SHA = "0" * 40
 # Reviewed bootstrap anchor for the first PR topology where the base predates
 # the governed files. Its frozen entries below are part of the governance proof.
 BOOTSTRAP_ANCHOR = "5457fcdd70aa50162fb798ba5e0efefc89809ea2"
@@ -91,6 +92,10 @@ def _resolve_base_revision(root: Path, base_ref: str) -> str | None:
     if completed.returncode != 0:
         return None
     return completed.stdout.strip()
+
+
+def _is_all_zero_ref(value: str) -> bool:
+    return value == NULL_GIT_SHA
 
 
 def _is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
@@ -217,6 +222,12 @@ def main() -> int:
     if base_ref is None:
         print("append-only-check: skipped (no git base ref available)")
         return 0
+    if _is_all_zero_ref(base_ref):
+        print(
+            "append-only-check: all-zero push base ref is unsupported; "
+            "fetch and validate from the pre-push commit range"
+        )
+        return 1
 
     base_revision = _resolve_base_revision(root, base_ref)
     if base_revision is None:

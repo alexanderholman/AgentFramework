@@ -691,3 +691,41 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+## Run #013 - CLI Delete and Push-Range Append-Only Correction
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `9683aed`
+- Requested test-first correction to restore the stable CLI `tasks delete` JSON contract and to validate append-only governance files against the full pushed commit range
+- Requirement to preserve Runs #001 through #012 byte-for-byte, append this record only because source changes landed, and keep the PR in draft
+
+### Outputs
+- Restored CLI `tasks delete` stdout to the stable machine-readable JSON tombstone payload `{"id": ..., "deleted": true}` after successful shared-controller deletion
+- Added a CLI feature regression that parses delete stdout as JSON and asserts the exact deletion payload
+- Updated the AF Python workflow to pass `github.event.before` as `AF_APPEND_ONLY_BASE_REF` on push while preserving the existing pull-request base SHA behavior
+- Hardened `scripts/check_append_only.py` to fail closed on GitHub's all-zero push base and added governance regressions covering the multi-commit push mutation case plus the all-zero new-branch topology
+
+### Verified Results
+- Ruff format check: 55 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 33 source files
+- Pytest: 205 passed, 1 warning
+- Coverage: 90.17 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed
+- Smoke: `uv run af hello` -> `Hello, world!`
+- Smoke: `uv run af ask 'how many rs in strawberry'` -> `3`
+
+### Issues Encountered
+- The sandbox clone started shallow, so the reviewed first-PR append-only topology test could not resolve `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; validation proceeded after `git fetch --unshallow origin` and `git fetch origin master:refs/remotes/origin/master`
+- The sandbox image did not initially provide `uv` on `PATH`; validation proceeded after installing `uv` for the current user
+- The latest visible AF Python workflow run for committed head `9683aed` remained `action_required` with zero jobs, so repository-owner approval is still required before hosted CI can execute on the branch
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Workflow run: https://github.com/alexanderholman/AgentFramework/actions/runs/29656484230
+- Script: `[SCRIPT:af-dev]`
+
+---

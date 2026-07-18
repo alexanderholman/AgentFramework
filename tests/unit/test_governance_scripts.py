@@ -119,6 +119,17 @@ def _git(*args: str, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
+def _git_stdout(*args: str, cwd: Path) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
 def _init_append_only_repo(tmp_path: Path) -> None:
     _git("init", "-b", "master", cwd=tmp_path)
     _git("config", "user.name", "Test User", cwd=tmp_path)
@@ -208,6 +219,36 @@ def test_append_only_check_fails_when_ci_history_lacks_bootstrap_anchor(tmp_path
     assert BOOTSTRAP_ANCHOR in completed.stdout
 
 
+def test_append_only_check_catches_multi_commit_push_mutation_from_before_sha(
+    tmp_path: Path,
+) -> None:
+    _init_append_only_repo(tmp_path)
+    before_sha = _git_stdout("rev-parse", "HEAD", cwd=tmp_path)
+    (tmp_path / "specs.md").write_text("specs.md\nmutated line\n", encoding="utf-8")
+    _git("add", "specs.md", cwd=tmp_path)
+    _git("commit", "-m", "mutate governed line", cwd=tmp_path)
+    (tmp_path / "specs.md").write_text(
+        "specs.md\nmutated line\nappended after mutation\n",
+        encoding="utf-8",
+    )
+    _git("add", "specs.md", cwd=tmp_path)
+    _git("commit", "-m", "append after mutation", cwd=tmp_path)
+
+    completed = _run_append_only(tmp_path, base_ref=before_sha, ci=True)
+
+    assert completed.returncode == 1
+    assert "specs.md: HEAD blob is not a pure append" in completed.stdout
+
+
+def test_append_only_check_rejects_all_zero_push_before_sha(tmp_path: Path) -> None:
+    _init_append_only_repo(tmp_path)
+
+    completed = _run_append_only(tmp_path, base_ref="0" * 40, ci=True)
+
+    assert completed.returncode == 1
+    assert "all-zero push base ref is unsupported" in completed.stdout
+
+
 def test_append_only_check_fails_when_worktree_differs_from_head_blob(tmp_path: Path) -> None:
     _init_append_only_repo(tmp_path)
     for name in ("specs.md", "decisions.md", "agent_runs.md"):
@@ -243,8 +284,9 @@ def test_append_only_check_fails_when_head_changes_append_only_mode_to_symlink(
     assert "specs.md: HEAD mode 120000 does not match " in completed.stdout
 
 
-def test_python_workflow_uses_pr_base_sha_without_fetching_origin() -> None:
+def test_python_workflow_uses_pr_and_push_base_shas_without_fetching_origin() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
 
     assert "github.event.pull_request.base.sha" in workflow
+    assert "github.event.before" in workflow
     assert "git fetch --no-tags origin" not in workflow

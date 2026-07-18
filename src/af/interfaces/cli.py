@@ -9,7 +9,7 @@ import typer
 
 from af.bootstrap import AFApplication, create_application
 from af.framework.errors import AFError
-from af.interfaces.presenters import task_to_dict
+from af.interfaces.presenters import delete_to_dict, task_to_dict
 
 
 def create_cli(application: AFApplication | None = None) -> typer.Typer:
@@ -94,6 +94,7 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
     def delete_task(task_id: str) -> None:
         try:
             current().tasks.delete(task_id)
+            typer.echo(json.dumps(delete_to_dict(task_id)))
         except AFError as error:
             fail(error)
 

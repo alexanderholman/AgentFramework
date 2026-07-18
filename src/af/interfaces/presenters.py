@@ -23,6 +23,10 @@ def task_to_dict(task: Task) -> dict[str, object]:
     }
 
 
+def delete_to_dict(task_id: str) -> dict[str, object]:
+    return {"id": task_id, "deleted": True}
+
+
 def outcome_to_dict(outcome: ExecutionOutcome) -> dict[str, object]:
     return {
         "prompt": outcome.prompt,

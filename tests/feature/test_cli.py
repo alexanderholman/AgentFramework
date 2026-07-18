@@ -58,6 +58,7 @@ def test_cli_task_crud(application) -> None:  # type: ignore[no-untyped-def]
 
     delete_result = runner.invoke(cli, ["tasks", "delete", created["id"]])
     assert delete_result.exit_code == 0
+    assert json.loads(delete_result.stdout) == {"id": created["id"], "deleted": True}
 
     listed_after_delete = runner.invoke(cli, ["tasks", "list"])
     assert listed_after_delete.exit_code == 0
