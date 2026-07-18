@@ -99,7 +99,7 @@ class TaskService:
     def _normalize_count_text(text: str) -> str:
         if not isinstance(text, str):
             raise InvalidPrompt("prompt must be a string")
-        if not text.strip():
+        if not text:
             raise InvalidPrompt()
         if len(text) > PROMPT_MAX_LENGTH:
             raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")

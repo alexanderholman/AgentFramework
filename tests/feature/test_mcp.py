@@ -119,6 +119,7 @@ def test_mcp_count_characters_uses_typed_route_without_selector() -> None:
         server = create_mcp_server(application)
         async with create_connected_server_and_client_session(server) as session:
             cases = [
+                ("   ", " ", "3"),
                 ("version2", "2", "1"),
                 ("ends?", "?", "1"),
                 ("line 1\nline 2", "\n", "1"),

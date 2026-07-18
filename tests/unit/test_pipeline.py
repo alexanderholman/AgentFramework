@@ -442,7 +442,7 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                         value_type=ArgumentValueType.TEXT,
                         min_length=1,
                         max_length=10_000,
-                        allow_blank=False,
+                        allow_blank=True,
                     ),
                     ProcedureArgumentDescriptor(
                         name="character",
@@ -846,7 +846,6 @@ def test_malformed_selector_decisions_fail_closed_without_execution(
         cast(dict[str, str], {"text": "strawberry"}),
         cast(dict[str, str], {"text": "strawberry", "character": "r", "extra": "x"}),
         cast(dict[str, str], {"text": "strawberry", "character": None}),
-        {"text": "   ", "character": "r"},
         {"text": "a" * 10_001, "character": "r"},
         {"text": "strawberry", "character": ""},
         {"text": "strawberry", "character": "rr"},
@@ -889,6 +888,18 @@ class OversizedArgumentMap(dict[str, str]):
         raise AssertionError("selection arguments should fail closed before iteration")
 
 
+class HostileArgumentMap(dict[str, str]):
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError("SECRET-argument-iterator")
+
+
+class HostileDecision(SelectionDecision):
+    def __getattribute__(self, name: str) -> object:
+        if name in {"proposal", "reason"}:
+            raise RuntimeError("SECRET-decision-field")
+        return super().__getattribute__(name)
+
+
 def test_selector_argument_count_is_bounded_before_iteration() -> None:
     arguments = OversizedArgumentMap({"text": "strawberry", "character": "r", "extra": "boom"})
     application = create_application(
@@ -916,6 +927,57 @@ def test_selector_argument_count_is_bounded_before_iteration() -> None:
     assert any(
         event.stage == "select" and SelectionReasonCode.INVALID_ARGUMENTS.value in event.detail
         for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        cast(SelectionDecision, HostileDecision()),
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="character-count",
+                intent="text.character_count",
+                arguments=cast(dict[str, str], HostileArgumentMap({"text": "strawberry", "character": "r"})),
+                confidence=0.95,
+            )
+        ),
+    ],
+)
+def test_hostile_selector_decisions_fail_closed_without_execution(
+    decision: SelectionDecision,
+) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(decision),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select"
+        and (
+            SelectionReasonCode.INVALID_DECISION.value in event.detail
+            or SelectionReasonCode.INVALID_ARGUMENTS.value in event.detail
+        )
+        for event in trace.events
+    )
+    assert "SECRET" not in " ".join(event.detail for event in trace.events)
+    assert "SECRET" not in "".join(
+        traceback.format_exception(
+            type(captured.value),
+            captured.value,
+            captured.value.__traceback__,
+        )
     )
 
 
@@ -1172,7 +1234,7 @@ def test_typed_character_count_verifier_accepts_caseless_source_code_points(
 
 @pytest.mark.parametrize(
     "prompt",
-    [cast(str, None), "", "   ", "a" * 10_001],
+    [cast(str, None), "", "   ", "a" * 10_001, " " * (PROMPT_MAX_LENGTH + 1)],
 )
 def test_agent_public_boundary_rejects_invalid_prompts_without_tracing(prompt: str) -> None:
     application = create_application(
@@ -1182,6 +1244,133 @@ def test_agent_public_boundary_rejects_invalid_prompts_without_tracing(prompt: s
 
     with pytest.raises(InvalidPrompt):
         application.agent.handle(WorkRequest(prompt=prompt))
+
+    assert application.traces.list() == []
+
+
+def test_agent_public_typed_boundary_preserves_whitespace_prompt() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    outcome = application.agent.handle_classification(
+        WorkRequest(prompt="   "),
+        Classification(
+            intent="text.character_count",
+            arguments={"text": "   ", "character": " "},
+            confidence=1.0,
+            classifier="manual",
+        ),
+        expected_procedure_id="character-count",
+    )
+    trace = application.traces.get(outcome.trace_id)
+
+    assert outcome.prompt == "   "
+    assert outcome.output == "3"
+    assert trace.prompt == "   "
+    assert trace.arguments == {"text": "   ", "character": " "}
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [" " * (PROMPT_MAX_LENGTH + 1), ""],
+)
+def test_agent_handle_classification_rejects_invalid_typed_prompts_without_tracing(prompt: str) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(InvalidPrompt):
+        application.agent.handle_classification(
+            WorkRequest(prompt=prompt),
+            Classification(
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=1.0,
+                classifier="manual",
+            ),
+            expected_procedure_id="character-count",
+        )
+
+    assert application.traces.list() == []
+
+
+@pytest.mark.parametrize(
+    ("classification", "expected_procedure_id"),
+    [
+        (
+            Classification(
+                intent="invalid",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=1.0,
+                classifier="manual",
+            ),
+            "character-count",
+        ),
+        (
+            Classification(
+                intent="text.character_count",
+                arguments=cast(dict[str, str], HostileArgumentMap({"text": "strawberry", "character": "r"})),
+                confidence=1.0,
+                classifier="manual",
+            ),
+            "character-count",
+        ),
+        (
+            Classification(
+                intent="text.character_count",
+                arguments={"text": "a" * (PROMPT_MAX_LENGTH + 1), "character": "r"},
+                confidence=1.0,
+                classifier="manual",
+            ),
+            "character-count",
+        ),
+        (
+            Classification(
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=math.nan,
+                classifier="manual",
+            ),
+            "character-count",
+        ),
+        (
+            Classification(
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=1.0,
+                classifier="",
+            ),
+            "character-count",
+        ),
+        (
+            Classification(
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=1.0,
+                classifier="manual",
+            ),
+            "SECRET-id",
+        ),
+    ],
+)
+def test_agent_handle_classification_rejects_malformed_typed_envelopes_without_tracing(
+    classification: Classification,
+    expected_procedure_id: str,
+) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises((InvalidPrompt, InvalidSelectionProposal)):
+        application.agent.handle_classification(
+            WorkRequest(prompt="typed prompt"),
+            classification,
+            expected_procedure_id=expected_procedure_id,
+        )
 
     assert application.traces.list() == []
 
@@ -1571,6 +1760,44 @@ def test_routing_policy_requires_one_or_two_explicit_goals() -> None:
                 OptimisationGoal.SMARTEST,
             )
         )
+
+
+@pytest.mark.parametrize(
+    "goals",
+    [
+        cast(tuple[OptimisationGoal, ...], [OptimisationGoal.CHEAPEST]),
+        cast(tuple[OptimisationGoal, ...], ("cheapest",)),
+        cast(tuple[OptimisationGoal, ...], ("bogus",)),
+    ],
+)
+def test_routing_policy_rejects_non_exact_goal_tuples(
+    goals: tuple[OptimisationGoal, ...],
+) -> None:
+    with pytest.raises(InvalidRoutingPolicy):
+        RoutingPolicy(goals=goals)
+
+
+def test_routing_policy_handles_explicit_smartest_goal() -> None:
+    preferred = SnapshotMutableProcedure()
+    preferred.metrics = RouteMetrics(cost=1, latency=1, intelligence=1)
+    competitor = CompetingSnapshotProcedure()
+    competitor.metrics = RouteMetrics(cost=1, latency=1, intelligence=5)
+    registry = ProcedureRegistry()
+    registry.register(preferred)
+    registry.register(competitor)
+    router = LadderRouter(registry, RoutingPolicy(goals=(OptimisationGoal.SMARTEST,)))
+
+    routed = router.route(
+        Classification(
+            intent="snapshot.mutable",
+            arguments={},
+            confidence=1.0,
+            classifier="manual",
+        ),
+        prompt="route snapshot.mutable",
+    )
+
+    assert routed.id == "snapshot-competitor"
 
 
 def test_verification_failure_is_recorded_and_fails_closed(application) -> None:  # type: ignore[no-untyped-def]

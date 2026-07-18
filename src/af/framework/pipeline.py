@@ -23,6 +23,10 @@ from af.framework.errors import (
 )
 from af.framework.routing import LadderRouter, ProcedureRegistry
 from af.framework.types import (
+    PROCEDURE_ID_MAX_LENGTH,
+    PROCEDURE_INTENT_MAX_LENGTH,
+    PROCEDURE_ARGUMENT_COUNT_MAX,
+    PROMPT_MAX_LENGTH,
     ArgumentValueType,
     Classification,
     ExecutionOutcome,
@@ -38,6 +42,8 @@ from af.framework.types import (
     SelectorMetadata,
     TraceEvent,
     WorkRequest,
+    is_valid_argument_name,
+    is_valid_classifier_id,
     is_valid_procedure_id,
     is_valid_procedure_intent,
     normalize_prompt,
@@ -93,8 +99,11 @@ class PipelineAgent:
         *,
         expected_procedure_id: str | None = None,
     ) -> ExecutionOutcome:
-        if not isinstance(request.prompt, str):
-            raise InvalidPrompt("prompt must be a string")
+        request, classification, expected_procedure_id = self._normalize_typed_envelope(
+            request,
+            classification,
+            expected_procedure_id=expected_procedure_id,
+        )
         return self._handle_request(
             request,
             classification,
@@ -520,7 +529,7 @@ class PipelineAgent:
         created_at: datetime,
         events: list[TraceEvent],
     ) -> tuple[SelectionProposal | None, SelectionHandoffReason | None]:
-        if not isinstance(decision, SelectionDecision):
+        if type(decision) is not SelectionDecision:
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
@@ -531,7 +540,7 @@ class PipelineAgent:
             )
         proposal = decision.proposal
         reason = decision.reason
-        if proposal is not None and not isinstance(proposal, SelectionProposal):
+        if proposal is not None and type(proposal) is not SelectionProposal:
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
@@ -540,21 +549,7 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
             )
-        if reason is not None and not isinstance(reason, SelectionHandoffReason):
-            self._fail_closed_selection(
-                SelectionReasonCode.INVALID_DECISION,
-                trace_id=trace_id,
-                request=request,
-                classification=classification,
-                created_at=created_at,
-                events=events,
-            )
-        if proposal is not None and (
-            not isinstance(proposal.procedure_id, str)
-            or not proposal.procedure_id.strip()
-            or not isinstance(proposal.intent, str)
-            or not proposal.intent.strip()
-        ):
+        if reason is not None and type(reason) is not SelectionHandoffReason:
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
@@ -574,7 +569,79 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
             )
-        return proposal, reason
+        if proposal is None:
+            return None, reason
+        if (
+            type(proposal.procedure_id) is not str
+            or not proposal.procedure_id
+            or len(proposal.procedure_id) > PROCEDURE_ID_MAX_LENGTH
+            or type(proposal.intent) is not str
+            or not proposal.intent
+            or len(proposal.intent) > PROCEDURE_INTENT_MAX_LENGTH
+        ):
+            self._fail_closed_selection(
+                SelectionReasonCode.INVALID_DECISION,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        canonical_arguments = self._canonicalize_selection_argument_map(
+            proposal.arguments,
+            trace_id=trace_id,
+            request=request,
+            classification=classification,
+            created_at=created_at,
+            events=events,
+        )
+        return (
+            SelectionProposal(
+                procedure_id=proposal.procedure_id,
+                intent=proposal.intent,
+                arguments=canonical_arguments,
+                confidence=proposal.confidence,
+            ),
+            None,
+        )
+
+    def _canonicalize_selection_argument_map(
+        self,
+        arguments: object,
+        *,
+        trace_id: str,
+        request: WorkRequest,
+        classification: Classification,
+        created_at: datetime,
+        events: list[TraceEvent],
+    ) -> dict[str, str]:
+        if type(arguments) is not dict or len(arguments) > PROCEDURE_ARGUMENT_COUNT_MAX:
+            self._fail_closed_selection(
+                SelectionReasonCode.INVALID_ARGUMENTS,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        canonical: dict[str, str] = {}
+        for name, value in arguments.items():
+            if (
+                type(name) is not str
+                or not is_valid_argument_name(name)
+                or type(value) is not str
+                or len(value) > PROMPT_MAX_LENGTH
+            ):
+                self._fail_closed_selection(
+                    SelectionReasonCode.INVALID_ARGUMENTS,
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
+            canonical[name] = value
+        return canonical
 
     def _validate_selection_arguments(
         self,
@@ -587,7 +654,7 @@ class PipelineAgent:
         created_at: datetime,
         events: list[TraceEvent],
     ) -> dict[str, str]:
-        if not isinstance(arguments, dict):
+        if type(arguments) is not dict:
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_ARGUMENTS,
                 trace_id=trace_id,
@@ -606,8 +673,8 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
             )
-        for name in arguments:
-            if name not in expected_arguments:
+        for name, value in arguments.items():
+            if type(name) is not str or name not in expected_arguments or type(value) is not str:
                 self._fail_closed_selection(
                     SelectionReasonCode.INVALID_ARGUMENTS,
                     trace_id=trace_id,
@@ -799,6 +866,63 @@ class PipelineAgent:
         if self._selector_metadata is None:
             return f"code={reason_code.value}"
         return f"provider={self._selector_metadata.provider_id} code={reason_code.value}"
+
+    def _normalize_typed_envelope(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+        *,
+        expected_procedure_id: str | None,
+    ) -> tuple[WorkRequest, Classification, str | None]:
+        prompt = self._validate_typed_prompt(request.prompt)
+        if type(classification) is not Classification:
+            raise InvalidSelectionProposal("typed classification is invalid")
+        if not is_valid_procedure_intent(classification.intent):
+            raise InvalidSelectionProposal("typed classification is invalid")
+        if not is_valid_classifier_id(classification.classifier):
+            raise InvalidSelectionProposal("typed classification is invalid")
+        normalized_confidence = parse_probability(classification.confidence)
+        if normalized_confidence is None:
+            raise InvalidSelectionProposal("typed classification is invalid")
+        normalized_arguments = self._normalize_typed_arguments(classification.arguments)
+        if expected_procedure_id is not None and not is_valid_procedure_id(expected_procedure_id):
+            raise InvalidSelectionProposal("typed classification is invalid")
+        return (
+            WorkRequest(prompt=prompt, attributes=request.attributes),
+            Classification(
+                intent=classification.intent,
+                arguments=normalized_arguments,
+                confidence=normalized_confidence,
+                classifier=classification.classifier,
+            ),
+            expected_procedure_id,
+        )
+
+    @staticmethod
+    def _validate_typed_prompt(prompt: object) -> str:
+        if type(prompt) is not str:
+            raise InvalidPrompt("prompt must be a string")
+        if not prompt:
+            raise InvalidPrompt()
+        if len(prompt) > PROMPT_MAX_LENGTH:
+            raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")
+        return prompt
+
+    @staticmethod
+    def _normalize_typed_arguments(arguments: object) -> dict[str, str]:
+        if type(arguments) is not dict or len(arguments) > PROCEDURE_ARGUMENT_COUNT_MAX:
+            raise InvalidSelectionProposal("typed classification is invalid")
+        normalized: dict[str, str] = {}
+        for name, value in arguments.items():
+            if (
+                type(name) is not str
+                or not is_valid_argument_name(name)
+                or type(value) is not str
+                or len(value) > PROMPT_MAX_LENGTH
+            ):
+                raise InvalidSelectionProposal("typed classification is invalid")
+            normalized[name] = value
+        return normalized
 
     def _record_unsupported_trace(
         self,

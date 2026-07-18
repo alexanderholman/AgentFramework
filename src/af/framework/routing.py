@@ -41,6 +41,10 @@ class RoutingPolicy:
     )
 
     def __post_init__(self) -> None:
+        if type(self.goals) is not tuple:
+            raise InvalidRoutingPolicy("choose one or two distinct routing goals")
+        if any(type(goal) is not OptimisationGoal for goal in self.goals):
+            raise InvalidRoutingPolicy("choose one or two distinct routing goals")
         if not 1 <= len(self.goals) <= 2 or len(set(self.goals)) != len(self.goals):
             raise InvalidRoutingPolicy("choose one or two distinct routing goals")
 
@@ -205,6 +209,8 @@ class LadderRouter:
                 score.append(descriptor.metrics.cost)
             elif goal is OptimisationGoal.FASTEST:
                 score.append(descriptor.metrics.latency)
-            else:
+            elif goal is OptimisationGoal.SMARTEST:
                 score.append(-descriptor.metrics.intelligence)
+            else:
+                raise InvalidRoutingPolicy("choose one or two distinct routing goals")
         return tuple(score)

@@ -15,12 +15,14 @@ PROMPT_MAX_LENGTH = 10_000
 PROCEDURE_ARGUMENT_COUNT_MAX = 16
 ROUTE_METRIC_MAX = 10_000
 SELECTOR_PROVIDER_ID_MAX_LENGTH = 64
+CLASSIFIER_ID_MAX_LENGTH = 64
 PROCEDURE_ID_MAX_LENGTH = 64
 PROCEDURE_VERSION_MAX_LENGTH = 32
 PROCEDURE_INTENT_MAX_LENGTH = 64
 ARGUMENT_NAME_MAX_LENGTH = 32
 
 _SELECTOR_PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,63})$")
+_CLASSIFIER_ID_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,63})$")
 _PROCEDURE_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,63})$")
 _PROCEDURE_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){2}$")
 _PROCEDURE_INTENT_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
@@ -194,13 +196,13 @@ class ExecutionOutcome:
 
 
 def normalize_prompt(prompt: object) -> str:
-    if not isinstance(prompt, str):
+    if type(prompt) is not str:
         raise InvalidPrompt("prompt must be a string")
+    if len(prompt) > PROMPT_MAX_LENGTH:
+        raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")
     normalized = prompt.strip()
     if not normalized:
         raise InvalidPrompt()
-    if len(normalized) > PROMPT_MAX_LENGTH:
-        raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")
     return normalized
 
 
@@ -218,6 +220,10 @@ def parse_probability(value: object) -> float | None:
 
 def is_valid_selector_provider_id(value: object) -> bool:
     return isinstance(value, str) and _SELECTOR_PROVIDER_ID_PATTERN.fullmatch(value) is not None
+
+
+def is_valid_classifier_id(value: object) -> bool:
+    return isinstance(value, str) and _CLASSIFIER_ID_PATTERN.fullmatch(value) is not None
 
 
 def is_valid_procedure_id(value: object) -> bool:

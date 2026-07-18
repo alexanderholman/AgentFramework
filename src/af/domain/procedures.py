@@ -119,7 +119,7 @@ class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
                 value_type=ArgumentValueType.TEXT,
                 min_length=1,
                 max_length=PROMPT_MAX_LENGTH,
-                allow_blank=False,
+                allow_blank=True,
             ),
             ProcedureArgumentDescriptor(
                 name="character",

@@ -48,6 +48,18 @@ def test_count_characters_preserves_typed_arguments(application) -> None:  # typ
     assert trace.arguments == {"text": text, "character": "?"}
 
 
+def test_count_characters_accepts_whitespace_text_and_character(
+    application,
+) -> None:  # type: ignore[no-untyped-def]
+    outcome = application.tasks.count_characters("   ", " ")
+    trace = application.traces.get(outcome.trace_id)
+
+    assert outcome.prompt == "   "
+    assert outcome.output == "3"
+    assert trace.prompt == "   "
+    assert trace.arguments == {"text": "   ", "character": " "}
+
+
 def test_count_characters_accepts_exact_limit_and_rejects_overflow(
     application,
 ) -> None:  # type: ignore[no-untyped-def]
