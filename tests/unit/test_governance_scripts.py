@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 import runpy
+import subprocess
+import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+import yaml
+
 SCRIPT = Path(__file__).parents[2] / "scripts" / "check_repeatable_script_refs.py"
+APPEND_ONLY_SCRIPT = Path(__file__).parents[2] / "scripts" / "check_append_only.py"
 REPO_ROOT = Path(__file__).parents[2]
 has_script_ref = cast(
     Callable[[list[str], int], bool], runpy.run_path(str(SCRIPT))["has_script_ref"]
@@ -36,8 +43,127 @@ def test_dev_dependencies_include_pyyaml_for_registry_scripts() -> None:
 def test_validate_agents_uses_uv_managed_python_for_yaml_registry_checks() -> None:
     script = (REPO_ROOT / "validate_agents.sh").read_text(encoding="utf-8")
 
-    assert "uv run python3 scripts/validate_registry.py --registry scripts/registry.yaml" in script
-    assert (
-        "uv run python3 scripts/check_dry_run_conventions.py --registry scripts/registry.yaml"
-        in script
+    assert "scripts/validate_registry.py --registry scripts/registry.yaml" in script
+    assert "scripts/check_dry_run_conventions.py --registry scripts/registry.yaml" in script
+    assert "scripts/check_append_only.py --root ." in script
+    assert "eval " not in script
+
+
+def test_validate_agents_does_not_eval_agent_filenames(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    sentinel = tmp_path / "sentinel.txt"
+    agent_path = agents_dir / "safe 'quoted'; $(touch sentinel.txt); name.md"
+    agent_path.write_text(
+        "\n".join(
+            [
+                "## Purpose",
+                "Test",
+                "## Inputs",
+                "Test",
+                "## Outputs",
+                "Test",
+                "## Behavior",
+                "Test",
+                "## Constraints",
+                "Test",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
     )
+    (tmp_path / "agents.md").write_text("# Agents\n", encoding="utf-8")
+    (tmp_path / "specs.md").write_text("specs\n", encoding="utf-8")
+    (tmp_path / "decisions.md").write_text("decisions\n", encoding="utf-8")
+    (tmp_path / "agent_runs.md").write_text("runs\n", encoding="utf-8")
+    (tmp_path / "scripts").symlink_to(REPO_ROOT / "scripts", target_is_directory=True)
+    (tmp_path / "agents.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "allowed_tags": ["test"],
+                "agents": [
+                    {
+                        "id": "safe-agent",
+                        "name": "Safe Agent",
+                        "description": "Regression fixture",
+                        "version": "1.0.0",
+                        "tags": ["test"],
+                        "file_path": f"agents/{agent_path.name}",
+                        "status": "active",
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["bash", str(REPO_ROOT / "validate_agents.sh")],
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert sentinel.exists() is False
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _init_append_only_repo(tmp_path: Path) -> None:
+    _git("init", "-b", "master", cwd=tmp_path)
+    _git("config", "user.name", "Test User", cwd=tmp_path)
+    _git("config", "user.email", "test@example.com", cwd=tmp_path)
+    for name in ("specs.md", "decisions.md", "agent_runs.md"):
+        (tmp_path / name).write_text(f"{name}\nbase line\n", encoding="utf-8")
+    _git("add", "specs.md", "decisions.md", "agent_runs.md", cwd=tmp_path)
+    _git("commit", "-m", "base", cwd=tmp_path)
+
+
+def test_append_only_check_allows_pure_appends(tmp_path: Path) -> None:
+    _init_append_only_repo(tmp_path)
+    (tmp_path / "specs.md").write_text("specs.md\nbase line\nnew line\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, str(APPEND_ONLY_SCRIPT), "--root", str(tmp_path), "--base-ref", "HEAD"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "append-only-check: ok" in completed.stdout
+
+
+def test_append_only_check_rejects_non_append_edits(tmp_path: Path) -> None:
+    _init_append_only_repo(tmp_path)
+    (tmp_path / "specs.md").write_text("specs.md\nedited line\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, str(APPEND_ONLY_SCRIPT), "--root", str(tmp_path), "--base-ref", "HEAD"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "specs.md" in completed.stdout
+
+
+def test_append_only_check_has_explicit_local_skip_without_git_context(tmp_path: Path) -> None:
+    for name in ("specs.md", "decisions.md", "agent_runs.md"):
+        (tmp_path / name).write_text(f"{name}\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, str(APPEND_ONLY_SCRIPT), "--root", str(tmp_path)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "append-only-check: skipped" in completed.stdout

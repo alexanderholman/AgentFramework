@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
+from af import __version__
 from af.bootstrap import AFApplication, create_application
 from af.framework.errors import InvalidPrompt, TaskNotFound, UnsupportedWork, VerificationFailed
 from af.interfaces.graphql import create_graphql_router
@@ -16,7 +17,7 @@ def create_http_app(application: AFApplication | None = None) -> FastAPI:
     resolved = application or create_application()
     app = FastAPI(
         title=resolved.settings.app_name,
-        version="0.1.0",
+        version=__version__,
         description="Classification-heavy, inference-light AF reference application",
     )
     app.state.af = resolved

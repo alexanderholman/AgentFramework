@@ -8,7 +8,9 @@ import yaml
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check dry-run convention for executable scripts")
-    parser.add_argument("--registry", default="scripts/registry.yaml", help="Path to script registry")
+    parser.add_argument(
+        "--registry", default="scripts/registry.yaml", help="Path to script registry"
+    )
     args = parser.parse_args()
 
     data = yaml.safe_load(Path(args.registry).read_text(encoding="utf-8"))

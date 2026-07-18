@@ -26,6 +26,20 @@ def test_af_dev_sync_preview_uses_locked_lockfile() -> None:
     assert completed.stdout.splitlines()[0] == "uv sync --locked --extra dev"
 
 
+def test_af_dev_check_preview_lints_all_maintained_python_scripts() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(AF_DEV), "--action", "check"],
+        capture_output=True,
+        check=False,
+        cwd=REPO_ROOT,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "uv run ruff format --check src/af tests scripts" in completed.stdout
+    assert "uv run ruff check src/af tests scripts" in completed.stdout
+
+
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:
     capture_script = tmp_path / "capture_args.py"
     captured_path = tmp_path / "captured.json"

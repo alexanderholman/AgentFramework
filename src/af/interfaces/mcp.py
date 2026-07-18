@@ -11,9 +11,11 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
+from af import __version__
 from af.bootstrap import AFApplication, create_application
 from af.domain.tasks import Task
-from af.framework.errors import AFError, InvalidCharacter
+from af.framework.errors import AFError
+from af.framework.routing import ProcedureRegistry
 from af.framework.types import ExecutionOutcome
 
 
@@ -79,6 +81,7 @@ def _annotations(
 def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]:
     resolved = application or create_application()
     controller = resolved.tasks
+    registry = resolved.container.resolve(ProcedureRegistry)
     server: FastMCP[None] = FastMCP(
         name="AF Agent Framework",
         instructions=(
@@ -121,10 +124,10 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_count_characters(text: str, character: str) -> OutcomeModel:
-        if len(character) != 1:
-            raise ToolError(str(InvalidCharacter(character)))
-        prompt = f"how many {character}s in {text}"
-        return OutcomeModel.from_outcome(controller.execute(prompt))
+        try:
+            return OutcomeModel.from_outcome(controller.count_characters(text, character))
+        except AFError as error:
+            raise ToolError(str(error)) from error
 
     @server.tool(
         name="af_list_tasks",
@@ -192,10 +195,12 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         mime_type="application/json",
     )
     def manifest() -> str:
+        routes = sorted(descriptor.procedure_id for descriptor in registry.catalogue())
+        tiers = sorted({procedure.tier.name.lower() for procedure in registry.all()})
         return json.dumps(
             {
                 "name": "AF Agent Framework",
-                "version": "0.1.0",
+                "version": __version__,
                 "lifecycle": [
                     "classify",
                     "route",
@@ -205,8 +210,8 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
                     "test",
                     "reuse",
                 ],
-                "routes": ["hello", "character-count"],
-                "tiers": ["static", "procedural", "generative"],
+                "routes": routes,
+                "tiers": tiers,
             }
         )
 

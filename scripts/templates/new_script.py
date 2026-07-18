@@ -5,7 +5,9 @@ import argparse
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Template script for AgentFramework automation")
-    parser.add_argument("--execute", action="store_true", help="Run with side effects (default is dry-run)")
+    parser.add_argument(
+        "--execute", action="store_true", help="Run with side effects (default is dry-run)"
+    )
     parser.add_argument("--target", default="", help="Target input or resource")
     args = parser.parse_args()
 

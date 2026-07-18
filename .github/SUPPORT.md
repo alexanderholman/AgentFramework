@@ -1,6 +1,6 @@
 # Support
 
-AgentFramework is currently private, pre-release software at version `0.1.0`.
+AgentFramework is currently private, pre-release software at version `0.1.0a0`.
 
 - Start with the [README](/README.md) and [installation guide](/INSTALL.md).
 - Run `python3 scripts/af_dev.py --action check --execute` before reporting a defect.

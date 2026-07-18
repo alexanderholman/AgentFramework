@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+
 import anyio
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from af.bootstrap import create_application
 from af.framework.types import PROMPT_MAX_LENGTH
+from af.infrastructure.repositories import InMemoryTaskRepository
+from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces.mcp import create_mcp_server
 
 EXPECTED_TOOLS = {
@@ -73,7 +78,89 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             resources = await session.list_resources()
             assert [str(resource.uri) for resource in resources.resources] == ["af://manifest"]
 
+            manifest_result = await session.read_resource("af://manifest")
+            manifest = json.loads(manifest_result.contents[0].text)
+            assert manifest["version"].endswith("a0")
+            assert manifest["routes"] == ["character-count", "hello"]
+            assert manifest["tiers"] == ["procedural", "static"]
+            assert "generative" not in manifest["tiers"]
+
     anyio.run(scenario)
+
+
+class ExplodingSelector:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def name(self) -> str:
+        return "mcp-test-selector"
+
+    @property
+    def locality(self):  # type: ignore[no-untyped-def]
+        from af.framework.types import SelectorLocality
+
+        return SelectorLocality.LOCAL
+
+    def select(self, prompt, catalogue):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        raise AssertionError(f"selector must not run for typed MCP count: {prompt} / {catalogue!r}")
+
+
+def test_mcp_count_characters_uses_typed_route_without_selector() -> None:
+    selector = ExplodingSelector()
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
+
+    async def scenario() -> None:
+        server = create_mcp_server(application)
+        async with create_connected_server_and_client_session(server) as session:
+            cases = [
+                ("version2", "2", "1"),
+                ("ends?", "?", "1"),
+                ("line 1\nline 2", "\n", "1"),
+                ("mañana", "ñ", "1"),
+                ("a" * PROMPT_MAX_LENGTH, "a", str(PROMPT_MAX_LENGTH)),
+            ]
+
+            for text, character, expected in cases:
+                counted = await session.call_tool(
+                    "af_count_characters",
+                    {"text": text, "character": character},
+                )
+
+                assert counted.isError is False
+                assert counted.structuredContent is not None
+                assert counted.structuredContent["prompt"] == text
+                assert counted.structuredContent["output"] == expected
+                trace = application.traces.get(str(counted.structuredContent["trace_id"]))
+                assert trace.prompt == text
+                assert trace.arguments == {"text": text, "character": character}
+
+            too_long = await session.call_tool(
+                "af_count_characters",
+                {"text": "a" * (PROMPT_MAX_LENGTH + 1), "character": "a"},
+            )
+            assert too_long.isError is True
+            assert too_long.content[0].type == "text"
+            assert (
+                f"prompt must be at most {PROMPT_MAX_LENGTH} characters" in too_long.content[0].text
+            )
+
+            invalid_character = await session.call_tool(
+                "af_count_characters",
+                {"text": "strawberry", "character": "rr"},
+            )
+            assert invalid_character.isError is True
+            assert invalid_character.content[0].type == "text"
+            assert "exactly one code point" in invalid_character.content[0].text
+
+    anyio.run(scenario)
+
+    assert selector.calls == 0
 
 
 def test_mcp_reports_domain_failures_as_tool_errors(application) -> None:  # type: ignore[no-untyped-def]

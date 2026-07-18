@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
@@ -18,6 +19,8 @@ from af.framework.errors import (
 )
 from af.framework.routing import OptimisationGoal, ProcedureRegistry, RoutingPolicy
 from af.framework.types import (
+    PROCEDURE_ARGUMENT_COUNT_MAX,
+    PROMPT_MAX_LENGTH,
     ArgumentValueType,
     Classification,
     ProcedureArgumentDescriptor,
@@ -212,6 +215,47 @@ class SideEffectProcedure(BaseProcedure):
     def validate(self, classification: Classification) -> None:
         if classification.intent != "side.effect" or classification.arguments:
             raise InvalidSelectionProposal("invalid arguments for side-effect")
+
+
+class GroundingFailureProcedure(BaseProcedure):
+    id = "grounding-failure"
+    tier = WorkTier.PROCEDURAL
+    pure = True
+    replay_safe = True
+    has_selection_grounding = True
+    metrics = RouteMetrics(cost=1, latency=1, intelligence=1)
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="grounding.failure",
+        arguments=(),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+
+    def __init__(self) -> None:
+        self.execute_calls = 0
+
+    def supports(self, classification: Classification) -> bool:
+        return classification.intent == "grounding.failure"
+
+    def execute(self, classification: Classification) -> ProcedureResult:
+        del classification
+        self.execute_calls += 1
+        return ProcedureResult(output="done")
+
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "grounding.failure" or classification.arguments:
+            raise InvalidSelectionProposal("invalid arguments for grounding-failure")
+
+    def selection_is_grounded(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+    ) -> bool:
+        del request, classification
+        raise RuntimeError("SECRET-grounding")
 
 
 class MalformedDescriptorProcedure(BaseProcedure):
@@ -448,6 +492,7 @@ def test_selector_metadata_property_failures_are_sanitized(selector: RecordingSe
         )
 
     assert "SECRET" not in str(captured.value)
+    assert captured.value.__cause__ is None
 
 
 @pytest.mark.parametrize(
@@ -700,6 +745,41 @@ def test_selector_argument_validation_fails_closed_without_execution(
     )
 
 
+class OversizedArgumentMap(dict[str, str]):
+    def __iter__(self) -> Iterator[str]:
+        raise AssertionError("selection arguments should fail closed before iteration")
+
+
+def test_selector_argument_count_is_bounded_before_iteration() -> None:
+    arguments = OversizedArgumentMap({"text": "strawberry", "character": "r", "extra": "boom"})
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments=arguments,
+                    confidence=0.95,
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select" and SelectionReasonCode.INVALID_ARGUMENTS.value in event.detail
+        for event in trace.events
+    )
+
+
 def test_selector_failures_are_sanitized_and_fail_closed() -> None:
     application = create_application(
         task_repository=InMemoryTaskRepository(),
@@ -789,6 +869,41 @@ def test_selected_side_effect_procedure_is_denied_before_execution() -> None:
     )
 
 
+def test_grounding_hook_failures_are_sanitized_and_fail_closed() -> None:
+    selector = RecordingSelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="grounding-failure",
+                intent="grounding.failure",
+                arguments={},
+                confidence=0.95,
+            )
+        )
+    )
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
+    procedure = GroundingFailureProcedure()
+    application.container.resolve(ProcedureRegistry).register(procedure)
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="trigger the grounding path"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert procedure.execute_calls == 0
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert any(
+        event.stage == "select-policy"
+        and SelectionReasonCode.GROUNDING_FAILED.value in event.detail
+        and "SECRET" not in event.detail
+        for event in trace.events
+    )
+
+
 @pytest.mark.parametrize(
     "prompt",
     [cast(str, None), "", "   ", "a" * 10_001],
@@ -806,7 +921,7 @@ def test_agent_public_boundary_rejects_invalid_prompts_without_tracing(prompt: s
 
 
 @pytest.mark.parametrize(
-    ("procedure_id", "descriptor"),
+    ("procedure_id", "descriptor", "message"),
     [
         (
             "character-count",
@@ -819,6 +934,7 @@ def test_agent_public_boundary_rejects_invalid_prompts_without_tracing(prompt: s
                 risk=ProcedureRisk.NONE,
                 requires_confirmation=False,
             ),
+            "must match the registered procedure id",
         ),
         (
             "character-count",
@@ -846,6 +962,7 @@ def test_agent_public_boundary_rejects_invalid_prompts_without_tracing(prompt: s
                 risk=ProcedureRisk.NONE,
                 requires_confirmation=False,
             ),
+            "argument names must be unique",
         ),
         (
             "character-count",
@@ -872,16 +989,164 @@ def test_agent_public_boundary_rejects_invalid_prompts_without_tracing(prompt: s
                     requires_confirmation=False,
                 ),
             ),
+            "invalid argument type",
+        ),
+        (
+            "character-count",
+            cast(
+                ProcedureDescriptor,
+                ProcedureDescriptor(
+                    procedure_id="character-count",
+                    version="1.0.0",
+                    intent="text.character_count",
+                    arguments=cast(tuple[ProcedureArgumentDescriptor, ...], []),
+                    effect=ProcedureEffect.READ_ONLY,
+                    risk=ProcedureRisk.NONE,
+                    requires_confirmation=False,
+                ),
+            ),
+            "arguments must be a tuple",
+        ),
+        (
+            "character-count",
+            cast(
+                ProcedureDescriptor,
+                ProcedureDescriptor(
+                    procedure_id="character-count",
+                    version="1.0.0",
+                    intent="text.character_count",
+                    arguments=(
+                        cast(
+                            ProcedureArgumentDescriptor,
+                            ProcedureArgumentDescriptor(
+                                name="text",
+                                value_type=ArgumentValueType.TEXT,
+                                min_length=cast(int, True),
+                                max_length=PROMPT_MAX_LENGTH,
+                                allow_blank=False,
+                            ),
+                        ),
+                    ),
+                    effect=ProcedureEffect.READ_ONLY,
+                    risk=ProcedureRisk.NONE,
+                    requires_confirmation=False,
+                ),
+            ),
+            "invalid minimum length",
+        ),
+        (
+            "character-count",
+            cast(
+                ProcedureDescriptor,
+                ProcedureDescriptor(
+                    procedure_id="character-count",
+                    version="1.0.0",
+                    intent="text.character_count",
+                    arguments=(
+                        cast(
+                            ProcedureArgumentDescriptor,
+                            ProcedureArgumentDescriptor(
+                                name="text",
+                                value_type=ArgumentValueType.TEXT,
+                                min_length=1,
+                                max_length=cast(int, True),
+                                allow_blank=False,
+                            ),
+                        ),
+                    ),
+                    effect=ProcedureEffect.READ_ONLY,
+                    risk=ProcedureRisk.NONE,
+                    requires_confirmation=False,
+                ),
+            ),
+            "invalid maximum length",
+        ),
+        (
+            "character-count",
+            cast(
+                ProcedureDescriptor,
+                ProcedureDescriptor(
+                    procedure_id="character-count",
+                    version="1.0.0",
+                    intent="text.character_count",
+                    arguments=(
+                        cast(
+                            ProcedureArgumentDescriptor,
+                            ProcedureArgumentDescriptor(
+                                name="text",
+                                value_type=ArgumentValueType.TEXT,
+                                min_length=1,
+                                max_length=PROMPT_MAX_LENGTH + 1,
+                                allow_blank=False,
+                            ),
+                        ),
+                    ),
+                    effect=ProcedureEffect.READ_ONLY,
+                    risk=ProcedureRisk.NONE,
+                    requires_confirmation=False,
+                ),
+            ),
+            "invalid maximum length",
+        ),
+        (
+            "character-count",
+            cast(
+                ProcedureDescriptor,
+                ProcedureDescriptor(
+                    procedure_id="character-count",
+                    version="1.0.0",
+                    intent="text.character_count",
+                    arguments=(
+                        cast(
+                            ProcedureArgumentDescriptor,
+                            ProcedureArgumentDescriptor(
+                                name="text",
+                                value_type=ArgumentValueType.TEXT,
+                                min_length=1,
+                                max_length=PROMPT_MAX_LENGTH,
+                                allow_blank=cast(bool, 1),
+                            ),
+                        ),
+                    ),
+                    effect=ProcedureEffect.READ_ONLY,
+                    risk=ProcedureRisk.NONE,
+                    requires_confirmation=False,
+                ),
+            ),
+            "invalid blank policy",
+        ),
+        (
+            "character-count",
+            ProcedureDescriptor(
+                procedure_id="character-count",
+                version="1.0.0",
+                intent="text.character_count",
+                arguments=tuple(
+                    ProcedureArgumentDescriptor(
+                        name=f"arg{index}",
+                        value_type=ArgumentValueType.TEXT,
+                        min_length=0,
+                        max_length=1,
+                        allow_blank=True,
+                    )
+                    for index in range(PROCEDURE_ARGUMENT_COUNT_MAX + 1)
+                ),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
+            ),
+            "too many argument descriptors",
         ),
     ],
 )
 def test_registry_rejects_malformed_selection_descriptors(
     procedure_id: str,
     descriptor: ProcedureDescriptor,
+    message: str,
 ) -> None:
     registry = ProcedureRegistry()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         registry.register(
             MalformedDescriptorProcedure(procedure_id=procedure_id, descriptor=descriptor)
         )

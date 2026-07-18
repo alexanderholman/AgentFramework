@@ -15,7 +15,12 @@ from af.framework.contracts import (
     TraceRepository,
     Verifier,
 )
-from af.framework.errors import InvalidSelectionProposal, UnsupportedWork, VerificationFailed
+from af.framework.errors import (
+    InvalidPrompt,
+    InvalidSelectionProposal,
+    UnsupportedWork,
+    VerificationFailed,
+)
 from af.framework.routing import LadderRouter, ProcedureRegistry
 from af.framework.types import (
     ArgumentValueType,
@@ -33,6 +38,8 @@ from af.framework.types import (
     SelectorMetadata,
     TraceEvent,
     WorkRequest,
+    is_valid_procedure_id,
+    is_valid_procedure_intent,
     normalize_prompt,
     parse_probability,
 )
@@ -67,15 +74,42 @@ class PipelineAgent:
         self._selector_confidence_threshold = selector_confidence_threshold
 
     def handle(self, request: WorkRequest) -> ExecutionOutcome:
-        request = WorkRequest(
+        normalized_request = WorkRequest(
             prompt=normalize_prompt(request.prompt),
             attributes=request.attributes,
         )
+        return self._handle_request(normalized_request)
+
+    def handle_classification(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+        *,
+        expected_procedure_id: str | None = None,
+    ) -> ExecutionOutcome:
+        if not isinstance(request.prompt, str):
+            raise InvalidPrompt("prompt must be a string")
+        return self._handle_request(
+            request,
+            classification,
+            expected_procedure_id=expected_procedure_id,
+        )
+
+    def _handle_request(
+        self,
+        request: WorkRequest,
+        classification: Classification | None = None,
+        *,
+        expected_procedure_id: str | None = None,
+    ) -> ExecutionOutcome:
         trace_id = str(uuid4())
         created_at = datetime.now(UTC)
         events: list[TraceEvent] = []
 
-        classification = self._classifier.classify(request)
+        if classification is None:
+            classification = self._classifier.classify(request)
+        else:
+            events.append(TraceEvent("classify", classification.intent))
         if classification is None:
             events.append(TraceEvent("classify", "unsupported"))
             events.append(TraceEvent("record", "unsupported trace"))
@@ -98,15 +132,37 @@ class PipelineAgent:
                 )
             )
             raise UnsupportedWork(request.prompt, trace_id)
-        events.append(TraceEvent("classify", classification.intent))
-        classification, expected_procedure_id = self._resolve_classification(
+        if not events:
+            events.append(TraceEvent("classify", classification.intent))
+
+        classification, selected_procedure_id = self._resolve_classification(
             request,
             classification,
             trace_id=trace_id,
             created_at=created_at,
             events=events,
         )
+        expected_procedure_id = selected_procedure_id or expected_procedure_id
 
+        return self._execute_classification(
+            request,
+            classification,
+            trace_id=trace_id,
+            created_at=created_at,
+            events=events,
+            expected_procedure_id=expected_procedure_id,
+        )
+
+    def _execute_classification(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+        *,
+        trace_id: str,
+        created_at: datetime,
+        events: list[TraceEvent],
+        expected_procedure_id: str | None,
+    ) -> ExecutionOutcome:
         try:
             procedure = self._router.route(classification, prompt=request.prompt)
         except UnsupportedWork as error:
@@ -119,6 +175,16 @@ class PipelineAgent:
                 events=events,
             )
             raise UnsupportedWork(request.prompt, trace_id) from error
+        descriptor = self._registry.descriptor(procedure.id)
+        if descriptor is None:
+            self._record_unsupported_trace(
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+            raise UnsupportedWork(request.prompt, trace_id)
         if expected_procedure_id is not None and procedure.id != expected_procedure_id:
             events.append(
                 TraceEvent(
@@ -134,6 +200,20 @@ class PipelineAgent:
                 events=events,
             )
             raise UnsupportedWork(request.prompt, trace_id)
+        classification = Classification(
+            intent=classification.intent,
+            arguments=self._validate_selection_arguments(
+                descriptor,
+                classification.arguments,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            ),
+            confidence=classification.confidence,
+            classifier=classification.classifier,
+        )
         try:
             procedure.validate(classification)
         except InvalidSelectionProposal as error:
@@ -288,6 +368,24 @@ class PipelineAgent:
                 events=events,
             )
 
+        if not is_valid_procedure_id(proposal.procedure_id):
+            self._fail_closed_selection(
+                SelectionReasonCode.UNKNOWN_PROCEDURE,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        if not is_valid_procedure_intent(proposal.intent):
+            self._fail_closed_selection(
+                SelectionReasonCode.UNSUPPORTED_INTENT,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
         procedure = self._registry.get(proposal.procedure_id)
         if procedure is None:
             self._fail_closed_selection(
@@ -465,7 +563,7 @@ class PipelineAgent:
                 events=events,
             )
         expected_arguments = {argument.name: argument for argument in descriptor.arguments}
-        if set(arguments) != set(expected_arguments):
+        if len(arguments) != len(expected_arguments):
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_ARGUMENTS,
                 trace_id=trace_id,
@@ -474,6 +572,16 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
             )
+        for name in arguments:
+            if name not in expected_arguments:
+                self._fail_closed_selection(
+                    SelectionReasonCode.INVALID_ARGUMENTS,
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
         validated: dict[str, str] = {}
         for name, schema in expected_arguments.items():
             value = arguments[name]
@@ -597,7 +705,19 @@ class PipelineAgent:
                 events=events,
                 stage="select-policy",
             )
-        if not procedure.selection_is_grounded(request, classification):
+        try:
+            grounded = procedure.selection_is_grounded(request, classification)
+        except Exception:
+            self._fail_closed_selection(
+                SelectionReasonCode.GROUNDING_FAILED,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+                stage="select-policy",
+            )
+        if not grounded:
             self._fail_closed_selection(
                 SelectionReasonCode.GROUNDING_FAILED,
                 trace_id=trace_id,

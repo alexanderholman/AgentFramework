@@ -14,7 +14,7 @@ from af.domain.classifiers import (
 )
 from af.domain.procedures import CharacterCountProcedure, HelloProcedure
 from af.domain.tasks import TaskRepository
-from af.domain.verification import DeterministicVerifier, VerifierRouter
+from af.domain.verification import DeterministicVerifier
 from af.framework.container import Container, Scope, ServiceProvider
 from af.framework.contracts import ReuseStore, Selector, TraceRepository
 from af.framework.errors import InvalidProviderConfiguration
@@ -82,7 +82,6 @@ class _FrameworkProvider(ServiceProvider):
             [HelloClassifier(), CharacterCountClassifier(), UnknownClassifier()]
         )
         verifier = DeterministicVerifier()
-        verifier_router = VerifierRouter(verifier)
         reuse_store = self._reuse_store or InMemoryReuseStore()
         traces = container.resolve_token(TraceRepository)
         router = LadderRouter(registry, RoutingPolicy())
@@ -90,7 +89,7 @@ class _FrameworkProvider(ServiceProvider):
             classifier=classifier,
             registry=registry,
             router=router,
-            verifier=verifier_router,
+            verifier=verifier,
             traces=traces,
             regression_gate=ReplayRegressionGate(),
             reuse_store=reuse_store,
@@ -186,8 +185,8 @@ def _resolve_selector_metadata(selector: Selector | None) -> SelectorMetadata | 
     try:
         provider_id = selector.name
         locality = selector.locality
-    except Exception as error:
-        raise InvalidProviderConfiguration("selector provider metadata is invalid") from error
+    except Exception:
+        raise InvalidProviderConfiguration("selector provider metadata is invalid") from None
     if not is_valid_selector_provider_id(provider_id) or not isinstance(locality, SelectorLocality):
         raise InvalidProviderConfiguration("selector provider metadata is invalid")
     return SelectorMetadata(provider_id=provider_id, locality=locality)

@@ -1,116 +1,44 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
 import argparse
 import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
 
 
-def strip_quotes(value: str) -> str:
-    if (value.startswith('"') and value.endswith('"')) or (
-        value.startswith("'") and value.endswith("'")
-    ):
-        return value[1:-1]
-    return value
+def parse_agents_yaml(path: str) -> tuple[list[dict[str, Any]], list[str]]:
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise ValueError(f"failed to read {path}: {error.strerror}") from error
+    except yaml.YAMLError as error:
+        raise ValueError(f"failed to parse {path}: {error}") from error
+    if not isinstance(data, dict):
+        return [], []
 
-
-def parse_key_value(text: str):
-    key, _, value = text.partition(":")
-    key = key.strip()
-    value = value.strip()
-    if not value:
-        return key, None
-    return key, strip_quotes(value)
-
-
-def parse_agents_yaml(path: str):
-    agents = []
-    allowed_tags = []
-    in_agents = False
-    in_allowed_tags = False
-    in_tags = False
-    current_agent = None
-
-    with open(path, "r", encoding="utf-8") as handle:
-        lines = handle.readlines()
-
-    for line in lines:
-        raw = line.rstrip("\n")
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        indent = len(raw) - len(raw.lstrip(" "))
-
-        if stripped == "agents:":
-            in_agents = True
-            in_allowed_tags = False
-            in_tags = False
-            current_agent = None
-            continue
-
-        if stripped == "allowed_tags:":
-            in_allowed_tags = True
-            in_agents = False
-            in_tags = False
-            current_agent = None
-            continue
-
-        if in_allowed_tags:
-            if indent == 2 and stripped.startswith("- "):
-                allowed_tags.append(strip_quotes(stripped[2:].strip()))
-                continue
-            if indent == 0:
-                in_allowed_tags = False
-
-        if in_agents:
-            if indent == 2 and stripped.startswith("- "):
-                current_agent = {}
-                agents.append(current_agent)
-                in_tags = False
-                rest = stripped[2:].strip()
-                if rest:
-                    key, value = parse_key_value(rest)
-                    current_agent[key] = value
-                continue
-
-            if current_agent is None:
-                continue
-
-            if indent == 4 and stripped.startswith("tags:"):
-                current_agent.setdefault("tags", [])
-                in_tags = True
-                continue
-
-            if in_tags and indent == 6 and stripped.startswith("- "):
-                current_agent.setdefault("tags", []).append(
-                    strip_quotes(stripped[2:].strip())
-                )
-                continue
-
-            if indent == 4 and ":" in stripped:
-                in_tags = False
-                key, value = parse_key_value(stripped)
-                current_agent[key] = value
-                continue
-
-            if indent <= 2:
-                in_tags = False
-
-    return agents, allowed_tags
+    agents = data.get("agents", [])
+    allowed_tags = data.get("allowed_tags", [])
+    normalized_agents = [item for item in agents if isinstance(item, dict)]
+    normalized_tags = [tag for tag in allowed_tags if isinstance(tag, str)]
+    return normalized_agents, normalized_tags
 
 
 def check_tags_present(path: str) -> int:
     agents, _ = parse_agents_yaml(path)
     missing = [agent.get("id", "<unknown>") for agent in agents if not agent.get("tags")]
     if missing:
-        sys.stderr.write(
-            "Agents missing tags: " + ", ".join(missing) + "\n"
-        )
+        sys.stderr.write("Agents missing tags: " + ", ".join(str(item) for item in missing) + "\n")
         return 1
     return 0
 
 
 def check_unique_ids(path: str) -> int:
     agents, _ = parse_agents_yaml(path)
-    ids = [agent.get("id") for agent in agents if agent.get("id")]
+    ids = [agent.get("id") for agent in agents if isinstance(agent.get("id"), str)]
     duplicates = sorted({agent_id for agent_id in ids if ids.count(agent_id) > 1})
     if duplicates:
         sys.stderr.write("Duplicate agent IDs: " + ", ".join(duplicates) + "\n")
@@ -123,20 +51,22 @@ def check_tags_allowed(path: str) -> int:
     if not allowed_tags:
         return 0
     allowed = set(allowed_tags)
-    invalid = []
+    invalid: list[str] = []
     for agent in agents:
-        for tag in agent.get("tags", []):
+        tags = agent.get("tags", [])
+        if not isinstance(tags, list):
+            invalid.append(str(tags))
+            continue
+        for tag in tags:
             if tag not in allowed:
-                invalid.append(tag)
+                invalid.append(str(tag))
     if invalid:
-        sys.stderr.write(
-            "Tags not in allowed_tags: " + ", ".join(sorted(set(invalid))) + "\n"
-        )
+        sys.stderr.write("Tags not in allowed_tags: " + ", ".join(sorted(set(invalid))) + "\n")
         return 1
     return 0
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Validate agents.yaml fields.")
     parser.add_argument(
         "--file",
@@ -149,12 +79,16 @@ def main():
 
     args = parser.parse_args()
 
-    if args.check_tags_present:
-        return check_tags_present(args.file)
-    if args.check_unique_ids:
-        return check_unique_ids(args.file)
-    if args.check_tags_allowed:
-        return check_tags_allowed(args.file)
+    try:
+        if args.check_tags_present:
+            return check_tags_present(args.file)
+        if args.check_unique_ids:
+            return check_unique_ids(args.file)
+        if args.check_tags_allowed:
+            return check_tags_allowed(args.file)
+    except ValueError as error:
+        sys.stderr.write(f"{error}\n")
+        return 1
 
     parser.print_help()
     return 2

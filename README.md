@@ -6,8 +6,9 @@ deterministic procedures. Its execution kernel follows:
 `classify → route → execute → verify → record → test → reuse`
 
 The same application service powers a Typer CLI, server-rendered HTML MVC, REST,
-GraphQL, and MCP. Static and procedural routes are preferred; a language model is an
-optional dependency-injected provider, not the agent itself.
+GraphQL, and MCP. Deterministic static and procedural routes run first and bypass any
+optional selector. A selector may only propose an installed procedure; AF does not ship a
+model-generated-answer route.
 
 The first vertical slice includes:
 
@@ -16,8 +17,11 @@ The first vertical slice includes:
   by an independent verifier
 - persisted Task create/list/read/update/delete operations
 - SQLite in normal use and in-memory repositories in tests
-- an MCP server suitable for local clients now and ChatGPT after an authenticated HTTPS
-  deployment
+- an MCP server for local clients plus deployment guidance for ChatGPT-compatible HTTPS or
+  Secure MCP Tunnel access
+
+The package is currently pre-release software at version `0.1.0a0` until roadmap issue #3
+quality gates are complete.
 
 ## Quick start
 
@@ -97,9 +101,12 @@ AF_MCP_TRANSPORT=streamable-http uv run af-mcp
 ```
 
 This binds to `127.0.0.1:8000/mcp` by default. ChatGPT web cannot connect directly to a
-local stdio or loopback server: deploy AF behind HTTPS with authentication first, then
-register that real MCP endpoint. The repository skill in `.agents/skills/af-work/`
-teaches a compatible agent when to use each AF tool without reimplementing AF logic.
+local stdio or loopback server. For local/private use, prefer an outbound-only Secure MCP
+Tunnel deployment. Public HTTPS is a separate authenticated and hardened option. AF does
+not bundle a real local or remote selector provider adapter, and remote selector execution
+is denied by the current auto-execution policy. The repository skill in
+`.agents/skills/af-work/` teaches a compatible agent when to use each AF tool without
+reimplementing AF logic.
 
 See [ChatGPT and MCP](docs/chatgpt-mcp.md) and [Architecture](docs/architecture.md).
 

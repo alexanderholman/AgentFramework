@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from af.framework.contracts import Procedure, Verifier
+from af.framework.contracts import Procedure
 from af.framework.types import (
     Classification,
     ProcedureResult,
     VerificationResult,
     WorkRequest,
-    WorkTier,
 )
 
 
@@ -42,26 +41,3 @@ class DeterministicVerifier:
                 "independent count matched" if passed else "independent count mismatch",
             )
         return VerificationResult(False, "no verifier is registered for this intent")
-
-
-class VerifierRouter:
-    """Dispatch generative work only to an explicitly installed verifier."""
-
-    def __init__(
-        self,
-        deterministic: Verifier,
-        generative: Verifier | None = None,
-    ) -> None:
-        self._deterministic = deterministic
-        self._generative = generative
-
-    def verify(
-        self,
-        request: WorkRequest,
-        classification: Classification,
-        procedure: Procedure,
-        result: ProcedureResult,
-    ) -> VerificationResult:
-        if procedure.tier is WorkTier.GENERATIVE and self._generative is not None:
-            return self._generative.verify(request, classification, procedure, result)
-        return self._deterministic.verify(request, classification, procedure, result)

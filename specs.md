@@ -468,3 +468,51 @@ foundations, not the canonical repository identity for new framework work.
 - SPEC-009 (Executable AF Python Runtime)
 
 ---
+
+## [SPEC-011] Human-First Constrained Selection Boundary
+**Date**: 2026-07-18
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+AF SHALL remain deterministic-first and human-first. Static and procedural routes execute
+before any selector. A selector may only propose one installed typed procedure from the
+trusted registered catalogue; it never provides the user-facing answer.
+
+### Requirements
+- MUST execute deterministic classifiers and routes before consulting any selector
+- MUST keep selector output constrained to a registered procedure ID, supported intent,
+  typed arguments, and finite confidence
+- MUST validate selector proposals against the immutable registered catalogue and
+  per-procedure argument schema before execution
+- MUST record only fixed reason codes for selector handoff and policy-denial traces
+- MUST enforce pre-execution policy checks, including remote denial and no silent fallback
+- MUST keep direct model-generated-answer execution disabled in the active runtime
+- MUST enforce the shared 10,000-character input ceiling across CLI, HTML, REST, GraphQL,
+  MCP, and typed controller entry points
+- MUST independently verify deterministic procedure output before return or reuse promotion
+
+### Tests
+- **Test ID**: TEST-011-1
+  - **Description**: Validate deterministic routes bypass selectors
+  - **Pass Criteria**: `hello` and strawberry character-count execute without selector calls
+  - **Fail Criteria**: Deterministic requests invoke selector infrastructure
+- **Test ID**: TEST-011-2
+  - **Description**: Validate constrained selector proposals fail closed
+  - **Pass Criteria**: Invalid metadata, IDs, intents, arguments, confidence, grounding,
+    and policy checks record fixed reason codes with zero execution
+  - **Fail Criteria**: Malformed or unsupported selector proposals execute work or leak raw
+    provider data
+- **Test ID**: TEST-011-3
+  - **Description**: Validate typed character-count entry points preserve arguments
+  - **Pass Criteria**: MCP/controller character counting preserves exact text/character data
+    up to 10,000 characters and bypasses selector invocation
+  - **Fail Criteria**: The adapter reconstructs natural language, corrupts typed data, or
+    bypasses shared limits
+
+### Related Specs
+- SPEC-004 (Append-Only File Management)
+- SPEC-009 (Executable AF Python Runtime)
+- SPEC-010 (AgentFramework Repository Identity)
+
+---

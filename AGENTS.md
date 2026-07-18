@@ -292,8 +292,9 @@ The shared lifecycle is `classify → route → execute → verify → record �
   FastAPI, Typer, Strawberry, MCP, and SQLAlchemy.
 - Keep CLI, HTML, REST, GraphQL, and MCP modules as thin adapters over the shared
   application controller.
-- Prefer deterministic static and procedural routes. A model is an optional injected
-  provider, never the agent itself.
+- Prefer deterministic static and procedural routes. They run before any optional selector
+  and never invoke a model for direct answers. A selector may only propose an installed
+  typed procedure, and AF does not bundle a real local or remote selector adapter.
 - Add a failing behavioural test before implementation and a regression test for every
   defect.
 - Inject dependencies explicitly through constructors or the composition root; do not
@@ -305,5 +306,6 @@ python3 scripts/af_dev.py --action check --execute
 ```
 
 The repository skill at `.agents/skills/af-work/` describes how ChatGPT/Codex should use
-AF's MCP tools. Local MCP uses stdio by default; ChatGPT web requires a separately
-deployed HTTPS Streamable HTTP endpoint with production authentication.
+AF's MCP tools. Local MCP uses stdio by default; ChatGPT web requires either Secure MCP
+Tunnel for private outbound-only access or a separately authenticated HTTPS Streamable
+HTTP endpoint.

@@ -1313,3 +1313,46 @@ The executable framework needs an independent identity without discarding that l
 - Preserved: AgentFactory append-only history and governance assets
 
 ---
+
+## [DEC-024] Remove Direct Generative Answers from the Active AF Runtime
+**Date**: 2026-07-18
+**Status**: Implemented
+**Decision Maker**: Alexander Holman / Copilot
+
+### Context
+DEC-022 item 5 allowed a future generative execution branch when paired with a verifier.
+The current product contract is stricter: AF is selector-only for model use, and user-facing
+answers must come from installed deterministic procedures rather than direct generation.
+
+### Decision
+1. Supersede DEC-022 item 5 for the active runtime.
+2. Remove the direct generative execution tier and any verifier-routing branch dedicated to
+   generative output.
+3. Keep models optional and constrained to proposing registered procedures only.
+4. Require immutable catalogue validation, fixed reason codes, and pre-execution policy
+   checks before any selector-backed procedure execution.
+5. Keep remote selector execution denied unless a future explicit policy and adapter design
+   is implemented.
+
+### Consequences
+**Positive:**
+- AF now matches the released selector-only contract across code, docs, and MCP metadata.
+- Deterministic procedures remain independently verified and reusable without answer
+  generation seams.
+- Selector failures and unsupported work fail closed to human handoff.
+
+**Negative:**
+- Unknown work stays unsupported until more deterministic procedures or a trusted selector
+  adapter are added.
+- Future remote or richer selector integrations now require an explicit follow-up design.
+
+### Related Specs
+- SPEC-009 (Executable AF Python Runtime)
+- SPEC-011 (Human-First Constrained Selection Boundary)
+
+### Output References
+- Updated: `src/af/framework/types.py`, `src/af/domain/verification.py`,
+  `src/af/interfaces/mcp.py`, `docs/architecture.md`
+- Preserved: historical append-only references to the superseded generative design
+
+---

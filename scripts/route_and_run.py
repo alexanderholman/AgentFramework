@@ -9,7 +9,6 @@ from pathlib import Path
 
 import yaml
 
-
 PLACEHOLDER_RE = re.compile(r"<([a-zA-Z0-9_-]+)>")
 
 
@@ -49,7 +48,7 @@ def select_script(scripts, script_id, query, intents):
                 return script
         raise ValueError(f"script id not found or inactive: {script_id}")
 
-    raw_query = " ".join([query] + intents).strip()
+    raw_query = " ".join([query, *intents]).strip()
     if not raw_query:
         raise ValueError("provide --script-id or --query/--intent for routing")
 
@@ -105,13 +104,21 @@ def render_command(command, values):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Resolve script from NL intent and execute with parameters")
-    parser.add_argument("--registry", default="scripts/registry.yaml", help="Path to script registry")
+    parser = argparse.ArgumentParser(
+        description="Resolve script from NL intent and execute with parameters"
+    )
+    parser.add_argument(
+        "--registry", default="scripts/registry.yaml", help="Path to script registry"
+    )
     parser.add_argument("--query", default="", help="Natural language request")
     parser.add_argument("--intent", action="append", default=[], help="Additional intent tokens")
-    parser.add_argument("--script-id", default="", help="Use explicit script id instead of resolver")
+    parser.add_argument(
+        "--script-id", default="", help="Use explicit script id instead of resolver"
+    )
     parser.add_argument("--arg", action="append", default=[], help="Placeholder value key=value")
-    parser.add_argument("--execute", action="store_true", help="Execute command (default is dry-run)")
+    parser.add_argument(
+        "--execute", action="store_true", help="Execute command (default is dry-run)"
+    )
     args = parser.parse_args()
 
     try:

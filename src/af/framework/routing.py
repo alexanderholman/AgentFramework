@@ -9,6 +9,8 @@ from af.framework.contracts import Procedure
 from af.framework.errors import InvalidRoutingPolicy, UnsupportedWork
 from af.framework.types import (
     ARGUMENT_NAME_MAX_LENGTH,
+    PROCEDURE_ARGUMENT_COUNT_MAX,
+    PROMPT_MAX_LENGTH,
     ArgumentValueType,
     Classification,
     ProcedureArgumentDescriptor,
@@ -93,6 +95,10 @@ class ProcedureRegistry:
             raise ValueError("procedure selection descriptor has an invalid risk")
         if type(descriptor.requires_confirmation) is not bool:
             raise ValueError("procedure selection descriptor has an invalid confirmation policy")
+        if type(descriptor.arguments) is not tuple:
+            raise ValueError("procedure selection descriptor arguments must be a tuple")
+        if len(descriptor.arguments) > PROCEDURE_ARGUMENT_COUNT_MAX:
+            raise ValueError("procedure selection descriptor has too many argument descriptors")
 
         seen_names: set[str] = set()
         arguments: list[ProcedureArgumentDescriptor] = []
@@ -110,10 +116,19 @@ class ProcedureRegistry:
                 )
             if not isinstance(argument.value_type, ArgumentValueType):
                 raise ValueError("procedure selection descriptor has an invalid argument type")
-            if argument.min_length < 0:
+            if (
+                type(argument.min_length) is not int
+                or not 0 <= argument.min_length <= PROMPT_MAX_LENGTH
+            ):
                 raise ValueError("procedure selection descriptor has an invalid minimum length")
-            if argument.max_length is not None and argument.max_length < argument.min_length:
+            if argument.max_length is not None and (
+                type(argument.max_length) is not int
+                or argument.max_length < argument.min_length
+                or argument.max_length > PROMPT_MAX_LENGTH
+            ):
                 raise ValueError("procedure selection descriptor has an invalid maximum length")
+            if type(argument.allow_blank) is not bool:
+                raise ValueError("procedure selection descriptor has an invalid blank policy")
             seen_names.add(argument.name)
             arguments.append(
                 ProcedureArgumentDescriptor(

@@ -12,6 +12,7 @@ from af.framework.errors import InvalidPrompt
 
 # Shared user-prompt ceiling enforced by the application boundary and reflected by adapters.
 PROMPT_MAX_LENGTH = 10_000
+PROCEDURE_ARGUMENT_COUNT_MAX = 16
 SELECTOR_PROVIDER_ID_MAX_LENGTH = 64
 PROCEDURE_ID_MAX_LENGTH = 64
 PROCEDURE_VERSION_MAX_LENGTH = 32
@@ -28,7 +29,6 @@ _ARGUMENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 class WorkTier(IntEnum):
     STATIC = 0
     PROCEDURAL = 1
-    GENERATIVE = 2
 
 
 class SelectorLocality(StrEnum):

@@ -3,7 +3,7 @@
 project:
   project_id: "agent-framework"
   title: "AF Agent Framework"
-  intent: "Turn repeatable agent work into deterministic, tested, reusable Python procedures with optional model escalation."
+  intent: "Turn repeatable agent work into deterministic, tested, reusable Python procedures with optional constrained procedure selection."
   status: "active"
 
 constraints:
@@ -13,7 +13,7 @@ constraints:
     - "Python CLI"
     - "FastAPI HTML, REST, and GraphQL application"
     - "MCP clients over stdio or Streamable HTTP"
-    - "ChatGPT via a deployed HTTPS MCP endpoint and a repository skill"
+    - "ChatGPT via Secure MCP Tunnel or a deployed authenticated HTTPS MCP endpoint and a repository skill"
     - "GitHub and GitHub Copilot"
   allowed_languages:
     - "python"
@@ -29,7 +29,7 @@ constraints:
 
 goals:
   - "Implement classify → route → execute → verify → record → reuse as an explicit kernel"
-  - "Prefer static and procedural routes before dependency-injected model inference"
+  - "Prefer deterministic static and procedural routes before any optional selector proposal"
   - "Expose one application layer through CLI, MVC HTML, REST, GraphQL, and MCP adapters"
   - "Keep model, memory, search, planner, persistence, and transports replaceable behind contracts"
   - "Preserve the original agent definitions, append-only governance, and script-first workflow"
@@ -52,7 +52,7 @@ current_state:
     - "Python quality gate and legacy agent validation"
   what_is_missing:
     - "Production authentication and deployment for remote ChatGPT MCP access"
-    - "A verified generative route and hot-swappable memory, search, and planner adapters"
+    - "A real local or remote selector provider adapter"
     - "Schema migrations, production observability, and hardened multi-user authorization"
   known_issues:
     - "[ASSUMPTION] The MVP is single-process and synchronous at its application core."

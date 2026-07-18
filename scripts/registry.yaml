@@ -148,6 +148,24 @@ scripts:
       - "exit_code == 0"
     status: "active"
 
+  - id: "check-append-only"
+    intent:
+      - "validate"
+      - "append-only"
+      - "governance"
+    capabilities:
+      - "append-only-history-check"
+      - "governance-validation"
+    description: "Verify append-only governance files are byte-prefix appends from the base revision"
+    command: "python3 scripts/check_append_only.py --root ."
+    parameters:
+      - "base-ref"
+    outputs:
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
   - id: "validate-agents"
     intent:
       - "validate"

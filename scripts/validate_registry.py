@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
-import sys
 from pathlib import Path
 
 import yaml
-
 
 REQUIRED_FIELDS = ("id", "intent", "capabilities", "description", "command", "status")
 ALLOWED_STATUS = {"active", "inactive"}
@@ -13,7 +11,9 @@ ALLOWED_STATUS = {"active", "inactive"}
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate scripts/registry.yaml schema")
-    parser.add_argument("--registry", default="scripts/registry.yaml", help="Path to script registry")
+    parser.add_argument(
+        "--registry", default="scripts/registry.yaml", help="Path to script registry"
+    )
     args = parser.parse_args()
 
     try:

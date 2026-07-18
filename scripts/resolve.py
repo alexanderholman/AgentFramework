@@ -53,7 +53,9 @@ def format_result(script, score):
 
 def main():
     parser = argparse.ArgumentParser(description="Resolve NL intent to registered script")
-    parser.add_argument("--registry", default="scripts/registry.yaml", help="Path to script registry")
+    parser.add_argument(
+        "--registry", default="scripts/registry.yaml", help="Path to script registry"
+    )
     parser.add_argument("--query", default="", help="Natural language request")
     parser.add_argument("--intent", action="append", default=[], help="Intent token(s)")
     parser.add_argument("--top-k", type=int, default=3, help="Max matches to return")
@@ -72,7 +74,7 @@ def main():
             print(script.get("id", ""))
         return 0
 
-    raw_query = " ".join([args.query] + args.intent).strip()
+    raw_query = " ".join([args.query, *args.intent]).strip()
     if not raw_query:
         print("error: provide --query and/or --intent", file=sys.stderr)
         return 2
@@ -91,7 +93,10 @@ def main():
         return 0
 
     if not results:
-        print("No matching script found. Create a reusable script and register it in scripts/registry.yaml.")
+        print(
+            "No matching script found. "
+            "Create a reusable script and register it in scripts/registry.yaml."
+        )
         return 1
 
     for idx, result in enumerate(results, start=1):

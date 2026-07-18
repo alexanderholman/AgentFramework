@@ -439,3 +439,56 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #007 - Final Selector-Only Cleanup and Governance Pass
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `5457fcd`
+- Requested final cleanup across the trusted selector boundary, typed MCP counting,
+  append-only governance, active documentation, release status, and Actions hardening
+- Requirement to preserve prior append-only history byte-for-byte and append new records only
+
+### Outputs
+- Hardened selector metadata, catalogue validation, descriptor validation, and grounding
+  failure handling with fixed reason codes and fail-closed traces
+- Removed the active generative execution tier and verifier-routing seam
+- Added a typed `count_characters` controller path used by MCP without natural-language
+  reconstruction or selector calls
+- Replaced `validate_agents.sh` shell evaluation with fixed command/function execution and
+  added byte-prefix append-only validation
+- Expanded Ruff checks to maintained Python scripts, pinned workflow actions by immutable
+  SHA, fetched sufficient history for append-only checks, and disabled persisted checkout
+  credentials
+- Updated active documentation to the selector-only, deterministic-first pre-release
+  contract and appended SPEC-011 and DEC-024
+
+### Verified Results
+- Ruff format check: 51 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 31 source files
+- Pytest: 112 passed, 1 warning
+- Coverage: 91.24 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed, including append-only byte-prefix checks
+- Smoke: `uv run af hello` → `Hello, world!`
+- Smoke: `uv run af ask 'how many rs in strawberry'` → `3`
+
+### Issues Encountered
+- The sandbox initially lacked `uv`; validation proceeded after installing it locally and
+  regenerating the committed lockfile for the pre-release version bump.
+- FastAPI/Starlette emitted a deprecation warning about `httpx` TestClient usage; the suite
+  remained green and no `httpx2` dependency was added.
+- The latest visible remote AF Python workflow run for this PR head was `action_required`
+  with zero jobs, indicating owner/manual approval is still required before GitHub Actions
+  can execute on the branch.
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Decision: DEC-024
+- Specs: SPEC-011
+- Script: `[SCRIPT:af-dev]`
+
+---

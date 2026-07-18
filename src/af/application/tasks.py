@@ -8,7 +8,14 @@ from uuid import uuid4
 
 from af.domain.tasks import Task, TaskRepository
 from af.framework.contracts import Agent
-from af.framework.types import ExecutionOutcome, WorkRequest, normalize_prompt
+from af.framework.errors import InvalidCharacter, InvalidPrompt
+from af.framework.types import (
+    PROMPT_MAX_LENGTH,
+    Classification,
+    ExecutionOutcome,
+    WorkRequest,
+    normalize_prompt,
+)
 
 
 class TaskService:
@@ -67,12 +74,42 @@ class TaskService:
             )
         )
 
+    def count_characters(self, text: str, character: str) -> ExecutionOutcome:
+        validated_text = self._normalize_count_text(text)
+        validated_character = self._normalize_character(character)
+        return self._agent.handle_classification(
+            WorkRequest(prompt=validated_text),
+            Classification(
+                intent="text.character_count",
+                arguments={"text": validated_text, "character": validated_character},
+                confidence=1.0,
+                classifier=type(self).__name__,
+            ),
+            expected_procedure_id="character-count",
+        )
+
     def delete(self, task_id: str) -> None:
         self._repository.delete(task_id)
 
     @staticmethod
     def _normalize(prompt: str) -> str:
         return normalize_prompt(prompt)
+
+    @staticmethod
+    def _normalize_count_text(text: str) -> str:
+        if not isinstance(text, str):
+            raise InvalidPrompt("prompt must be a string")
+        if not text.strip():
+            raise InvalidPrompt()
+        if len(text) > PROMPT_MAX_LENGTH:
+            raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")
+        return text
+
+    @staticmethod
+    def _normalize_character(character: str) -> str:
+        if not isinstance(character, str) or len(character) != 1:
+            raise InvalidCharacter("" if not isinstance(character, str) else character)
+        return character
 
 
 class TaskController:
@@ -95,6 +132,9 @@ class TaskController:
 
     def update(self, task_id: str, prompt: str) -> Task:
         return self._service.update(task_id, prompt)
+
+    def count_characters(self, text: str, character: str) -> ExecutionOutcome:
+        return self._service.count_characters(text, character)
 
     def delete(self, task_id: str) -> None:
         self._service.delete(task_id)

@@ -2,9 +2,7 @@
 
 import argparse
 import re
-import sys
 from pathlib import Path
-
 
 REPEATABLE_RE = re.compile(r"\brepeatable\b|\[REPEATABLE\]", re.IGNORECASE)
 SCRIPT_REF_RE = re.compile(r"scripts/[\w./-]+|\[SCRIPT:[^\]]+\]|scripts/registry\.yaml")

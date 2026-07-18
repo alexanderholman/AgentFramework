@@ -22,6 +22,14 @@ from af.framework.types import (
 class Agent(Protocol):
     def handle(self, request: WorkRequest) -> ExecutionOutcome: ...
 
+    def handle_classification(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+        *,
+        expected_procedure_id: str | None = None,
+    ) -> ExecutionOutcome: ...
+
 
 class Classifier(Protocol):
     def classify(self, request: WorkRequest) -> Classification | None: ...

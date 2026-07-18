@@ -38,8 +38,9 @@ The providers are:
 
 The container uses explicit factories rather than constructor inspection or implicit
 autowiring. `create_application()` also accepts replacement Task and trace repositories,
-reuse storage, settings, and an optional model provider plus its verifier. The model and
-verifier must be installed together; partial configuration fails during composition.
+reuse storage, settings, and an optional selector. A selector may only propose an
+installed typed procedure, and the current reference application does not bundle a real
+local or remote selector provider adapter.
 
 ## Execution lifecycle
 
@@ -47,19 +48,22 @@ verifier must be installed together; partial configuration fails during composit
 `PipelineAgent.handle()`. The agent then performs the AF lifecycle:
 
 1. **Classify.** `ClassifierChain` tries `HelloClassifier`,
-   `CharacterCountClassifier`, and finally `UnknownClassifier` in order.
+   `CharacterCountClassifier`, and finally `UnknownClassifier` in order. Deterministic
+   matches stop here and never invoke a selector.
 2. **Route.** `LadderRouter` selects a compatible procedure from `ProcedureRegistry` using
    its tier and the active routing policy. The default policy optimizes for cheapest and
    fastest.
-3. **Execute.** AF first looks in `ReuseStore`; a miss invokes the chosen procedure.
-4. **Verify.** `VerifierRouter` sends static/procedural results to the independent
-   `DeterministicVerifier` and sends a generative result only to its explicitly injected
-   verifier.
-5. **Record.** The pipeline builds an append-style trace containing the classification,
+3. **Select (unknown work only).** An optional selector may propose a registered procedure,
+   typed arguments, and confidence. AF validates that proposal against the immutable
+   catalogue, rejects remote execution, enforces pre-execution policy, and fails closed to
+   human handoff on any malformed or unsupported proposal.
+4. **Execute.** AF first looks in `ReuseStore`; a miss invokes the chosen procedure.
+5. **Verify.** `DeterministicVerifier` independently checks the procedure output.
+6. **Record.** The pipeline builds an append-style trace containing the classification,
    route, output, verification result, and ordered lifecycle events.
-6. **Test.** A pure, replay-safe result is executed again through
+7. **Test.** A pure, replay-safe result is executed again through
    `ReplayRegressionGate` before promotion.
-7. **Reuse.** A passing result is promoted to the in-process reuse store. A later hit is
+8. **Reuse.** A passing result is promoted to the in-process reuse store. A later hit is
    independently verified again before return.
 
 The completed trace is persisted after the lifecycle events have been assembled. Unknown
@@ -72,11 +76,8 @@ The initial registered capabilities are:
 - `CharacterCountProcedure`, a procedural route that counts one character with an explicit
   case-insensitive loop.
 
-`ModelProcedure` defines an optional generative boundary. It is registered only when an
-embedding host explicitly supplies both a `ModelProvider` and a `Verifier`. Generative
-procedures are not pure or replay-safe, so their results are never promoted to the reuse
-store. With no model pair installed, unsupported prompts fail closed; with a pair installed,
-unknown work is executed and must pass that verifier before AF returns it.
+Unknown work fails closed unless an embedding host injects a selector that proposes one of
+those registered procedures. The selector never supplies the final user answer.
 
 ## Task application boundary
 

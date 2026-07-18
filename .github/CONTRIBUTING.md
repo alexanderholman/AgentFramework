@@ -28,8 +28,9 @@ coverage, and the inherited agent/governance validations.
 
 - Put shared behaviour in the application or domain layers, not separately in each CLI,
   HTML, REST, GraphQL, or MCP adapter.
-- Prefer static and procedural routes; model inference must be explicitly injected and
-  independently verified.
+- Prefer static and procedural routes; they run before any optional selector and remain
+  independently verified. A selector may only propose an installed procedure, AF ships no
+  direct model-generated-answer route, and remote selector execution is currently denied.
 - Never rewrite `specs.md`, `decisions.md`, or `agent_runs.md`; append a superseding,
   dated entry.
 - Never commit credentials, generated caches, virtual environments, coverage artefacts,

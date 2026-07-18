@@ -13,16 +13,17 @@ guidance for choosing them. The skill contains no copy of AF's business logic.
 | --- | --- | --- |
 | `af_hello` | Execute the tested static Hello World route | Appends an execution trace |
 | `af_ask` | Classify and execute a supported prompt | Appends an execution trace |
-| `af_count_characters` | Count one character through the deterministic AF route | Appends an execution trace |
+| `af_count_characters` | Count one character through the typed deterministic AF route | Appends an execution trace |
 | `af_list_tasks` | List persisted Tasks | Read-only |
 | `af_get_task` | Read a Task by exact ID | Read-only |
 | `af_create_task` | Execute a prompt and persist its verified Task | Additive write |
 | `af_update_task` | Replace a Task prompt and re-execute it | Destructive write |
 | `af_delete_task` | Delete a Task by exact ID | Destructive write |
 
-The `af://manifest` resource describes AF's lifecycle, registered routes, and tier
-vocabulary. Tool results are typed structured data and include the route, tier,
-verification state, reuse state, and trace ID where applicable.
+The `af://manifest` resource describes AF's lifecycle plus the trusted registered route and
+tier vocabulary. Tool results are typed structured data and include the route, tier,
+verification state, reuse state, and trace ID where applicable. Only static and procedural
+tiers are advertised; AF exposes no direct model-generated-answer route.
 
 Executing `af_hello`, `af_ask`, or `af_count_characters` is computationally pure, but the
 AF pipeline appends a trace and may promote a regression-tested result into the in-process
@@ -37,7 +38,7 @@ another MCP host that can start AF as a subprocess.
 From the repository root:
 
 ```bash
-uv sync
+uv sync --locked --extra dev
 uv run af-mcp
 ```
 
@@ -83,13 +84,16 @@ MCP HTTP process and `af serve` both default to port 8000, so run them on differ
 if both are needed at once.
 
 This endpoint is for local development only. Do not bind the current unauthenticated Task
-CRUD server to a public interface.
+CRUD server to a public interface. Remote selector execution is denied by the current
+auto-execution policy, and no real selector provider adapter ships in the reference app.
 
 ## ChatGPT web deployment boundary
 
 ChatGPT web cannot reach `127.0.0.1`, cannot launch the stdio command on the user's
-machine, and does not read local Codex MCP configuration. It needs a real, reachable HTTPS
-Streamable HTTP endpoint.
+machine, and does not read local Codex MCP configuration. Developer-mode apps need a real
+HTTPS MCP path. For local/private AF, prefer Secure MCP Tunnel's outbound-only path instead
+of exposing a public endpoint. A public HTTPS Streamable HTTP deployment remains a separate
+authenticated and hardened option.
 
 Before connecting AF to ChatGPT web, a deployment must add and verify:
 
@@ -106,9 +110,9 @@ authenticated deployment exists, use its actual HTTPS URL when creating a develo
 ChatGPT app or declaring an MCP dependency. Do not add a guessed or placeholder remote URL
 to skill metadata.
 
-For current protocol and product guidance, consult the
-[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk/tree/v1.x) and
-[OpenAI Apps SDK MCP server guide](https://developers.openai.com/apps-sdk/build/mcp-server).
+For current product guidance, consult the
+[Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+and [Connect ChatGPT to your app](https://developers.openai.com/apps-sdk/deploy/connect-chatgpt).
 
 ## Skill behaviour and fallback
 
