@@ -40,7 +40,6 @@ Brief description of what happened during the run.
 - Commit: [commit-hash]
 
 ---
-
 ```
 
 ## Purpose
