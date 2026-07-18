@@ -19,6 +19,7 @@ from af.framework.errors import (
 from af.framework.routing import OptimisationGoal, ProcedureRegistry, RoutingPolicy
 from af.framework.types import (
     ArgumentValueType,
+    Classification,
     ProcedureArgumentDescriptor,
     ProcedureDescriptor,
     ProcedureEffect,
@@ -200,15 +201,15 @@ class SideEffectProcedure(BaseProcedure):
     def __init__(self) -> None:
         self.execute_calls = 0
 
-    def supports(self, classification) -> bool:  # type: ignore[no-untyped-def]
+    def supports(self, classification: Classification) -> bool:
         return classification.intent == "side.effect"
 
-    def execute(self, classification) -> ProcedureResult:  # type: ignore[no-untyped-def]
+    def execute(self, classification: Classification) -> ProcedureResult:
         del classification
         self.execute_calls += 1
         return ProcedureResult(output="done")
 
-    def validate(self, classification) -> None:  # type: ignore[no-untyped-def]
+    def validate(self, classification: Classification) -> None:
         if classification.intent != "side.effect" or classification.arguments:
             raise InvalidSelectionProposal("invalid arguments for side-effect")
 
@@ -223,14 +224,14 @@ class MalformedDescriptorProcedure(BaseProcedure):
         self.id = procedure_id
         self.selection_descriptor = descriptor
 
-    def supports(self, classification) -> bool:  # type: ignore[no-untyped-def]
+    def supports(self, classification: Classification) -> bool:
         return classification.intent == self.selection_descriptor.intent
 
-    def execute(self, classification) -> ProcedureResult:  # type: ignore[no-untyped-def]
+    def execute(self, classification: Classification) -> ProcedureResult:
         del classification
         return ProcedureResult(output="ok")
 
-    def validate(self, classification) -> None:  # type: ignore[no-untyped-def]
+    def validate(self, classification: Classification) -> None:
         if classification.intent != self.selection_descriptor.intent:
             raise InvalidSelectionProposal("invalid intent")
 
