@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
-    "sync": (("uv", "sync", "--extra", "dev"),),
+    "sync": (("uv", "sync", "--locked", "--extra", "dev"),),
     "test": (("uv", "run", "pytest"),),
     "coverage": (
         ("uv", "run", "pytest", "--cov=af", "--cov-report=term-missing", "--cov-fail-under=90"),

@@ -118,18 +118,18 @@ if [ -f "agents.yaml" ]; then
     # TEST-003-1: Check each agent has at least one tag
     run_test "TEST-003-1" \
         "Verify each agent has at least one tag" \
-        "python scripts/validate_agents_yaml.py --check-tags-present --file agents.yaml"
+        "uv run python scripts/validate_agents_yaml.py --check-tags-present --file agents.yaml"
     
     # TEST-003-2: Check agent IDs are unique
     run_test "TEST-003-2" \
         "Verify agent IDs are unique in agents.yaml" \
-        "python scripts/validate_agents_yaml.py --check-unique-ids --file agents.yaml"
+        "uv run python scripts/validate_agents_yaml.py --check-unique-ids --file agents.yaml"
     
     # TEST-003-3: Verify tags are from allowed list
     if grep -q 'allowed_tags:' agents.yaml; then
         run_test "TEST-003-3" \
             "Verify all tags are from allowed list" \
-            "python scripts/validate_agents_yaml.py --check-tags-allowed --file agents.yaml"
+            "uv run python scripts/validate_agents_yaml.py --check-tags-allowed --file agents.yaml"
     else
         echo "Note: No allowed_tags defined in agents.yaml - skipping TEST-003-3"
     fi
@@ -163,7 +163,7 @@ echo "=== SPEC-008: Script-First Automation ==="
 if [ -f "scripts/check_repeatable_script_refs.py" ]; then
     run_test "TEST-008-1" \
         "Verify repeatable task docs include script references" \
-        "python3 scripts/check_repeatable_script_refs.py --root ."
+        "uv run python3 scripts/check_repeatable_script_refs.py --root ."
 else
     echo "Note: scripts/check_repeatable_script_refs.py not found - skipping TEST-008-1"
     echo ""
@@ -173,7 +173,7 @@ fi
 if [ -f "scripts/validate_registry.py" ]; then
     run_test "TEST-008-2" \
         "Validate scripts registry schema" \
-        "python3 scripts/validate_registry.py --registry scripts/registry.yaml"
+        "uv run python3 scripts/validate_registry.py --registry scripts/registry.yaml"
 else
     echo "Note: scripts/validate_registry.py not found - skipping TEST-008-2"
     echo ""
@@ -183,7 +183,7 @@ fi
 if [ -f "scripts/check_dry_run_conventions.py" ]; then
     run_test "TEST-008-3" \
         "Verify execute-intent scripts use dry-run gating" \
-        "python3 scripts/check_dry_run_conventions.py --registry scripts/registry.yaml"
+        "uv run python3 scripts/check_dry_run_conventions.py --registry scripts/registry.yaml"
 else
     echo "Note: scripts/check_dry_run_conventions.py not found - skipping TEST-008-3"
     echo ""

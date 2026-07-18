@@ -54,6 +54,7 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
     assert "→ 3" in populated_list.text
     assert shown.status_code == 200
     assert 'data-testid="answer">3<' in shown.text
+    assert 'maxlength="10000"' in shown.text
     assert update_response.status_code == 303
     assert update_response.headers["location"] == task_location
     assert "how many bs in blueberry" in updated.text
@@ -63,6 +64,39 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
     assert "No persisted tasks yet." in deleted_list.text
     assert missing.status_code == 404
     assert missing.json() == {"detail": f"task not found: {task_location.removeprefix('/tasks/')}"}
+
+
+def test_html_rejects_blank_create_with_html_feedback(application) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(create_http_app(application)) as client:
+        response = client.post("/tasks", data={"prompt": "   "})
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+    assert "prompt must not be blank" in response.text
+    assert application.tasks.list() == []
+
+
+def test_html_rejects_too_long_update_with_html_feedback(application) -> None:  # type: ignore[no-untyped-def]
+    too_long = "a" * 10_001
+
+    with TestClient(create_http_app(application)) as client:
+        created = client.post(
+            "/tasks",
+            data={"prompt": "how many rs in strawberry"},
+            follow_redirects=False,
+        )
+        task_location = created.headers["location"]
+        response = client.post(task_location, data={"prompt": too_long})
+
+    task_id = task_location.removeprefix("/tasks/")
+    task = application.tasks.get(task_id)
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+    assert "prompt must be at most 10000 characters" in response.text
+    assert 'maxlength="10000"' in response.text
+    assert task.prompt == "how many rs in strawberry"
+    assert task.output == "3"
 
 
 def test_rest_crud_status_and_reexecution(application) -> None:  # type: ignore[no-untyped-def]

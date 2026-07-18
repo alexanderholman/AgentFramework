@@ -2,6 +2,7 @@
 
 import argparse
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -79,6 +80,14 @@ def parse_kv_args(items):
 
 
 def render_command(command, values):
+    try:
+        template_argv = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"malformed command template: {exc}") from exc
+
+    if not template_argv:
+        raise ValueError("rendered command is empty")
+
     missing = set()
 
     def repl(match):
@@ -88,7 +97,7 @@ def render_command(command, values):
         missing.add(key)
         return match.group(0)
 
-    rendered = PLACEHOLDER_RE.sub(repl, command)
+    rendered = [PLACEHOLDER_RE.sub(repl, token) for token in template_argv]
     if missing:
         missing_keys = ", ".join(sorted(missing))
         raise ValueError(f"missing required placeholder values: {missing_keys}")
@@ -120,12 +129,12 @@ def main():
         return 2
 
     print(f"Selected script: {script.get('id')}")
-    print(f"Rendered command: {rendered}")
+    print(f"Rendered command: {shlex.join(rendered)}")
     if not args.execute:
         print("Dry run only. Re-run with --execute to run command.")
         return 0
 
-    completed = subprocess.run(rendered, shell=True)
+    completed = subprocess.run(rendered, check=False)
     return completed.returncode
 
 

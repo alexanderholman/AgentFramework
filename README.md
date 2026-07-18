@@ -24,7 +24,7 @@ The first vertical slice includes:
 AF requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync --extra dev
+uv sync --locked --extra dev
 uv run af hello
 uv run af ask "how many rs in strawberry"
 ```
