@@ -308,6 +308,30 @@ def test_append_only_check_rejects_all_zero_push_after_sha(tmp_path: Path) -> No
     assert "invalid head revision" in completed.stdout
 
 
+def test_append_only_check_rejects_missing_push_after_sha(tmp_path: Path) -> None:
+    _init_append_only_repo(tmp_path)
+
+    completed = _run_append_only(
+        tmp_path,
+        base_ref="HEAD",
+        base_strategy="exact",
+        head_ref="1" * 40,
+        ci=True,
+    )
+
+    assert completed.returncode == 1
+    assert "failed to resolve head revision" in completed.stdout
+
+
+def test_append_only_check_rejects_invalid_base_strategy(tmp_path: Path) -> None:
+    _init_append_only_repo(tmp_path)
+
+    completed = _run_append_only(tmp_path, base_ref="HEAD", base_strategy="invalid", ci=True)
+
+    assert completed.returncode == 1
+    assert "invalid base strategy" in completed.stdout
+
+
 def test_append_only_check_rejects_all_zero_push_before_sha_without_bootstrap_lineage(
     tmp_path: Path,
 ) -> None:
@@ -361,13 +385,43 @@ def test_append_only_check_fails_when_head_changes_append_only_mode_to_symlink(
     assert "specs.md: HEAD mode 120000 does not match " in completed.stdout
 
 
-def test_python_workflow_uses_pr_merge_base_and_push_exact_base_sha() -> None:
-    workflow = (REPO_ROOT / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
+def test_python_workflow_uses_exact_push_before_and_event_head_checkout() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "python.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
 
-    assert "github.event.pull_request.base.sha" in workflow
-    assert "github.event.before" in workflow
-    assert "github.event.after" in workflow
-    assert "AF_APPEND_ONLY_BASE_STRATEGY" in workflow
-    assert "github.event_name == 'push' && 'exact' || 'merge-base'" in workflow
-    assert "AF_APPEND_ONLY_HEAD_REF" in workflow
-    assert "Ensure push before and after commits are available" in workflow
+    job = workflow["jobs"]["check"]
+    assert job["env"]["AF_APPEND_ONLY_BASE_REF"] == (
+        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || "
+        "github.event_name == 'push' && github.event.before || '' }}"
+    )
+    assert job["env"]["AF_APPEND_ONLY_HEAD_REF"] == (
+        "${{ github.event_name == 'push' && github.event.after || github.sha }}"
+    )
+    assert job["env"]["AF_APPEND_ONLY_BASE_STRATEGY"] == (
+        "${{ github.event_name == 'push' && 'exact' || 'merge-base' }}"
+    )
+
+    before_step = next(
+        step for step in job["steps"] if step["name"] == "Materialize push before commit"
+    )
+    assert before_step["uses"] == "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+    assert before_step["if"] == (
+        "${{ github.event_name == 'push' && "
+        "github.event.before != '0000000000000000000000000000000000000000' }}"
+    )
+    assert before_step["with"]["ref"] == "${{ github.event.before }}"
+    assert before_step["with"]["fetch-depth"] == 1
+    assert before_step["with"]["persist-credentials"] is False
+
+    head_step = next(step for step in job["steps"] if step["name"] == "Check out exact event head")
+    assert head_step["uses"] == "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+    assert (
+        head_step["with"]["ref"]
+        == "${{ github.event_name == 'push' && github.event.after || github.sha }}"
+    )
+    assert head_step["with"]["fetch-depth"] == 0
+    assert head_step["with"]["persist-credentials"] is False
+
+    assert "python3 - <<'PY'" not in workflow_text
+    assert "http.https://github.com/.extraheader" not in workflow_text

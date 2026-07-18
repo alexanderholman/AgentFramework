@@ -97,12 +97,16 @@ def _resolve_base_ref(root: Path, explicit: str | None) -> str | None:
 
 
 def _resolve_base_strategy(explicit: str | None) -> str:
-    if explicit:
-        return explicit
-    environment_strategy = os.environ.get("AF_APPEND_ONLY_BASE_STRATEGY", "").strip()
-    if environment_strategy:
-        return environment_strategy
-    return MERGE_BASE_STRATEGY
+    strategy = explicit
+    if strategy is None:
+        environment_strategy = os.environ.get("AF_APPEND_ONLY_BASE_STRATEGY", "").strip()
+        if environment_strategy:
+            strategy = environment_strategy
+    if strategy is None:
+        return MERGE_BASE_STRATEGY
+    if strategy not in {MERGE_BASE_STRATEGY, EXACT_STRATEGY}:
+        raise ValueError(f"append-only-check: invalid base strategy {strategy!r}")
+    return strategy
 
 
 def _resolve_head_ref(explicit: str | None) -> str:
@@ -115,7 +119,7 @@ def _resolve_head_ref(explicit: str | None) -> str:
 
 
 def _resolve_commit(root: Path, revision: str) -> str | None:
-    completed = _git(root, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    completed = _git(root, "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}")
     if completed.returncode != 0:
         return None
     return completed.stdout.strip()
@@ -209,6 +213,8 @@ def _load_blob_bytes(root: Path, object_id: str) -> bytes:
 def _validate_bootstrap_anchor(
     root: Path,
     base_revision: str | None,
+    *,
+    head_revision: str,
 ) -> tuple[dict[str, BlobReference], list[str]]:
     """Validate the reviewed bootstrap anchor used when base predates governed files."""
     failures: list[str] = []
@@ -218,7 +224,7 @@ def _validate_bootstrap_anchor(
             f"{BOOTSTRAP_ANCHOR} is not on the reviewed lineage after {base_revision}"
         )
         return {}, failures
-    if not _is_ancestor(root, BOOTSTRAP_ANCHOR, "HEAD"):
+    if not _is_ancestor(root, BOOTSTRAP_ANCHOR, head_revision):
         failures.append(f"bootstrap anchor {BOOTSTRAP_ANCHOR} is not on the HEAD lineage")
         return {}, failures
 
@@ -256,6 +262,8 @@ def _validate_bootstrap_anchor(
 def _resolve_references(
     root: Path,
     base_revision: str,
+    *,
+    head_revision: str,
 ) -> tuple[dict[str, BlobReference], list[str]]:
     """Resolve append-only references from base history or the reviewed bootstrap anchor."""
     base_entries = {
@@ -279,7 +287,7 @@ def _resolve_references(
             f"base revision {base_revision} inconsistently contains append-only files: "
             + ", ".join(sorted(missing_paths))
         ]
-    return _validate_bootstrap_anchor(root, base_revision)
+    return _validate_bootstrap_anchor(root, base_revision, head_revision=head_revision)
 
 
 def _is_regular_non_symlink(path: Path) -> bool:
@@ -314,7 +322,11 @@ def main() -> int:
         print("append-only-check: skipped (no git base ref available)")
         return 0
 
-    base_strategy = _resolve_base_strategy(args.base_strategy)
+    try:
+        base_strategy = _resolve_base_strategy(args.base_strategy)
+    except ValueError as error:
+        print(str(error))
+        return 1
     head_ref = _resolve_head_ref(args.head_ref)
     head_revision, head_failure = _resolve_head_revision(root, head_ref)
     if head_failure is not None:
@@ -333,15 +345,23 @@ def main() -> int:
         return 1
 
     if base_resolution.use_bootstrap_topology:
-        references, failures = _validate_bootstrap_anchor(root, None)
+        references, failures = _validate_bootstrap_anchor(
+            root,
+            None,
+            head_revision=head_revision,
+        )
     else:
         assert base_resolution.revision is not None
-        references, failures = _resolve_references(root, base_resolution.revision)
+        references, failures = _resolve_references(
+            root,
+            base_resolution.revision,
+            head_revision=head_revision,
+        )
     for relative_path in APPEND_ONLY_FILES:
         reference = references.get(relative_path)
         if reference is None:
             continue
-        head_entry = _load_tree_entry(root, "HEAD", relative_path)
+        head_entry = _load_tree_entry(root, head_revision, relative_path)
         if head_entry is None:
             failures.append(f"{relative_path}: file is missing from the HEAD tree")
             continue

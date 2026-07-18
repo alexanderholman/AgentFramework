@@ -766,3 +766,36 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+## Run #015 - Exact Event Head Workflow and Strategy Validation Correction
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `56899b8`
+- Requested final surgical correction to bind append-only validation to the exact event head on both push and non-push runs, replace inline push-base fetch logic with pinned `actions/checkout`, reject invalid `AF_APPEND_ONLY_BASE_STRATEGY` values, and preserve earlier run records byte-for-byte
+- Requirement to keep the PR in draft, preserve Run #014 exactly as already appended on the current head, and append only a new run record because source changes landed again
+
+### Outputs
+- Changed the AF Python workflow to set `AF_APPEND_ONLY_HEAD_REF` to `github.event.after` on push and `github.sha` otherwise
+- Replaced the inline token-bearing push-base fetch heredoc with pinned `actions/checkout` steps that first materialize a nonzero push `before` commit and then check out the exact event head with `persist-credentials: false`
+- Hardened `scripts/check_append_only.py` to reject invalid environment-derived base strategies, resolve commits with `git rev-parse --verify --end-of-options`, and apply bootstrap/tree append-only checks to the validated exact head revision
+- Added focused governance regressions for missing push heads, invalid strategy values, and the exact workflow before/after checkout contract
+
+### Verified Results
+- Targeted governance regressions: `6 passed` for the exact-head, invalid-strategy, mismatch, non-ancestor, and all-zero cases
+- Full governance script unit suite: `19 passed`
+- `python3 scripts/af_dev.py --action check --execute`: success with Ruff format check passed, Ruff lint passed, strict mypy passed in 33 source files, `210 passed`, `90.17%` coverage, and `36/36` governance checks passed
+- `python3 scripts/af_dev.py --action smoke --execute`: `Hello, world!` and `3`
+
+### Issues Encountered
+- The sandbox clone started shallow, so the repository-level first-PR topology test could not initially resolve `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; validation proceeded after `git fetch --unshallow origin` and `git fetch origin master:refs/remotes/origin/master`
+- The sandbox image did not initially provide `uv` on `PATH`; validation proceeded after installing `uv` for the current user
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning during pytest; the suite remained green and no dependency changes were introduced
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Script: `[SCRIPT:af-dev]`
+
+---
