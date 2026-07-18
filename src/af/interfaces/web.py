@@ -14,7 +14,7 @@ TEMPLATE_DIRECTORY = Path(__file__).parent.parent / "views" / "templates"
 PROMPT_MAX_LENGTH = 10_000
 
 
-def _prompt_error(prompt: str) -> str | None:
+def _validate_prompt(prompt: str) -> str | None:
     if not prompt.strip():
         return "prompt must not be blank"
     if len(prompt) > PROMPT_MAX_LENGTH:
@@ -70,7 +70,7 @@ def create_web_router(controller: TaskController) -> APIRouter:
 
     @router.post("/tasks")
     def create_task(request: Request, prompt: str = Form(default="")) -> Response:
-        if error := _prompt_error(prompt):
+        if error := _validate_prompt(prompt):
             return render_index(
                 request,
                 prompt,
@@ -93,7 +93,7 @@ def create_web_router(controller: TaskController) -> APIRouter:
         task_id: str,
         prompt: str = Form(default=""),
     ) -> Response:
-        if error := _prompt_error(prompt):
+        if error := _validate_prompt(prompt):
             return render_task(
                 request,
                 task_id,
@@ -101,9 +101,9 @@ def create_web_router(controller: TaskController) -> APIRouter:
                 error=error,
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             )
-        controller.update(task_id, prompt)
+        task = controller.update(task_id, prompt)
         return RedirectResponse(
-            url=f"/tasks/{task_id}",
+            url=f"/tasks/{task.id}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
