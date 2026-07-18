@@ -90,7 +90,10 @@ class ProcedureRegistry:
             type(value) is not int or not 0 <= value <= ROUTE_METRIC_MAX
             for value in (metrics.cost, metrics.latency, metrics.intelligence)
         ):
-            raise ValueError("procedure has invalid route metrics")
+            raise ValueError(
+                "procedure has invalid route metrics: values must be integers between "
+                f"0 and {ROUTE_METRIC_MAX}"
+            )
         descriptor = procedure.selection_descriptor
         if not isinstance(descriptor, ProcedureDescriptor):
             raise ValueError("procedure selection descriptor is invalid")
