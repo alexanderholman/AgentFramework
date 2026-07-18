@@ -16,7 +16,7 @@ from af.application.tasks import TaskController
 from af.framework.types import PROMPT_MAX_LENGTH
 
 TEMPLATE_DIRECTORY = Path(__file__).parent.parent / "views" / "templates"
-CSRF_COOKIE_NAME = "__Host-af-csrf"
+CSRF_COOKIE_NAME = "af-csrf"
 CSRF_FORM_FIELD = "csrf_token"
 _CSRF_SECRET = secrets.token_bytes(32)
 
@@ -59,12 +59,13 @@ def _csrf_token_for_request(request: Request) -> str:
     return _issue_csrf_token()
 
 
-def _set_csrf_cookie(response: Response, token: str) -> None:
+def _set_csrf_cookie(request: Request, response: Response, token: str) -> None:
     response.set_cookie(
         key=CSRF_COOKIE_NAME,
         value=token,
         httponly=True,
         samesite="strict",
+        secure=request.url.scheme == "https",
         path="/",
     )
 
@@ -117,7 +118,7 @@ def create_web_router(controller: TaskController) -> APIRouter:
             },
             status_code=status_code,
         )
-        _set_csrf_cookie(response, token)
+        _set_csrf_cookie(request, response, token)
         return response
 
     def render_task(
@@ -141,7 +142,7 @@ def create_web_router(controller: TaskController) -> APIRouter:
             },
             status_code=status_code,
         )
-        _set_csrf_cookie(response, token)
+        _set_csrf_cookie(request, response, token)
         return response
 
     @router.get("/", response_class=HTMLResponse)

@@ -163,7 +163,7 @@ def test_html_sets_csrf_cookie_and_allows_valid_mutations(application) -> None: 
             follow_redirects=False,
         )
 
-    assert "__Host-af-csrf=" in index.headers["set-cookie"]
+    assert "af-csrf=" in index.headers["set-cookie"]
     assert "HttpOnly" in index.headers["set-cookie"]
     assert "SameSite=strict" in index.headers["set-cookie"]
     assert created.status_code == 303
