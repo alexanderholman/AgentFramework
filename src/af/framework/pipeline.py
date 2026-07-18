@@ -365,14 +365,15 @@ class PipelineAgent:
                     created_at=created_at,
                     events=events,
                 )
-            self._fail_closed_selection(
-                handoff_reason_code,
-                trace_id=trace_id,
-                request=request,
-                classification=classification,
-                created_at=created_at,
-                events=events,
-            )
+            else:
+                self._fail_closed_selection(
+                    handoff_reason_code,
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
 
         validated_confidence = self._validated_probability(
             proposal.confidence,
