@@ -1,0 +1,25 @@
+# Security Policy
+
+## Supported versions
+
+AgentFramework is pre-release software. Security fixes are applied to the latest commit
+on the default branch; no older release line is currently supported.
+
+| Version | Supported |
+| --- | --- |
+| `0.1.x` | Yes |
+| `< 0.1` | No |
+
+## Reporting a vulnerability
+
+Do not open a public issue for a suspected vulnerability. Use GitHub's private
+vulnerability reporting feature for `alexanderholman/AgentFramework` when it is enabled,
+or contact the repository owner privately through an already established channel.
+
+Include the affected component, reproduction steps, expected impact, and any suggested
+mitigation. Do not include real credentials, personal data, or destructive proof-of-
+concept payloads. Receipt should be acknowledged within seven days; disclosure and fix
+timing will be agreed according to severity and available capacity.
+
+Until the documented authentication and authorization work is complete, the MCP HTTP
+transport is for loopback development only and must not be exposed publicly.

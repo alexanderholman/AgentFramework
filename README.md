@@ -1,0 +1,135 @@
+# AF Agent Framework
+
+AF is a Laravel-inspired, Python-native way to turn repeated agent work into tested,
+deterministic procedures. Its execution kernel follows:
+
+`classify → route → execute → verify → record → test → reuse`
+
+The same application service powers a Typer CLI, server-rendered HTML MVC, REST,
+GraphQL, and MCP. Static and procedural routes are preferred; a language model is an
+optional dependency-injected provider, not the agent itself.
+
+The first vertical slice includes:
+
+- `hello` → `Hello, world!`
+- `how many rs in strawberry` → `3`, computed by a reusable character loop and checked
+  by an independent verifier
+- persisted Task create/list/read/update/delete operations
+- SQLite in normal use and in-memory repositories in tests
+- an MCP server suitable for local clients now and ChatGPT after an authenticated HTTPS
+  deployment
+
+## Quick start
+
+AF requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync --extra dev
+uv run af hello
+uv run af ask "how many rs in strawberry"
+```
+
+Expected output:
+
+```text
+Hello, world!
+3
+```
+
+Task CRUD is available from the same CLI:
+
+```bash
+uv run af tasks create "how many rs in strawberry"
+uv run af tasks list
+uv run af tasks show TASK_ID
+uv run af tasks update TASK_ID "how many bs in blueberry"
+uv run af tasks delete TASK_ID
+```
+
+By default, persistent data is stored at `storage/af.sqlite3`. Override this with
+`AF_DATABASE_URL`.
+
+## HTML, REST, and GraphQL
+
+Start the HTTP application:
+
+```bash
+uv run af serve
+```
+
+Then open:
+
+- HTML MVC: `http://127.0.0.1:8000/`
+- OpenAPI: `http://127.0.0.1:8000/docs`
+- GraphQL: `http://127.0.0.1:8000/graphql`
+
+REST example:
+
+```bash
+curl -sS http://127.0.0.1:8000/api/v1/tasks \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"how many rs in strawberry"}'
+```
+
+GraphQL example:
+
+```bash
+curl -sS http://127.0.0.1:8000/graphql \
+  -H 'content-type: application/json' \
+  -d '{"query":"mutation { createTask(input: {prompt: \"how many rs in strawberry\"}) { id output verified } }"}'
+```
+
+REST and GraphQL share the same Task repository and application controller; transport
+modules do not duplicate counting, verification, or persistence rules.
+
+## MCP and ChatGPT
+
+Run AF as a local stdio MCP server:
+
+```bash
+uv run af-mcp
+```
+
+For local Streamable HTTP development:
+
+```bash
+AF_MCP_TRANSPORT=streamable-http uv run af-mcp
+```
+
+This binds to `127.0.0.1:8000/mcp` by default. ChatGPT web cannot connect directly to a
+local stdio or loopback server: deploy AF behind HTTPS with authentication first, then
+register that real MCP endpoint. The repository skill in `.agents/skills/af-work/`
+teaches a compatible agent when to use each AF tool without reimplementing AF logic.
+
+See [ChatGPT and MCP](docs/chatgpt-mcp.md) and [Architecture](docs/architecture.md).
+
+## Development workflow
+
+The repeatable development gate is registered as `[SCRIPT:af-dev]` and previews commands
+unless execution is explicit:
+
+```bash
+python3 scripts/af_dev.py --action check
+python3 scripts/af_dev.py --action check --execute
+```
+
+The executed gate checks Ruff formatting and linting, strict mypy typing, pytest, and the
+legacy AgentFactory governance suite. The framework tests are deliberately network-free.
+
+## Repository governance
+
+AF retains the original AgentFactory registry and documentation conventions:
+
+- [AGENTS.md](AGENTS.md) — contributor and coding instructions
+- [agents.yaml](agents.yaml) and [agents.md](agents.md) — agent definitions
+- [specs.md](specs.md), [decisions.md](decisions.md), and
+  [agent_runs.md](agent_runs.md) — append-only history
+- [.github/copilot-instructions.md](.github/copilot-instructions.md) — GitHub Copilot
+  repository instructions
+
+Do not rewrite append-only history. Add a dated entry at the end and run
+`./validate_agents.sh`.
+
+## License
+
+Copyright © 2019 Alexander Holman. All rights reserved; see [LICENSE](LICENSE).

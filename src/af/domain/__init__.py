@@ -1,0 +1,1 @@
+"""AF reference-domain capabilities."""

@@ -1,0 +1,31 @@
+# filename: repo.yaml
+# Repository manifest for the AF Python framework and its legacy governance assets.
+
+repo:
+  name: "agent-framework"
+  hierarchy: "nested"
+  required_files:
+    - "AGENTS.md"
+    - "agents.yaml"
+    - "agents.md"
+    - "specs.md"
+    - "pyproject.toml"
+    - "src/af/__init__.py"
+    - "tests/conftest.py"
+  optional_files:
+    - "project_context_agent_framework.yaml"
+    - "agent_runs.md"
+    - "decisions.md"
+    - "docs/"
+    - ".agents/skills/"
+    - "agents/**/*.md"
+    - "specialisms/**/*.md"
+  logs:
+    run_log: "agent_runs.md"
+    decision_log: "decisions.md"
+  conventions:
+    python_layout: "src"
+    tests_layout: "tests"
+    tags_required: ["[SPEC]", "[ASSUMPTION]", "[RISK]", "[TODO]", "[DECISION]", "[TEST]", "[DONE]"]
+    append_only_files: ["specs.md", "agent_runs.md", "decisions.md"]
+    repeatable_commands: "scripts/af_dev.py"

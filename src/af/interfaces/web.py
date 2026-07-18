@@ -1,0 +1,65 @@
+"""Classic HTML MVC adapter with Jinja views."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import APIRouter, Form, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+from af.application.tasks import TaskController
+
+TEMPLATE_DIRECTORY = Path(__file__).parent.parent / "views" / "templates"
+
+
+def create_web_router(controller: TaskController) -> APIRouter:
+    router = APIRouter(tags=["web"])
+    templates = Jinja2Templates(directory=TEMPLATE_DIRECTORY)
+
+    @router.get("/", response_class=HTMLResponse)
+    def index(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context={"tasks": controller.list()},
+        )
+
+    @router.get("/tasks", response_class=HTMLResponse)
+    def list_tasks(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="tasks/index.html",
+            context={"tasks": controller.list()},
+        )
+
+    @router.post("/tasks")
+    def create_task(prompt: str = Form(min_length=1, max_length=10_000)) -> RedirectResponse:
+        task = controller.create(prompt)
+        return RedirectResponse(
+            url=f"/tasks/{task.id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    @router.get("/tasks/{task_id}", response_class=HTMLResponse)
+    def show_task(request: Request, task_id: str) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="tasks/show.html",
+            context={"task": controller.get(task_id)},
+        )
+
+    @router.post("/tasks/{task_id}")
+    def update_task(task_id: str, prompt: str = Form(min_length=1)) -> RedirectResponse:
+        controller.update(task_id, prompt)
+        return RedirectResponse(
+            url=f"/tasks/{task_id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    @router.post("/tasks/{task_id}/delete")
+    def delete_task(task_id: str) -> RedirectResponse:
+        controller.delete(task_id)
+        return RedirectResponse(url="/tasks", status_code=status.HTTP_303_SEE_OTHER)
+
+    return router

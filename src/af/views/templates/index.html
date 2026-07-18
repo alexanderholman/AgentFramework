@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>AF Agent Framework</h1>
+  <p>Classify → route → execute → verify → record → test → reuse.</p>
+  <form method="post" action="/tasks">
+    <label for="prompt">Ask AF</label>
+    <input id="prompt" name="prompt" value="how many rs in strawberry" required maxlength="10000">
+    <button type="submit">Execute and save</button>
+  </form>
+  {% if tasks %}<p><a href="/tasks">View {{ tasks|length }} saved task{% if tasks|length != 1 %}s{% endif %}</a></p>{% endif %}
+{% endblock %}
+

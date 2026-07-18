@@ -1,0 +1,104 @@
+"""Task use cases; every transport delegates here."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from af.domain.tasks import Task, TaskRepository
+from af.framework.contracts import Agent
+from af.framework.errors import InvalidPrompt
+from af.framework.types import ExecutionOutcome, WorkRequest
+
+
+class TaskService:
+    def __init__(self, agent: Agent, repository: TaskRepository) -> None:
+        self._agent = agent
+        self._repository = repository
+
+    def execute(self, prompt: str) -> ExecutionOutcome:
+        normalized = self._normalize(prompt)
+        return self._agent.handle(WorkRequest(prompt=normalized))
+
+    def create(self, prompt: str) -> Task:
+        normalized = self._normalize(prompt)
+        outcome = self._agent.handle(WorkRequest(prompt=normalized))
+        now = datetime.now(UTC)
+        return self._repository.save(
+            Task(
+                id=str(uuid4()),
+                prompt=normalized,
+                output=outcome.output,
+                intent=outcome.intent,
+                route=outcome.route,
+                tier=outcome.tier,
+                status=outcome.status,
+                verified=outcome.verified,
+                reused=outcome.reused,
+                trace_id=outcome.trace_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    def get(self, task_id: str) -> Task:
+        return self._repository.get(task_id)
+
+    def list(self) -> list[Task]:
+        return self._repository.list()
+
+    def update(self, task_id: str, prompt: str) -> Task:
+        existing = self._repository.get(task_id)
+        normalized = self._normalize(prompt)
+        outcome = self._agent.handle(WorkRequest(prompt=normalized))
+        return self._repository.save(
+            replace(
+                existing,
+                prompt=normalized,
+                output=outcome.output,
+                intent=outcome.intent,
+                route=outcome.route,
+                tier=outcome.tier,
+                status=outcome.status,
+                verified=outcome.verified,
+                reused=outcome.reused,
+                trace_id=outcome.trace_id,
+                updated_at=datetime.now(UTC),
+            )
+        )
+
+    def delete(self, task_id: str) -> None:
+        self._repository.delete(task_id)
+
+    @staticmethod
+    def _normalize(prompt: str) -> str:
+        normalized = prompt.strip()
+        if not normalized:
+            raise InvalidPrompt
+        return normalized
+
+
+class TaskController:
+    """MVC controller shared by presentation adapters."""
+
+    def __init__(self, service: TaskService) -> None:
+        self._service = service
+
+    def execute(self, prompt: str) -> ExecutionOutcome:
+        return self._service.execute(prompt)
+
+    def create(self, prompt: str) -> Task:
+        return self._service.create(prompt)
+
+    def get(self, task_id: str) -> Task:
+        return self._service.get(task_id)
+
+    def list(self) -> list[Task]:
+        return self._service.list()
+
+    def update(self, task_id: str, prompt: str) -> Task:
+        return self._service.update(task_id, prompt)
+
+    def delete(self, task_id: str) -> None:
+        self._service.delete(task_id)
