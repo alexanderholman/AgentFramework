@@ -380,3 +380,62 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #006 - Establish and Publish the Private AgentFramework Repository
+**Date**: 2026-07-18
+**Status**: Success; draft review in progress
+**Duration**: Not recorded
+**Executor**: Codex using the authenticated GitHub app
+
+### Inputs
+- Create a new repository named `AgentFramework`.
+- Start with private visibility.
+- Move the completed AF implementation out of AgentFactory without modifying the
+  original repository.
+- Use GitHub Copilot on the published work.
+
+### Outputs
+- Confirmed private repository `alexanderholman/AgentFramework` with owner admin/push
+  permissions.
+- Copied the governed working snapshot into an independent local directory, excluding
+  Git history, virtual environments, caches, coverage artefacts, and runtime storage.
+- Changed active repository identity, setup links, contribution/security/support
+  guidance, issue templates, task tracking, and Copilot guidance to AgentFramework.
+- Preserved historical AgentFactory references in append-only records and marked other
+  imported snapshot/proposal documents as historical.
+- Removed inherited placeholder owners, greeting automation, stale deployment guidance,
+  and a redundant validation workflow.
+- Opened issue #1 and applied the standard `enhancement` label.
+- Initialized `master` with final Copilot instructions so the initial review can use
+  base-branch repository guidance.
+- Published the full source tree in commit `5b337271f04687d3e799e604d16ee8082469adca`
+  on `agent/af-python-vertical-slice`.
+- Opened draft pull request #2 and successfully requested the GitHub Copilot reviewer.
+
+### Verified Results
+- Ruff format: 42 files already formatted.
+- Ruff lint: all checks passed.
+- Strict mypy: no issues in 31 source files.
+- Pytest: 38 passed.
+- Coverage: 94.59 percent; required minimum 90 percent.
+- AgentFramework governance validation: 33 of 33 passed.
+- GitHub reported Copilot as a requested reviewer on pull request #2.
+
+### Issues Encountered
+- The connected GitHub app can mutate existing repositories but does not expose repository
+  creation; the owner created the empty private repository and granted app access.
+- GitHub CLI was unavailable. At the owner's direction, publication used authenticated
+  connector commit APIs without exposing credentials to the shell.
+- Workspace-local uv build-interpreter links were rewritten by the sandbox. Validation
+  succeeded with generated uv cache and virtual-environment paths under `/tmp`; source
+  and results remained in AgentFramework.
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Issue: https://github.com/alexanderholman/AgentFramework/issues/1
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Decision: DEC-023
+- Specs: SPEC-009, SPEC-010
+- Script: `[SCRIPT:af-dev]`
+
+---
