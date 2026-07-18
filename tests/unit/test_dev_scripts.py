@@ -26,7 +26,7 @@ def test_af_dev_sync_preview_uses_locked_lockfile() -> None:
     assert completed.stdout.splitlines()[0] == "uv sync --locked --extra dev"
 
 
-def test_route_and_run_passes_placeholder_value_as_single_inert_argument(tmp_path: Path) -> None:
+def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:
     capture_script = tmp_path / "capture_args.py"
     captured_path = tmp_path / "captured.json"
     marker_path = tmp_path / "marker.txt"
