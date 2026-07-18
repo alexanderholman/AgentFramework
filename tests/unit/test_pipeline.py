@@ -18,10 +18,11 @@ from af.framework.errors import (
     UnsupportedWork,
     VerificationFailed,
 )
-from af.framework.routing import OptimisationGoal, ProcedureRegistry, RoutingPolicy
+from af.framework.routing import LadderRouter, OptimisationGoal, ProcedureRegistry, RoutingPolicy
 from af.framework.types import (
     PROCEDURE_ARGUMENT_COUNT_MAX,
     PROMPT_MAX_LENGTH,
+    ROUTE_METRIC_MAX,
     ArgumentValueType,
     Classification,
     ProcedureArgumentDescriptor,
@@ -342,6 +343,34 @@ class SnapshotMutableProcedure(BaseProcedure):
         return cast(bool, self._grounding_result)
 
 
+class CompetingSnapshotProcedure(BaseProcedure):
+    id = "snapshot-competitor"
+    tier = WorkTier.PROCEDURAL
+    pure = True
+    replay_safe = True
+    metrics = RouteMetrics(cost=2, latency=2, intelligence=1)
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="snapshot.mutable",
+        arguments=(),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+
+    def supports(self, classification: Classification) -> bool:
+        return classification.intent == "snapshot.mutable"
+
+    def execute(self, classification: Classification) -> ProcedureResult:
+        del classification
+        return ProcedureResult(output="competitor")
+
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "snapshot.mutable" or classification.arguments:
+            raise InvalidSelectionProposal("invalid arguments for snapshot-competitor")
+
+
 class MalformedDescriptorProcedure(BaseProcedure):
     tier = WorkTier.PROCEDURAL
     pure = True
@@ -401,6 +430,7 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 pure=True,
                 replay_safe=True,
                 has_selection_grounding=False,
+                metrics=RouteMetrics(cost=0, latency=0, intelligence=0),
             ),
             ProcedureDescriptor(
                 procedure_id="character-count",
@@ -429,6 +459,7 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 pure=True,
                 replay_safe=True,
                 has_selection_grounding=True,
+                metrics=RouteMetrics(cost=1, latency=1, intelligence=1),
             ),
         )
     ]
@@ -628,6 +659,10 @@ def test_selector_provider_id_must_be_bounded_and_opaque(name: str) -> None:
         (
             SelectionDecision(reason=SelectionHandoffReason.UNAVAILABLE),
             SelectionReasonCode.UNAVAILABLE.value,
+        ),
+        (
+            SelectionDecision(reason=SelectionHandoffReason.UNSUPPORTED),
+            SelectionReasonCode.UNSUPPORTED.value,
         ),
         (
             SelectionDecision(
@@ -1070,6 +1105,71 @@ def test_selected_procedure_validation_failures_are_sanitized_and_fail_closed() 
     )
 
 
+def test_deterministic_route_validation_failures_are_sanitized() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    procedure = SecretValidationProcedure()
+    application.container.resolve(ProcedureRegistry).register(procedure)
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle_classification(
+            WorkRequest(prompt="trigger deterministic validation"),
+            Classification(
+                intent="secret.validation",
+                arguments={},
+                confidence=1.0,
+                classifier="manual",
+            ),
+        )
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert procedure.execute_calls == 0
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert any(
+        event.stage == "route" and event.detail == "invalid classification"
+        for event in trace.events
+    )
+    assert "SECRET" not in " ".join(event.detail for event in trace.events)
+    assert "SECRET" not in "".join(
+        traceback.format_exception(
+            type(captured.value),
+            captured.value,
+            captured.value.__traceback__,
+        )
+    )
+
+
+@pytest.mark.parametrize("character", ["s", "ß"])
+def test_typed_character_count_verifier_accepts_caseless_source_code_points(
+    character: str,
+) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    outcome = application.agent.handle_classification(
+        WorkRequest(prompt="Straße"),
+        Classification(
+            intent="text.character_count",
+            arguments={"text": "Straße", "character": character},
+            confidence=1.0,
+            classifier="manual",
+        ),
+    )
+    trace = application.traces.get(outcome.trace_id)
+
+    assert outcome.output == "1"
+    assert outcome.verified is True
+    assert trace.verified is True
+
+
 @pytest.mark.parametrize(
     "prompt",
     [cast(str, None), "", "   ", "a" * 10_001],
@@ -1340,6 +1440,36 @@ def test_registry_rejects_invalid_procedure_safety_fields(
         registry.register(procedure)
 
 
+@pytest.mark.parametrize(
+    ("metrics", "message"),
+    [
+        (cast(RouteMetrics, ("bad", 1, 1)), "invalid route metrics"),
+        (
+            cast(RouteMetrics, RouteMetrics(cost=cast(int, True), latency=1, intelligence=1)),
+            "invalid route metrics",
+        ),
+        (
+            cast(RouteMetrics, RouteMetrics(cost=-1, latency=1, intelligence=1)),
+            "invalid route metrics",
+        ),
+        (
+            cast(
+                RouteMetrics,
+                RouteMetrics(cost=1, latency=ROUTE_METRIC_MAX + 1, intelligence=1),
+            ),
+            "invalid route metrics",
+        ),
+    ],
+)
+def test_registry_rejects_invalid_route_metrics(metrics: object, message: str) -> None:
+    procedure = SnapshotMutableProcedure()
+    procedure.metrics = cast(RouteMetrics, metrics)
+    registry = ProcedureRegistry()
+
+    with pytest.raises(ValueError, match=message):
+        registry.register(procedure)
+
+
 def test_selection_policy_uses_registered_grounding_snapshot() -> None:
     selector = RecordingSelector(
         SelectionDecision(
@@ -1408,6 +1538,28 @@ def test_non_boolean_grounding_result_fails_closed_without_execution() -> None:
         and SelectionReasonCode.GROUNDING_FAILED.value in event.detail
         for event in trace.events
     )
+
+
+def test_router_uses_registered_metrics_snapshot() -> None:
+    registry = ProcedureRegistry()
+    preferred = SnapshotMutableProcedure()
+    competitor = CompetingSnapshotProcedure()
+    registry.register(preferred)
+    registry.register(competitor)
+    preferred.metrics = RouteMetrics(cost=99, latency=99, intelligence=0)
+    router = LadderRouter(registry, RoutingPolicy())
+
+    routed = router.route(
+        Classification(
+            intent="snapshot.mutable",
+            arguments={},
+            confidence=1.0,
+            classifier="manual",
+        ),
+        prompt="route snapshot.mutable",
+    )
+
+    assert routed.id == "snapshot-mutable"
 
 
 def test_routing_policy_requires_one_or_two_explicit_goals() -> None:

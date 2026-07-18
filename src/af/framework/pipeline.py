@@ -220,9 +220,12 @@ class PipelineAgent:
             confidence=classification.confidence,
             classifier=classification.classifier,
         )
+        invalid_classification = False
         try:
             procedure.validate(classification)
-        except InvalidSelectionProposal as error:
+        except InvalidSelectionProposal:
+            invalid_classification = True
+        if invalid_classification:
             events.append(TraceEvent("route", "invalid classification"))
             self._record_unsupported_trace(
                 trace_id=trace_id,
@@ -231,7 +234,7 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
             )
-            raise UnsupportedWork(request.prompt, trace_id) from error
+            raise UnsupportedWork(request.prompt, trace_id)
         events.append(TraceEvent("route", procedure.id))
 
         result = self._reuse_store.lookup(classification, procedure)

@@ -13,6 +13,7 @@ from af.framework.errors import InvalidPrompt
 # Shared user-prompt ceiling enforced by the application boundary and reflected by adapters.
 PROMPT_MAX_LENGTH = 10_000
 PROCEDURE_ARGUMENT_COUNT_MAX = 16
+ROUTE_METRIC_MAX = 10_000
 SELECTOR_PROVIDER_ID_MAX_LENGTH = 64
 PROCEDURE_ID_MAX_LENGTH = 64
 PROCEDURE_VERSION_MAX_LENGTH = 32
@@ -133,6 +134,7 @@ class ProcedureDescriptor:
     pure: bool = False
     replay_safe: bool = False
     has_selection_grounding: bool = False
+    metrics: RouteMetrics = field(default_factory=lambda: RouteMetrics(0, 0, 0))
 
 
 @dataclass(frozen=True, slots=True)

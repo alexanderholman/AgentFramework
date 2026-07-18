@@ -11,12 +11,14 @@ from af.framework.types import (
     ARGUMENT_NAME_MAX_LENGTH,
     PROCEDURE_ARGUMENT_COUNT_MAX,
     PROMPT_MAX_LENGTH,
+    ROUTE_METRIC_MAX,
     ArgumentValueType,
     Classification,
     ProcedureArgumentDescriptor,
     ProcedureDescriptor,
     ProcedureEffect,
     ProcedureRisk,
+    RouteMetrics,
     WorkTier,
     is_valid_argument_name,
     is_valid_procedure_id,
@@ -81,6 +83,14 @@ class ProcedureRegistry:
             raise ValueError("procedure has an invalid replay safety policy")
         if type(procedure.has_selection_grounding) is not bool:
             raise ValueError("procedure has an invalid grounding policy")
+        metrics = procedure.metrics
+        if not isinstance(metrics, RouteMetrics):
+            raise ValueError("procedure has invalid route metrics")
+        if any(
+            type(value) is not int or not 0 <= value <= ROUTE_METRIC_MAX
+            for value in (metrics.cost, metrics.latency, metrics.intelligence)
+        ):
+            raise ValueError("procedure has invalid route metrics")
         descriptor = procedure.selection_descriptor
         if not isinstance(descriptor, ProcedureDescriptor):
             raise ValueError("procedure selection descriptor is invalid")
@@ -161,6 +171,11 @@ class ProcedureRegistry:
             pure=procedure.pure,
             replay_safe=procedure.replay_safe,
             has_selection_grounding=procedure.has_selection_grounding,
+            metrics=RouteMetrics(
+                cost=metrics.cost,
+                latency=metrics.latency,
+                intelligence=metrics.intelligence,
+            ),
         )
 
 
@@ -184,9 +199,9 @@ class LadderRouter:
         score = [int(descriptor.tier)]
         for goal in self._policy.goals:
             if goal is OptimisationGoal.CHEAPEST:
-                score.append(procedure.metrics.cost)
+                score.append(descriptor.metrics.cost)
             elif goal is OptimisationGoal.FASTEST:
-                score.append(procedure.metrics.latency)
+                score.append(descriptor.metrics.latency)
             else:
-                score.append(-procedure.metrics.intelligence)
+                score.append(-descriptor.metrics.intelligence)
         return tuple(score)
