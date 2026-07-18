@@ -64,6 +64,7 @@ GRAPHQL_INVALID_JSON_MESSAGE = "Unable to parse request body as JSON"
 GRAPHQL_RESPONSE_MEDIA_TYPE = "application/graphql-response+json"
 GRAPHQL_LEGACY_JSON_MEDIA_TYPE = "application/json"
 _QVALUE = re.compile(r"^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$")
+_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 GraphQLSelection = SelectionNode
 
@@ -89,6 +90,13 @@ class _GraphQLRequestError(Exception):
         self.code = code
         self.status_code = status_code
         self.headers = dict(headers or {})
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedMediaValue:
+    media_type: str
+    parameters: dict[str, str]
+    quality: float | None = None
 
 
 @strawberry.type
@@ -726,39 +734,47 @@ def create_graphql_router(controller: TaskController) -> APIRouter:
 
 
 def _accept_rank(accept_header: str, media_type: str) -> tuple[float, int] | None:
-    best_rank: tuple[float, int] | None = None
-    for raw_part in accept_header.split(","):
-        part = raw_part.strip()
-        if not part:
-            continue
-        candidate_type, parameters = _parse_media_type(
+    best_match: tuple[int, int, float] | None = None
+    for part in _split_header_values(
+        accept_header,
+        delimiter=",",
+        message="Unsupported Accept header",
+        code=GRAPHQL_NOT_ACCEPTABLE_CODE,
+        status_code=status.HTTP_406_NOT_ACCEPTABLE,
+    ):
+        parsed = _parse_media_type(
             part,
             message="Unsupported Accept header",
             code=GRAPHQL_NOT_ACCEPTABLE_CODE,
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
+            allow_quality=True,
         )
-        quality = _parse_quality(parameters)
-        if quality == 0:
+        quality = parsed.quality if parsed.quality is not None else 1.0
+        specificity = _media_specificity(parsed.media_type, media_type)
+        if specificity < 0 or parsed.parameters:
             continue
-        specificity = _media_specificity(candidate_type, media_type)
-        if specificity < 0:
-            continue
-        rank = (quality, specificity)
-        if best_rank is None or rank > best_rank:
-            best_rank = rank
-    return best_rank
+        match = (specificity, 0, quality)
+        if (
+            best_match is None
+            or match[:2] > best_match[:2]
+            or (match[:2] == best_match[:2] and match[2] > best_match[2])
+        ):
+            best_match = match
+    if best_match is None or best_match[2] == 0:
+        return None
+    return (best_match[2], best_match[0])
 
 
 def _parse_content_type(content_type_header: str | None) -> str | None:
     if content_type_header is None or not content_type_header.strip():
         return None
-    media_type, _ = _parse_media_type(
+    parsed = _parse_media_type(
         content_type_header.strip(),
         message="Unsupported content type",
         code=GRAPHQL_UNSUPPORTED_MEDIA_TYPE_CODE,
         status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
     )
-    return media_type
+    return parsed.media_type
 
 
 def _parse_media_type(
@@ -767,28 +783,74 @@ def _parse_media_type(
     message: str,
     code: str,
     status_code: int,
-) -> tuple[str, dict[str, str]]:
-    parts = [part.strip() for part in value.split(";")]
-    media_type = parts[0].lower()
-    if "/" not in media_type or media_type.count("/") != 1:
-        raise _GraphQLRequestError(message, code, status_code=status_code)
+    allow_quality: bool = False,
+) -> _ParsedMediaValue:
+    index = 0
+    length = len(value)
+
+    def invalid() -> _GraphQLRequestError:
+        return _GraphQLRequestError(message, code, status_code=status_code)
+
+    def skip_optional_whitespace(position: int) -> int:
+        while position < length and value[position] in " \t":
+            position += 1
+        return position
+
+    index = skip_optional_whitespace(index)
+    type_start = index
+    while index < length and _is_token_char(value[index]):
+        index += 1
+    if index == type_start or index >= length or value[index] != "/":
+        raise invalid()
+    major_type = value[type_start:index].lower()
+    index += 1
+    subtype_start = index
+    while index < length and _is_token_char(value[index]):
+        index += 1
+    if index == subtype_start:
+        raise invalid()
+    subtype = value[subtype_start:index].lower()
+    media_type = f"{major_type}/{subtype}"
+    index = skip_optional_whitespace(index)
+    if index < length and value[index] != ";":
+        raise invalid()
+
     parameters: dict[str, str] = {}
-    for raw_parameter in parts[1:]:
-        if not raw_parameter or "=" not in raw_parameter:
-            raise _GraphQLRequestError(message, code, status_code=status_code)
-        name, raw_value = raw_parameter.split("=", 1)
-        parameter_name = name.strip().lower()
-        parameter_value = raw_value.strip().strip('"')
-        if not parameter_name or not parameter_value:
-            raise _GraphQLRequestError(message, code, status_code=status_code)
+    quality: float | None = None
+    seen_quality = False
+    while index < length:
+        index += 1
+        index = skip_optional_whitespace(index)
+        name_start = index
+        while index < length and _is_token_char(value[index]):
+            index += 1
+        if index == name_start:
+            raise invalid()
+        parameter_name = value[name_start:index].lower()
+        if parameter_name in parameters or (parameter_name == "q" and seen_quality):
+            raise invalid()
+        index = skip_optional_whitespace(index)
+        if index >= length or value[index] != "=":
+            raise invalid()
+        index += 1
+        index = skip_optional_whitespace(index)
+        parameter_value, index = _parse_parameter_value(value, index, invalid)
+        index = skip_optional_whitespace(index)
+        if index < length and value[index] != ";":
+            raise invalid()
+        if allow_quality and parameter_name == "q":
+            quality = _parse_quality(parameter_value)
+            seen_quality = True
+            continue
         parameters[parameter_name] = parameter_value
-    return media_type, parameters
+    return _ParsedMediaValue(
+        media_type=media_type,
+        parameters=parameters,
+        quality=quality if allow_quality else None,
+    )
 
 
-def _parse_quality(parameters: dict[str, str]) -> float:
-    quality = parameters.get("q")
-    if quality is None:
-        return 1.0
+def _parse_quality(quality: str) -> float:
     if not _QVALUE.fullmatch(quality):
         raise _GraphQLRequestError(
             "Unsupported Accept header",
@@ -796,6 +858,105 @@ def _parse_quality(parameters: dict[str, str]) -> float:
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
         )
     return float(quality)
+
+
+def _parse_parameter_value(
+    value: str,
+    index: int,
+    invalid: Callable[[], _GraphQLRequestError],
+) -> tuple[str, int]:
+    if index >= len(value):
+        raise invalid()
+    if value[index] == '"':
+        return _parse_quoted_string(value, index, invalid)
+    start = index
+    while index < len(value) and _is_token_char(value[index]):
+        index += 1
+    if index == start:
+        raise invalid()
+    return value[start:index], index
+
+
+def _parse_quoted_string(
+    value: str,
+    index: int,
+    invalid: Callable[[], _GraphQLRequestError],
+) -> tuple[str, int]:
+    index += 1
+    parsed: list[str] = []
+    while index < len(value):
+        character = value[index]
+        codepoint = ord(character)
+        if character == '"':
+            return ("".join(parsed), index + 1)
+        if character == "\\":
+            index += 1
+            if index >= len(value):
+                raise invalid()
+            escaped = value[index]
+            if _is_control_char(escaped):
+                raise invalid()
+            parsed.append(escaped)
+            index += 1
+            continue
+        if codepoint < 0x20 or codepoint == 0x7F:
+            raise invalid()
+        parsed.append(character)
+        index += 1
+    raise invalid()
+
+
+def _split_header_values(
+    value: str,
+    *,
+    delimiter: str,
+    message: str,
+    code: str,
+    status_code: int,
+) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    escaped = False
+    for character in value:
+        if _is_control_char(character):
+            raise _GraphQLRequestError(message, code, status_code=status_code)
+        if escaped:
+            current.append(character)
+            escaped = False
+            continue
+        if character == "\\" and in_quotes:
+            current.append(character)
+            escaped = True
+            continue
+        if character == '"':
+            current.append(character)
+            in_quotes = not in_quotes
+            continue
+        if character == delimiter and not in_quotes:
+            part = "".join(current).strip()
+            if not part:
+                raise _GraphQLRequestError(message, code, status_code=status_code)
+            parts.append(part)
+            current = []
+            continue
+        current.append(character)
+    if in_quotes or escaped:
+        raise _GraphQLRequestError(message, code, status_code=status_code)
+    part = "".join(current).strip()
+    if not part:
+        raise _GraphQLRequestError(message, code, status_code=status_code)
+    parts.append(part)
+    return parts
+
+
+def _is_control_char(character: str) -> bool:
+    codepoint = ord(character)
+    return codepoint < 0x20 or codepoint == 0x7F
+
+
+def _is_token_char(character: str) -> bool:
+    return bool(_TOKEN.fullmatch(character))
 
 
 def _media_specificity(accepted_media_type: str, media_type: str) -> int:

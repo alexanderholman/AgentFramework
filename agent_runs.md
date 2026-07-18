@@ -612,3 +612,42 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+## Run #011 - Media Negotiation Precedence Correction
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `c8a153e`
+- Requested standards correction for GraphQL Accept media-range precedence and strict Content-Type parameter validation
+- Requirement to keep the PR in draft, preserve Run #010 byte-for-byte, and append this record only because source changes landed
+
+### Outputs
+- Updated GraphQL Accept negotiation to apply per-representation media-range precedence before quality, so exact `q=0` rejections cannot be revived by less-specific wildcards
+- Rejected malformed Accept media ranges with duplicate parameters such as repeated `q` values using strict token and quoted-string parsing
+- Hardened Content-Type parsing to reject malformed quoted strings, invalid unquoted parameter tokens, and duplicate parameter names while preserving valid `application/json` charset parameters
+- Added unit and feature regressions covering exact-precedence fallback, duplicate Accept parameters, and malformed or duplicated Content-Type parameters
+
+### Verified Results
+- Ruff format check: 55 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 33 source files
+- Pytest: 199 passed, 1 warning
+- Coverage: 90.04 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed
+- Smoke: `uv run af hello` -> `Hello, world!`
+- Smoke: `uv run af ask 'how many rs in strawberry'` -> `3`
+
+### Issues Encountered
+- The sandbox clone was initially shallow, so the first-PR append-only topology check could not resolve `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; validation proceeded after `git fetch --unshallow origin` and `git fetch origin master:refs/remotes/origin/master`
+- The sandbox image did not initially provide `uv` on `PATH`; validation proceeded after installing `uv` for the current user
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning; the suite remained green and no new dependency was added
+- The latest visible AF Python workflow run for the last committed head remained `action_required` with zero jobs, so owner/manual approval is still required before GitHub Actions can execute on the branch
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Workflow run: https://github.com/alexanderholman/AgentFramework/actions/runs/29655742961
+- Script: `[SCRIPT:af-dev]`
+
+---

@@ -961,10 +961,25 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
             json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
             headers={"accept": "application/*;q=0.8"},
         )
+        wildcard_with_exact_graphql_rejection = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/graphql-response+json;q=0, application/*;q=1"},
+        )
+        wildcard_with_exact_json_rejection = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/json;q=0, application/*;q=1"},
+        )
         unsupported = client.post(
             "/graphql",
             json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
             headers={"accept": "text/plain"},
+        )
+        malformed_accept = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/graphql-response+json;q=0;q=1"},
         )
         wrong_type = client.post(
             "/graphql",
@@ -975,6 +990,21 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
             "/graphql",
             content='{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
             headers={"content-type": "application/json; garbage"},
+        )
+        unterminated_quoted_content_type = client.post(
+            "/graphql",
+            content='{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
+            headers={"content-type": 'application/json; charset="unterminated'},
+        )
+        invalid_token_content_type = client.post(
+            "/graphql",
+            content='{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
+            headers={"content-type": "application/json; charset=utf 8"},
+        )
+        duplicate_charset_content_type = client.post(
+            "/graphql",
+            content='{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
+            headers={"content-type": "application/json; charset=utf-8; charset=utf-16"},
         )
         get_mutation = client.get(
             "/graphql",
@@ -999,14 +1029,26 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
     assert prefer_json.headers["content-type"].startswith("application/json")
     assert wildcard.status_code == 200
     assert wildcard.headers["content-type"].startswith("application/graphql-response+json")
+    assert wildcard_with_exact_graphql_rejection.status_code == 200
+    assert wildcard_with_exact_graphql_rejection.headers["content-type"].startswith(
+        "application/json"
+    )
+    assert wildcard_with_exact_json_rejection.status_code == 200
+    assert wildcard_with_exact_json_rejection.headers["content-type"].startswith(
+        "application/graphql-response+json"
+    )
     assert unsupported.status_code == 406
     assert unsupported.json()["errors"][0]["extensions"] == {"code": "NOT_ACCEPTABLE"}
+    assert malformed_accept.status_code == 406
     assert wrong_type.status_code == 415
     assert wrong_type.json()["errors"][0]["extensions"] == {"code": "UNSUPPORTED_MEDIA_TYPE"}
     assert malformed_content_type.status_code == 415
     assert malformed_content_type.json()["errors"][0]["extensions"] == {
         "code": "UNSUPPORTED_MEDIA_TYPE"
     }
+    assert unterminated_quoted_content_type.status_code == 415
+    assert invalid_token_content_type.status_code == 415
+    assert duplicate_charset_content_type.status_code == 415
     assert get_mutation.status_code == 405
     assert get_mutation.headers["allow"] == "POST"
 

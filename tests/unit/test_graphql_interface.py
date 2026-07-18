@@ -246,9 +246,17 @@ def test_graphql_response_media_type_honors_quality_and_rejects_invalid_ranges()
         _graphql_response_media_type("application/json, application/graphql-response+json;q=0.5")
         == "application/json"
     )
+    assert (
+        _graphql_response_media_type("application/graphql-response+json;q=0, application/*;q=1")
+        == "application/json"
+    )
+    assert (
+        _graphql_response_media_type("application/json;q=0, application/*;q=1")
+        == GRAPHQL_RESPONSE_MEDIA_TYPE
+    )
 
     for accept in (
-        "application/graphql-response+json;q=0",
+        "application/graphql-response+json;q=0;q=1",
         "text/plain, application/json;q=0",
         "application/json;q=bogus",
     ):
@@ -324,6 +332,19 @@ async def test_graphql_request_payload_validation_paths() -> None:
                 body=b'{"query":"{ hello }"}',
             )
         )
+    for content_type in (
+        'application/json; charset="unterminated',
+        "application/json; charset=utf 8",
+        "application/json; charset=utf-8; charset=utf-16",
+    ):
+        with pytest.raises(Exception, match="Unsupported content type"):
+            await _parse_request_payload(
+                _request(
+                    method="POST",
+                    headers={"content-type": content_type},
+                    body=b'{"query":"{ hello }"}',
+                )
+            )
 
     with pytest.raises(Exception, match="Unable to parse request body as JSON"):
         await _parse_request_payload(
