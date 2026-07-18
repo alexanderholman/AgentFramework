@@ -23,9 +23,9 @@ from af.framework.errors import (
 )
 from af.framework.routing import LadderRouter, ProcedureRegistry
 from af.framework.types import (
+    PROCEDURE_ARGUMENT_COUNT_MAX,
     PROCEDURE_ID_MAX_LENGTH,
     PROCEDURE_INTENT_MAX_LENGTH,
-    PROCEDURE_ARGUMENT_COUNT_MAX,
     PROMPT_MAX_LENGTH,
     ArgumentValueType,
     Classification,

@@ -938,7 +938,9 @@ def test_selector_argument_count_is_bounded_before_iteration() -> None:
             proposal=SelectionProposal(
                 procedure_id="character-count",
                 intent="text.character_count",
-                arguments=cast(dict[str, str], HostileArgumentMap({"text": "strawberry", "character": "r"})),
+                arguments=cast(
+                    dict[str, str], HostileArgumentMap({"text": "strawberry", "character": "r"})
+                ),
                 confidence=0.95,
             )
         ),
@@ -1276,7 +1278,9 @@ def test_agent_public_typed_boundary_preserves_whitespace_prompt() -> None:
     "prompt",
     [" " * (PROMPT_MAX_LENGTH + 1), ""],
 )
-def test_agent_handle_classification_rejects_invalid_typed_prompts_without_tracing(prompt: str) -> None:
+def test_agent_handle_classification_rejects_invalid_typed_prompts_without_tracing(
+    prompt: str,
+) -> None:
     application = create_application(
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
@@ -1312,7 +1316,9 @@ def test_agent_handle_classification_rejects_invalid_typed_prompts_without_traci
         (
             Classification(
                 intent="text.character_count",
-                arguments=cast(dict[str, str], HostileArgumentMap({"text": "strawberry", "character": "r"})),
+                arguments=cast(
+                    dict[str, str], HostileArgumentMap({"text": "strawberry", "character": "r"})
+                ),
                 confidence=1.0,
                 classifier="manual",
             ),
