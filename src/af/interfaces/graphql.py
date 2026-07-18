@@ -14,6 +14,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from graphql import (
+    ArgumentNode,
     DocumentNode,
     FieldNode,
     FragmentDefinitionNode,
@@ -21,6 +22,7 @@ from graphql import (
     GraphQLError,
     GraphQLSyntaxError,
     InlineFragmentNode,
+    IntValueNode,
     OperationDefinitionNode,
     SelectionNode,
     parse,
@@ -30,7 +32,7 @@ from strawberry.types import Info
 from af.application.tasks import TaskController
 from af.domain.tasks import Task
 from af.framework.errors import AFError, TaskNotFound
-from af.framework.types import TASK_LIST_DEFAULT_LIMIT
+from af.framework.types import TASK_LIST_DEFAULT_LIMIT, TASK_LIST_MAX_LIMIT
 
 GRAPHQL_INTERNAL_ERROR_CODE = "INTERNAL_ERROR"
 GRAPHQL_INTERNAL_ERROR_MESSAGE = "internal GraphQL adapter error"
@@ -42,6 +44,7 @@ GRAPHQL_MAX_BODY_BYTES = 32_768
 GRAPHQL_MAX_ALIASES = 50
 GRAPHQL_MAX_DEPTH = 8
 GRAPHQL_MAX_ROOT_FIELDS = 25
+GRAPHQL_MAX_TASK_NODES = 200
 GRAPHQL_INVALID_DOCUMENT_MESSAGE = "Unable to parse GraphQL query document"
 GRAPHQL_INVALID_QUERY_PARAMS_MESSAGE = "Unable to decode GraphQL query parameters"
 GRAPHQL_INVALID_JSON_MESSAGE = "Unable to parse request body as JSON"
@@ -169,16 +172,16 @@ class Query:
         assert task is not None
         return TaskType.from_task(task)
 
-    @strawberry.field
+
+@strawberry.type
+class Mutation:
+    @strawberry.mutation
     async def hello(self, info: Info[Any, Any]) -> str:
         outcome = await _run_graphql_operation(
             lambda: run_in_threadpool(_controller(info).execute, "hello")
         )
         return outcome.output
 
-
-@strawberry.type
-class Mutation:
     @strawberry.mutation
     async def create_task(self, info: Info[Any, Any], input: TaskInput) -> TaskType:
         task = await _run_graphql_operation(
@@ -353,6 +356,64 @@ def _count_root_fields(
     return total
 
 
+def _task_limit_from_field(field: FieldNode) -> int:
+    limit_argument: ArgumentNode | None = None
+    for argument in field.arguments or ():
+        if argument.name.value == "limit":
+            limit_argument = argument
+            break
+    if limit_argument is None:
+        return TASK_LIST_DEFAULT_LIMIT
+    value = limit_argument.value
+    if not isinstance(value, IntValueNode):
+        return TASK_LIST_MAX_LIMIT
+    try:
+        parsed = int(value.value)
+    except ValueError:
+        return TASK_LIST_MAX_LIMIT
+    if 1 <= parsed <= TASK_LIST_MAX_LIMIT:
+        return parsed
+    return TASK_LIST_MAX_LIMIT
+
+
+def _count_task_nodes(
+    selections: Sequence[GraphQLSelection],
+    fragments: Mapping[str, FragmentDefinitionNode],
+    *,
+    active_fragments: frozenset[str] = frozenset(),
+) -> int:
+    total = 0
+    for selection in selections:
+        if isinstance(selection, FieldNode):
+            if selection.name.value == "tasks":
+                total += _task_limit_from_field(selection)
+            if selection.selection_set is not None:
+                total += _count_task_nodes(
+                    selection.selection_set.selections,
+                    fragments,
+                    active_fragments=active_fragments,
+                )
+        elif isinstance(selection, InlineFragmentNode):
+            total += _count_task_nodes(
+                selection.selection_set.selections,
+                fragments,
+                active_fragments=active_fragments,
+            )
+        elif isinstance(selection, FragmentSpreadNode):
+            fragment_name = selection.name.value
+            if fragment_name in active_fragments:
+                continue
+            fragment = fragments.get(fragment_name)
+            if fragment is None:
+                continue
+            total += _count_task_nodes(
+                fragment.selection_set.selections,
+                fragments,
+                active_fragments=active_fragments | {fragment_name},
+            )
+    return total
+
+
 def _validate_document_complexity(document: DocumentNode) -> None:
     fragments = {
         definition.name.value: definition
@@ -362,6 +423,7 @@ def _validate_document_complexity(document: DocumentNode) -> None:
     alias_count = 0
     max_depth = 0
     max_root_fields = 0
+    max_task_nodes = 0
     for definition in document.definitions:
         if not isinstance(definition, OperationDefinitionNode):
             continue
@@ -369,10 +431,12 @@ def _validate_document_complexity(document: DocumentNode) -> None:
         alias_count += _count_aliases(selections, fragments)
         max_depth = max(max_depth, _selection_depth(selections, fragments, depth=1))
         max_root_fields = max(max_root_fields, _count_root_fields(selections, fragments))
+        max_task_nodes = max(max_task_nodes, _count_task_nodes(selections, fragments))
     if (
         alias_count > GRAPHQL_MAX_ALIASES
         or max_depth > GRAPHQL_MAX_DEPTH
         or max_root_fields > GRAPHQL_MAX_ROOT_FIELDS
+        or max_task_nodes > GRAPHQL_MAX_TASK_NODES
     ):
         raise _GraphQLRequestError(
             "graphql query exceeds the configured complexity limits",

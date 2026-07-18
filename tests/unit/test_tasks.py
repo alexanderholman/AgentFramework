@@ -91,3 +91,21 @@ def test_task_list_rejects_invalid_pagination_bounds(application) -> None:  # ty
         match=f"offset must be between 0 and {TASK_LIST_MAX_OFFSET}",
     ):
         application.tasks.list(offset=TASK_LIST_MAX_OFFSET + 1)
+
+
+def test_task_list_rejects_non_exact_pagination_primitives(application) -> None:  # type: ignore[no-untyped-def]
+    class HostileInt(int):
+        def __lt__(self, other: object) -> bool:
+            raise RuntimeError("SECRET-limit-comparison")
+
+        def __gt__(self, other: object) -> bool:
+            raise RuntimeError("SECRET-limit-comparison")
+
+    with pytest.raises(InvalidPagination, match="limit must be an integer"):
+        application.tasks.list(limit=True)
+
+    with pytest.raises(InvalidPagination, match="limit must be an integer"):
+        application.tasks.list(limit=HostileInt(1))
+
+    with pytest.raises(InvalidPagination, match="offset must be an integer"):
+        application.tasks.list(offset=HostileInt(0))

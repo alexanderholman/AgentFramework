@@ -15,10 +15,12 @@ from af.interfaces.graphql import (
     GRAPHQL_BAD_REQUEST_CODE,
     GRAPHQL_INTERNAL_ERROR_CODE,
     GRAPHQL_INVALID_DOCUMENT_MESSAGE,
+    GRAPHQL_MAX_TASK_NODES,
     GRAPHQL_QUERY_TOO_COMPLEX_CODE,
     GRAPHQL_REQUEST_TOO_LARGE_CODE,
     _count_aliases,
     _count_root_fields,
+    _count_task_nodes,
     _format_error,
     _GraphQLRequestError,
     _parse_query_document,
@@ -112,12 +114,12 @@ async def test_run_graphql_operation_translates_expected_and_unexpected_errors()
         await _run_graphql_operation(unexpected)
 
 
-def test_graphql_get_requests_execute_and_read_tasks() -> None:
+def test_graphql_get_requests_read_only_task_fields() -> None:
     app = FastAPI()
     app.include_router(create_graphql_router(_Controller()), prefix="/graphql")
 
     with TestClient(app) as client:
-        hello = client.get("/graphql", params={"query": "{ hello }"})
+        listed = client.get("/graphql", params={"query": "{ tasks(limit: 1, offset: 0) { id } }"})
         task = client.get(
             "/graphql",
             params={
@@ -127,7 +129,7 @@ def test_graphql_get_requests_execute_and_read_tasks() -> None:
             },
         )
 
-    assert hello.json() == {"data": {"hello": "Hello, world!"}}
+    assert listed.json() == {"data": {"tasks": []}}
     assert task.json() == {"data": {"task": {"id": "task-1", "output": "3"}}}
 
 
@@ -137,7 +139,7 @@ def test_graphql_complexity_helpers_cover_fragments_and_limits() -> None:
         query Example {
           ...TaskFields
           ... on Query {
-            hello
+            task(id: "task-1") { id }
           }
         }
 
@@ -161,20 +163,31 @@ def test_graphql_complexity_helpers_cover_fragments_and_limits() -> None:
 
     assert _count_aliases(selections, fragments) == 2
     assert _count_root_fields(selections, fragments) == 3
+    assert _count_task_nodes(selections, fragments) == 2
     assert _selection_depth(selections, fragments, depth=1) == 2
-    document_from_helper = _parse_query_document("{ hello }")
+    document_from_helper = _parse_query_document('{ task(id: "task-1") { id } }')
     operation = _select_operation(document_from_helper, None)
     assert operation.name is None
     assert getattr(operation.operation, "value", operation.operation) == "query"
     _validate_document_complexity(document)
 
-    alias_bomb = " ".join(f"a{i}: hello" for i in range(1000))
+    alias_bomb = " ".join(f"a{i}: tasks(limit: 100, offset: 0) {{ id }}" for i in range(1000))
     with pytest.raises(_GraphQLRequestError) as error_info:
         _parse_query_document(f"{{ {alias_bomb} }}")
     assert error_info.value.code == GRAPHQL_QUERY_TOO_COMPLEX_CODE
 
     with pytest.raises(Exception, match=GRAPHQL_INVALID_DOCUMENT_MESSAGE):
-        _parse_query_document("{ hello ")
+        _parse_query_document('{ task(id: "task-1") ')
+
+
+def test_graphql_complexity_rejects_excessive_task_nodes() -> None:
+    aliases = " ".join(f"a{i}: tasks(limit: 100, offset: 0) {{ prompt output }}" for i in range(3))
+
+    with pytest.raises(_GraphQLRequestError, match="complexity limits") as error_info:
+        _parse_query_document(f"{{ {aliases} }}")
+
+    assert error_info.value.code == GRAPHQL_QUERY_TOO_COMPLEX_CODE
+    assert GRAPHQL_MAX_TASK_NODES < 300
 
 
 @pytest.mark.anyio

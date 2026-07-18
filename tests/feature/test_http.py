@@ -265,6 +265,20 @@ def test_rest_crud_status_and_reexecution(application) -> None:  # type: ignore[
     assert missing.status_code == 404
 
 
+def test_rest_hello_requires_post_and_preserves_safe_method_semantics(
+    application,
+) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        get_response = client.get("/api/v1/hello")
+        post_response = client.post("/api/v1/hello")
+
+    assert get_response.status_code == 405
+    assert post_response.status_code == 200
+    assert post_response.json() == {"output": "Hello, world!", "verified": True}
+    assert application.tasks.list() == []
+    assert len(application.traces.list()) == 1
+
+
 def test_rest_rejects_blank_prompt(application) -> None:  # type: ignore[no-untyped-def]
     with _http_client(application) as client:
         response = client.post("/api/v1/tasks", json={"prompt": "   "})
@@ -450,7 +464,7 @@ def test_graphql_sanitizes_unexpected_resolver_failures() -> None:
                 "variables": {"input": {"prompt": "how many rs in strawberry"}},
             },
         )
-        hello_response = client.post("/graphql", json={"query": "{ hello }"})
+        hello_response = client.post("/graphql", json={"query": "mutation { hello }"})
 
     for response, path in (
         (list_response, ["tasks"]),
@@ -505,12 +519,40 @@ def test_graphql_rejects_alias_bombs_before_execution() -> None:
         def __init__(self) -> None:
             self.calls = 0
 
-        def execute(self, prompt: str):  # type: ignore[no-untyped-def]
+        def list(self, *, limit=None, offset=0):  # type: ignore[no-untyped-def]
             self.calls += 1
-            return type("Outcome", (), {"output": "Hello, world!"})()
+            return []
 
     controller = RecordingController()
-    aliases = " ".join(f"a{i}: hello" for i in range(1000))
+    aliases = " ".join(f"a{i}: tasks(limit: 1, offset: 0) {{ id }}" for i in range(51))
+
+    with _graphql_client(controller) as client:
+        response = client.post("/graphql", json={"query": f"{{ {aliases} }}"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": None,
+        "errors": [
+            {
+                "message": "graphql query exceeds the configured complexity limits",
+                "extensions": {"code": "QUERY_TOO_COMPLEX"},
+            }
+        ],
+    }
+    assert controller.calls == 0
+
+
+def test_graphql_rejects_excessive_task_node_budget_before_execution() -> None:
+    class RecordingController:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list(self, *, limit=None, offset=0):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return []
+
+    controller = RecordingController()
+    aliases = " ".join(f"a{i}: tasks(limit: 100, offset: 0) {{ prompt output }}" for i in range(3))
 
     with _graphql_client(controller) as client:
         response = client.post("/graphql", json={"query": f"{{ {aliases} }}"})
@@ -578,6 +620,38 @@ def test_graphql_get_rejects_non_query_operations_before_execution(application) 
     assert application.traces.list() == []
 
 
+def test_graphql_get_queries_leave_task_and_trace_stores_unchanged(
+    application,
+) -> None:  # type: ignore[no-untyped-def]
+    created = application.tasks.create("how many rs in strawberry")
+    before_tasks = application.tasks.list()
+    before_trace_count = len(application.traces.list())
+
+    with _http_client(application) as client:
+        listed = client.get(
+            "/graphql",
+            params={"query": "{ tasks(limit: 10, offset: 0) { id output } }"},
+        )
+        fetched = client.get(
+            "/graphql",
+            params={
+                "query": "query Task($id: ID!) { task(id: $id) { id output } }",
+                "variables": f'{{"id":"{created.id}"}}',
+                "operationName": "Task",
+            },
+        )
+        hello = client.get("/graphql", params={"query": "{ hello }"})
+
+    assert listed.status_code == 200
+    assert listed.json() == {"data": {"tasks": [{"id": created.id, "output": "3"}]}}
+    assert fetched.status_code == 200
+    assert fetched.json() == {"data": {"task": {"id": created.id, "output": "3"}}}
+    assert hello.status_code == 200
+    assert hello.json()["errors"][0]["message"] == "Cannot query field 'hello' on type 'Query'."
+    assert application.tasks.list() == before_tasks
+    assert len(application.traces.list()) == before_trace_count
+
+
 def test_http_rejects_untrusted_host_headers_before_html_and_graphql_execution(
     application,
 ) -> None:  # type: ignore[no-untyped-def]
@@ -585,7 +659,7 @@ def test_http_rejects_untrusted_host_headers_before_html_and_graphql_execution(
         html = client.get("/", headers={"host": "evil.invalid"})
         graphql = client.get(
             "/graphql",
-            params={"query": "{ hello }"},
+            params={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
             headers={"host": "evil.invalid"},
         )
 

@@ -52,7 +52,7 @@ class TaskListResponse(BaseModel):
 def create_rest_router(controller: TaskController) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
-    @router.get("/hello")
+    @router.post("/hello")
     def hello() -> dict[str, object]:
         outcome = controller.execute("hello")
         return {"output": outcome.output, "verified": outcome.verified}
