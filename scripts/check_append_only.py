@@ -3,11 +3,55 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import stat
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 APPEND_ONLY_FILES = ("specs.md", "decisions.md", "agent_runs.md")
+BOOTSTRAP_ANCHOR = "5457fcdd70aa50162fb798ba5e0efefc89809ea2"
+
+
+@dataclass(frozen=True)
+class TreeEntry:
+    mode: str
+    object_type: str
+    object_id: str
+
+
+@dataclass(frozen=True)
+class FrozenBootstrapFile:
+    mode: str
+    blob_id: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class BlobReference:
+    revision: str
+    entry: TreeEntry
+    content: bytes
+
+
+FROZEN_BOOTSTRAP_FILES: dict[str, FrozenBootstrapFile] = {
+    "specs.md": FrozenBootstrapFile(
+        mode="100644",
+        blob_id="a9965b08d0b15ddb049dd139b15102b5c33b6997",
+        sha256="7f6fb0b3c0d04548af567b07b7c43493c44736ba095aed52149f5529669d2ce0",
+    ),
+    "decisions.md": FrozenBootstrapFile(
+        mode="100644",
+        blob_id="dd53088ce16c53a2b233e98ce90be0e41c28c661",
+        sha256="2ca5088096bc8f33c5c3d03c63157866ad44981662c080d683d4fd3f50b97072",
+    ),
+    "agent_runs.md": FrozenBootstrapFile(
+        mode="100644",
+        blob_id="a2f49fdd983e15e79a6cb69e5907fa0c9c04c7da",
+        sha256="6602d0982b2a81a86527ed911822b086d453c3016da548398ab9d8a086437454",
+    ),
+}
 
 
 def _git(
@@ -43,6 +87,114 @@ def _resolve_base_revision(root: Path, base_ref: str) -> str | None:
     return completed.stdout.strip()
 
 
+def _is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    completed = _git(root, "merge-base", "--is-ancestor", ancestor, descendant)
+    return completed.returncode == 0
+
+
+def _load_tree_entry(root: Path, revision: str, relative_path: str) -> TreeEntry | None:
+    completed = _git(root, "ls-tree", revision, "--", relative_path)
+    if completed.returncode != 0:
+        return None
+    line = completed.stdout.strip()
+    if not line:
+        return None
+    metadata, actual_path = line.split("\t", maxsplit=1)
+    if actual_path != relative_path:
+        return None
+    mode, object_type, object_id = metadata.split(" ", maxsplit=2)
+    return TreeEntry(mode=mode, object_type=object_type, object_id=object_id)
+
+
+def _load_blob_bytes(root: Path, object_id: str) -> bytes:
+    completed = _git(root, "cat-file", "blob", object_id, text=False)
+    if completed.returncode != 0:
+        raise ValueError(f"missing git blob {object_id}")
+    return completed.stdout
+
+
+def _validate_bootstrap_anchor(
+    root: Path,
+    base_revision: str,
+) -> tuple[dict[str, BlobReference], list[str]]:
+    failures: list[str] = []
+    if not _is_ancestor(root, base_revision, BOOTSTRAP_ANCHOR):
+        failures.append(
+            "bootstrap anchor "
+            f"{BOOTSTRAP_ANCHOR} is not on the reviewed lineage after {base_revision}"
+        )
+        return {}, failures
+    if not _is_ancestor(root, BOOTSTRAP_ANCHOR, "HEAD"):
+        failures.append(f"bootstrap anchor {BOOTSTRAP_ANCHOR} is not on the HEAD lineage")
+        return {}, failures
+
+    references: dict[str, BlobReference] = {}
+    for relative_path, frozen in FROZEN_BOOTSTRAP_FILES.items():
+        entry = _load_tree_entry(root, BOOTSTRAP_ANCHOR, relative_path)
+        if entry is None:
+            failures.append(f"{relative_path}: bootstrap anchor {BOOTSTRAP_ANCHOR} is missing")
+            continue
+        if (
+            entry.object_type != "blob"
+            or entry.mode != frozen.mode
+            or entry.object_id != frozen.blob_id
+        ):
+            failures.append(
+                f"{relative_path}: bootstrap anchor {BOOTSTRAP_ANCHOR} "
+                "does not match the frozen blob"
+            )
+            continue
+        content = _load_blob_bytes(root, entry.object_id)
+        if hashlib.sha256(content).hexdigest() != frozen.sha256:
+            failures.append(
+                f"{relative_path}: bootstrap anchor {BOOTSTRAP_ANCHOR} "
+                "does not match the frozen digest"
+            )
+            continue
+        references[relative_path] = BlobReference(
+            revision=BOOTSTRAP_ANCHOR,
+            entry=entry,
+            content=content,
+        )
+    return references, failures
+
+
+def _resolve_references(
+    root: Path,
+    base_revision: str,
+) -> tuple[dict[str, BlobReference], list[str]]:
+    base_entries = {
+        relative_path: _load_tree_entry(root, base_revision, relative_path)
+        for relative_path in APPEND_ONLY_FILES
+    }
+    missing_paths = [path for path, entry in base_entries.items() if entry is None]
+    if not missing_paths:
+        references = {
+            relative_path: BlobReference(
+                revision=base_revision,
+                entry=base_entries[relative_path],
+                content=_load_blob_bytes(root, base_entries[relative_path].object_id),
+            )
+            for relative_path in APPEND_ONLY_FILES
+            if base_entries[relative_path] is not None
+        }
+        return references, []
+    if len(missing_paths) != len(APPEND_ONLY_FILES):
+        return {}, [
+            f"base revision {base_revision} inconsistently contains append-only files: "
+            + ", ".join(sorted(missing_paths))
+        ]
+    return _validate_bootstrap_anchor(root, base_revision)
+
+
+def _is_regular_non_symlink(path: Path) -> bool:
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return False
+    return stat.S_ISREG(mode) and not path.is_symlink()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate append-only governance files.")
     parser.add_argument("--root", default=".", help="Repository root")
@@ -60,22 +212,38 @@ def main() -> int:
         print(f"append-only-check: failed to resolve base revision for {base_ref}")
         return 1
 
-    failures: list[str] = []
+    references, failures = _resolve_references(root, base_revision)
     for relative_path in APPEND_ONLY_FILES:
+        reference = references.get(relative_path)
+        if reference is None:
+            continue
+        head_entry = _load_tree_entry(root, "HEAD", relative_path)
+        if head_entry is None:
+            failures.append(f"{relative_path}: file is missing from the HEAD tree")
+            continue
+        if head_entry.object_type != "blob":
+            failures.append(f"{relative_path}: HEAD tree entry is not a blob")
+            continue
+        if head_entry.mode != reference.entry.mode:
+            failures.append(
+                f"{relative_path}: HEAD mode {head_entry.mode} does not match {reference.revision}"
+            )
+            continue
+        head_bytes = _load_blob_bytes(root, head_entry.object_id)
+        if not head_bytes.startswith(reference.content):
+            failures.append(
+                f"{relative_path}: HEAD blob is not a pure append of {reference.revision}"
+            )
+            continue
         current_path = root / relative_path
-        if not current_path.exists():
-            failures.append(f"{relative_path}: file is missing in the working tree")
+        if not _is_regular_non_symlink(current_path):
+            failures.append(
+                f"{relative_path}: working tree path must be a regular non-symlink file"
+            )
             continue
         current_bytes = current_path.read_bytes()
-        base_file = _git(root, "show", f"{base_revision}:{relative_path}", text=False)
-        if base_file.returncode != 0:
-            failures.append(f"{relative_path}: file is missing in base revision {base_revision}")
-            continue
-        base_bytes = base_file.stdout
-        if not current_bytes.startswith(base_bytes):
-            failures.append(
-                f"{relative_path}: current content is not a pure append of {base_revision}"
-            )
+        if current_bytes != head_bytes:
+            failures.append(f"{relative_path}: working tree content does not match HEAD")
 
     if failures:
         print("append-only-check: failed")
