@@ -83,7 +83,7 @@ def render_command(command, values):
     try:
         template_argv = shlex.split(command)
     except ValueError as exc:
-        raise ValueError(f"malformed command template: {exc}") from exc
+        raise ValueError(f"malformed command template {command!r}: {exc}") from exc
 
     if not template_argv:
         raise ValueError("rendered command is empty")
