@@ -7,7 +7,19 @@ from enum import StrEnum
 
 from af.framework.contracts import Procedure
 from af.framework.errors import InvalidRoutingPolicy, UnsupportedWork
-from af.framework.types import Classification, ProcedureDescriptor
+from af.framework.types import (
+    ARGUMENT_NAME_MAX_LENGTH,
+    ArgumentValueType,
+    Classification,
+    ProcedureArgumentDescriptor,
+    ProcedureDescriptor,
+    ProcedureEffect,
+    ProcedureRisk,
+    is_valid_argument_name,
+    is_valid_procedure_id,
+    is_valid_procedure_intent,
+    is_valid_procedure_version,
+)
 
 
 class OptimisationGoal(StrEnum):
@@ -31,20 +43,97 @@ class RoutingPolicy:
 class ProcedureRegistry:
     def __init__(self) -> None:
         self._procedures: dict[str, Procedure] = {}
+        self._descriptors: dict[str, ProcedureDescriptor] = {}
 
     def register(self, procedure: Procedure) -> None:
         if procedure.id in self._procedures:
             raise ValueError(f"procedure already registered: {procedure.id}")
+        descriptor = self._validated_descriptor(procedure)
         self._procedures[procedure.id] = procedure
+        self._descriptors[procedure.id] = descriptor
 
     def all(self) -> tuple[Procedure, ...]:
         return tuple(self._procedures.values())
 
     def catalogue(self) -> tuple[ProcedureDescriptor, ...]:
-        return tuple(procedure.selection_descriptor for procedure in self._procedures.values())
+        return tuple(self._descriptors.values())
 
     def get(self, procedure_id: str) -> Procedure | None:
         return self._procedures.get(procedure_id)
+
+    def descriptor(self, procedure_id: str) -> ProcedureDescriptor | None:
+        return self._descriptors.get(procedure_id)
+
+    @staticmethod
+    def _validated_descriptor(procedure: Procedure) -> ProcedureDescriptor:
+        if not is_valid_procedure_id(procedure.id):
+            raise ValueError(f"invalid procedure id: {procedure.id!r}")
+        if not is_valid_procedure_version(procedure.version):
+            raise ValueError(f"invalid procedure version: {procedure.version!r}")
+        descriptor = procedure.selection_descriptor
+        if not isinstance(descriptor, ProcedureDescriptor):
+            raise ValueError("procedure selection descriptor is invalid")
+        if descriptor.procedure_id != procedure.id:
+            raise ValueError(
+                "procedure selection descriptor must match the registered procedure id"
+            )
+        if descriptor.version != procedure.version:
+            raise ValueError(
+                "procedure selection descriptor must match the registered procedure version"
+            )
+        if not is_valid_procedure_id(descriptor.procedure_id):
+            raise ValueError("procedure selection descriptor has an invalid id")
+        if not is_valid_procedure_version(descriptor.version):
+            raise ValueError("procedure selection descriptor has an invalid version")
+        if not is_valid_procedure_intent(descriptor.intent):
+            raise ValueError("procedure selection descriptor has an invalid intent")
+        if not isinstance(descriptor.effect, ProcedureEffect):
+            raise ValueError("procedure selection descriptor has an invalid effect")
+        if not isinstance(descriptor.risk, ProcedureRisk):
+            raise ValueError("procedure selection descriptor has an invalid risk")
+        if type(descriptor.requires_confirmation) is not bool:
+            raise ValueError("procedure selection descriptor has an invalid confirmation policy")
+
+        seen_names: set[str] = set()
+        arguments: list[ProcedureArgumentDescriptor] = []
+        for argument in descriptor.arguments:
+            if not isinstance(argument, ProcedureArgumentDescriptor):
+                raise ValueError(
+                    "procedure selection descriptor has an invalid argument descriptor"
+                )
+            if argument.name in seen_names:
+                raise ValueError("procedure selection descriptor argument names must be unique")
+            if not is_valid_argument_name(argument.name):
+                raise ValueError(
+                    "procedure selection descriptor argument names must match the "
+                    f"{ARGUMENT_NAME_MAX_LENGTH}-character schema"
+                )
+            if not isinstance(argument.value_type, ArgumentValueType):
+                raise ValueError("procedure selection descriptor has an invalid argument type")
+            if argument.min_length < 0:
+                raise ValueError("procedure selection descriptor has an invalid minimum length")
+            if argument.max_length is not None and argument.max_length < argument.min_length:
+                raise ValueError("procedure selection descriptor has an invalid maximum length")
+            seen_names.add(argument.name)
+            arguments.append(
+                ProcedureArgumentDescriptor(
+                    name=argument.name,
+                    value_type=argument.value_type,
+                    min_length=argument.min_length,
+                    max_length=argument.max_length,
+                    allow_blank=argument.allow_blank,
+                )
+            )
+
+        return ProcedureDescriptor(
+            procedure_id=descriptor.procedure_id,
+            version=descriptor.version,
+            intent=descriptor.intent,
+            arguments=tuple(arguments),
+            effect=descriptor.effect,
+            risk=descriptor.risk,
+            requires_confirmation=descriptor.requires_confirmation,
+        )
 
 
 class LadderRouter:

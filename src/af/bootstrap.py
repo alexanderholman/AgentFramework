@@ -21,7 +21,12 @@ from af.framework.errors import InvalidProviderConfiguration
 from af.framework.pipeline import PipelineAgent
 from af.framework.reuse import InMemoryReuseStore, ReplayRegressionGate
 from af.framework.routing import LadderRouter, ProcedureRegistry, RoutingPolicy
-from af.framework.types import SelectorLocality
+from af.framework.types import (
+    SelectorLocality,
+    SelectorMetadata,
+    is_valid_selector_provider_id,
+    parse_probability,
+)
 from af.infrastructure.database import Database
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
@@ -61,9 +66,13 @@ class _FrameworkProvider(ServiceProvider):
         self,
         reuse_store: ReuseStore | None,
         selector: Selector | None,
+        selector_metadata: SelectorMetadata | None,
+        selector_confidence_threshold: float,
     ) -> None:
         self._reuse_store = reuse_store
         self._selector = selector
+        self._selector_metadata = selector_metadata
+        self._selector_confidence_threshold = selector_confidence_threshold
 
     def register(self, container: Container) -> None:
         registry = ProcedureRegistry()
@@ -86,9 +95,8 @@ class _FrameworkProvider(ServiceProvider):
             regression_gate=ReplayRegressionGate(),
             reuse_store=reuse_store,
             selector=self._selector,
-            selector_confidence_threshold=container.resolve_token(
-                Settings
-            ).selector_confidence_threshold,
+            selector_metadata=self._selector_metadata,
+            selector_confidence_threshold=self._selector_confidence_threshold,
         )
         container.instance(ProcedureRegistry, registry)
         container.instance(DeterministicVerifier, verifier)
@@ -133,9 +141,13 @@ def create_application(
 ) -> AFApplication:
     """Build an isolated application; tests and hosts can replace any provider."""
     resolved_settings = settings or Settings.from_environment()
+    selector_metadata = _resolve_selector_metadata(selector)
+    selector_confidence_threshold = _resolve_selector_confidence_threshold(
+        resolved_settings.selector_confidence_threshold
+    )
     if (
-        selector is not None
-        and selector.locality is SelectorLocality.REMOTE
+        selector_metadata is not None
+        and selector_metadata.locality is SelectorLocality.REMOTE
         and not resolved_settings.allow_remote_inference
     ):
         raise InvalidProviderConfiguration(
@@ -145,7 +157,12 @@ def create_application(
     container.instance(Settings, resolved_settings)
     providers: tuple[ServiceProvider, ...] = (
         _PersistenceProvider(resolved_settings, task_repository, trace_repository),
-        _FrameworkProvider(reuse_store, selector),
+        _FrameworkProvider(
+            reuse_store,
+            selector,
+            selector_metadata,
+            selector_confidence_threshold,
+        ),
         _ApplicationProvider(),
     )
     for provider in providers:
@@ -161,3 +178,25 @@ def create_application(
         traces=container.resolve_token(TraceRepository),
         verifier=container.resolve(DeterministicVerifier),
     )
+
+
+def _resolve_selector_metadata(selector: Selector | None) -> SelectorMetadata | None:
+    if selector is None:
+        return None
+    try:
+        provider_id = selector.name
+        locality = selector.locality
+    except Exception as error:
+        raise InvalidProviderConfiguration("selector provider metadata is invalid") from error
+    if not is_valid_selector_provider_id(provider_id) or not isinstance(locality, SelectorLocality):
+        raise InvalidProviderConfiguration("selector provider metadata is invalid")
+    return SelectorMetadata(provider_id=provider_id, locality=locality)
+
+
+def _resolve_selector_confidence_threshold(value: object) -> float:
+    threshold = parse_probability(value)
+    if threshold is None:
+        raise InvalidProviderConfiguration(
+            "selector confidence threshold must be a finite probability in [0, 1]"
+        )
+    return threshold

@@ -137,6 +137,17 @@ def test_rest_rejects_blank_prompt(application) -> None:  # type: ignore[no-unty
     assert application.tasks.list() == []
 
 
+def test_rest_rejects_too_long_prompt(application) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(create_http_app(application)) as client:
+        response = client.post(
+            "/api/v1/tasks",
+            json={"prompt": "a" * (PROMPT_MAX_LENGTH + 1)},
+        )
+
+    assert response.status_code == 422
+    assert application.tasks.list() == []
+
+
 def test_graphql_crud_shares_rest_repository(application) -> None:  # type: ignore[no-untyped-def]
     with TestClient(create_http_app(application)) as client:
         create_response = client.post(

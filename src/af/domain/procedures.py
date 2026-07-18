@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 
 from af.framework.errors import InvalidCharacter, InvalidSelectionProposal
 from af.framework.types import (
     PROMPT_MAX_LENGTH,
+    ArgumentValueType,
     Classification,
     ProcedureArgumentDescriptor,
     ProcedureDescriptor,
+    ProcedureEffect,
     ProcedureResult,
+    ProcedureRisk,
     RouteMetrics,
+    WorkRequest,
     WorkTier,
 )
 
@@ -36,6 +41,7 @@ class BaseProcedure(ABC):
     tier: WorkTier
     pure = False
     replay_safe = False
+    has_selection_grounding = False
     metrics: RouteMetrics
 
     @abstractmethod
@@ -49,6 +55,14 @@ class BaseProcedure(ABC):
     @abstractmethod
     def validate(self, classification: Classification) -> None:
         raise NotImplementedError
+
+    def selection_is_grounded(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+    ) -> bool:
+        del request, classification
+        return False
 
 
 class PureProcedureMixin:
@@ -65,6 +79,9 @@ class HelloProcedure(PureProcedureMixin, BaseProcedure):
         version=BaseProcedure.version,
         intent="system.hello",
         arguments=(),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
     )
     tier = WorkTier.STATIC
     metrics = RouteMetrics(cost=0, latency=0, intelligence=0)
@@ -85,7 +102,13 @@ class HelloProcedure(PureProcedureMixin, BaseProcedure):
 
 
 class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
+    _selection_pattern = re.compile(
+        r"^\s*(?:please\s+)?count\s+(?:the\s+letter\s+)?"
+        r"(?P<character>[^\W\d_])\s+in\s+(?P<text>.+?)\s*[?.!]*\s*$",
+        re.IGNORECASE,
+    )
     id = "character-count"
+    has_selection_grounding = True
     selection_descriptor = ProcedureDescriptor(
         procedure_id=id,
         version=BaseProcedure.version,
@@ -93,19 +116,22 @@ class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
         arguments=(
             ProcedureArgumentDescriptor(
                 name="text",
-                value_type=str,
+                value_type=ArgumentValueType.TEXT,
                 min_length=1,
                 max_length=PROMPT_MAX_LENGTH,
                 allow_blank=False,
             ),
             ProcedureArgumentDescriptor(
                 name="character",
-                value_type=str,
+                value_type=ArgumentValueType.TEXT,
                 min_length=1,
                 max_length=1,
                 allow_blank=True,
             ),
         ),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
     )
     tier = WorkTier.PROCEDURAL
     metrics = RouteMetrics(cost=1, latency=1, intelligence=1)
@@ -131,3 +157,16 @@ class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
         character = classification.arguments["character"]
         if not text or len(character) != 1:
             raise InvalidSelectionProposal("invalid arguments for character-count")
+
+    def selection_is_grounded(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+    ) -> bool:
+        match = self._selection_pattern.fullmatch(request.prompt)
+        if match is None:
+            return False
+        return classification.arguments == {
+            "text": match.group("text").strip(),
+            "character": match.group("character").casefold(),
+        }

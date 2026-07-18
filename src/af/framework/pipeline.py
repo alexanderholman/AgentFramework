@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from math import isfinite
 from typing import Never
 from uuid import uuid4
 
 from af.framework.contracts import (
     Classifier,
+    Procedure,
     RegressionGate,
     ReuseStore,
     Selector,
@@ -18,14 +18,23 @@ from af.framework.contracts import (
 from af.framework.errors import InvalidSelectionProposal, UnsupportedWork, VerificationFailed
 from af.framework.routing import LadderRouter, ProcedureRegistry
 from af.framework.types import (
+    ArgumentValueType,
     Classification,
     ExecutionOutcome,
     ProcedureDescriptor,
+    ProcedureEffect,
+    ProcedureRisk,
     RunTrace,
     SelectionDecision,
+    SelectionHandoffReason,
     SelectionProposal,
+    SelectionReasonCode,
+    SelectorLocality,
+    SelectorMetadata,
     TraceEvent,
     WorkRequest,
+    normalize_prompt,
+    parse_probability,
 )
 
 
@@ -43,6 +52,7 @@ class PipelineAgent:
         regression_gate: RegressionGate,
         reuse_store: ReuseStore,
         selector: Selector | None = None,
+        selector_metadata: SelectorMetadata | None = None,
         selector_confidence_threshold: float = 0.8,
     ) -> None:
         self._classifier = classifier
@@ -53,9 +63,14 @@ class PipelineAgent:
         self._regression_gate = regression_gate
         self._reuse_store = reuse_store
         self._selector = selector
+        self._selector_metadata = selector_metadata
         self._selector_confidence_threshold = selector_confidence_threshold
 
     def handle(self, request: WorkRequest) -> ExecutionOutcome:
+        request = WorkRequest(
+            prompt=normalize_prompt(request.prompt),
+            attributes=request.attributes,
+        )
         trace_id = str(uuid4())
         created_at = datetime.now(UTC)
         events: list[TraceEvent] = []
@@ -206,30 +221,22 @@ class PipelineAgent:
     ) -> tuple[Classification, str | None]:
         if classification.intent != "unknown":
             return classification, None
-        if self._selector is None:
+        if self._selector is None or self._selector_metadata is None:
             self._fail_closed_selection(
-                "human handoff: no selector installed",
+                SelectionReasonCode.NO_SELECTOR,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-        selector_label = self._selector_label()
-        threshold = self._validated_probability(
-            self._selector_confidence_threshold,
-            error_detail=f"{selector_label} handoff: invalid selector threshold",
-            trace_id=trace_id,
-            request=request,
-            classification=classification,
-            created_at=created_at,
-            events=events,
-        )
+        threshold = self._selector_confidence_threshold
+
         try:
             decision = self._selector.select(request.prompt, self._registry.catalogue())
         except Exception:
             self._fail_closed_selection(
-                f"{selector_label} handoff: selector failure",
+                SelectionReasonCode.SELECTOR_FAILURE,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -238,7 +245,6 @@ class PipelineAgent:
             )
         proposal, handoff_reason = self._normalize_selection_decision(
             decision,
-            selector_label=selector_label,
             trace_id=trace_id,
             request=request,
             classification=classification,
@@ -246,8 +252,17 @@ class PipelineAgent:
             events=events,
         )
         if proposal is None:
+            if handoff_reason is None:
+                self._fail_closed_selection(
+                    SelectionReasonCode.INVALID_DECISION,
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
             self._fail_closed_selection(
-                f"{selector_label} handoff: {handoff_reason}",
+                SelectionReasonCode(handoff_reason.value),
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -257,7 +272,6 @@ class PipelineAgent:
 
         validated_confidence = self._validated_probability(
             proposal.confidence,
-            error_detail=f"{selector_label} handoff: invalid confidence",
             trace_id=trace_id,
             request=request,
             classification=classification,
@@ -266,10 +280,7 @@ class PipelineAgent:
         )
         if validated_confidence < threshold:
             self._fail_closed_selection(
-                (
-                    f"{selector_label} handoff: confidence {validated_confidence:.2f} "
-                    f"below threshold {threshold:.2f}"
-                ),
+                SelectionReasonCode.BELOW_THRESHOLD,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -280,7 +291,17 @@ class PipelineAgent:
         procedure = self._registry.get(proposal.procedure_id)
         if procedure is None:
             self._fail_closed_selection(
-                f"{selector_label} handoff: unknown procedure {proposal.procedure_id}",
+                SelectionReasonCode.UNKNOWN_PROCEDURE,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        descriptor = self._registry.descriptor(procedure.id)
+        if descriptor is None:
+            self._fail_closed_selection(
+                SelectionReasonCode.UNKNOWN_PROCEDURE,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -288,9 +309,9 @@ class PipelineAgent:
                 events=events,
             )
 
-        if proposal.intent != procedure.selection_descriptor.intent:
+        if proposal.intent != descriptor.intent:
             self._fail_closed_selection(
-                f"{selector_label} handoff: unsupported intent {proposal.intent}",
+                SelectionReasonCode.UNSUPPORTED_INTENT,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -301,9 +322,8 @@ class PipelineAgent:
         selected_classification = Classification(
             intent=proposal.intent,
             arguments=self._validate_selection_arguments(
-                procedure.selection_descriptor,
+                descriptor,
                 proposal.arguments,
-                selector_label=selector_label,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -311,11 +331,11 @@ class PipelineAgent:
                 events=events,
             ),
             confidence=validated_confidence,
-            classifier=self._selector.name,
+            classifier=self._selector_metadata.provider_id,
         )
         if not procedure.supports(selected_classification):
             self._fail_closed_selection(
-                f"{selector_label} handoff: unsupported intent {proposal.intent}",
+                SelectionReasonCode.UNSUPPORTED_INTENT,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -326,8 +346,9 @@ class PipelineAgent:
         try:
             procedure.validate(selected_classification)
         except InvalidSelectionProposal as error:
+            del error
             self._fail_closed_selection(
-                f"{selector_label} handoff: {error}",
+                SelectionReasonCode.INVALID_ARGUMENTS,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -339,11 +360,21 @@ class PipelineAgent:
             TraceEvent(
                 "select",
                 (
-                    f"{selector_label} selected "
-                    f"{proposal.procedure_id}/{proposal.intent} "
+                    f"provider={self._selector_metadata.provider_id} "
+                    f"locality={self._selector_metadata.locality.value} "
+                    f"procedure={descriptor.procedure_id} "
                     f"confidence={validated_confidence:.2f}"
                 ),
             )
+        )
+        self._enforce_selection_policy(
+            request=request,
+            classification=selected_classification,
+            procedure=procedure,
+            descriptor=descriptor,
+            trace_id=trace_id,
+            created_at=created_at,
+            events=events,
         )
         return selected_classification, proposal.procedure_id
 
@@ -351,16 +382,15 @@ class PipelineAgent:
         self,
         decision: SelectionDecision,
         *,
-        selector_label: str,
         trace_id: str,
         request: WorkRequest,
         classification: Classification,
         created_at: datetime,
         events: list[TraceEvent],
-    ) -> tuple[SelectionProposal | None, str | None]:
+    ) -> tuple[SelectionProposal | None, SelectionHandoffReason | None]:
         if not isinstance(decision, SelectionDecision):
             self._fail_closed_selection(
-                f"{selector_label} handoff: invalid selector decision",
+                SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -371,16 +401,16 @@ class PipelineAgent:
         reason = decision.reason
         if proposal is not None and not isinstance(proposal, SelectionProposal):
             self._fail_closed_selection(
-                f"{selector_label} handoff: invalid selector decision",
+                SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-        if reason is not None and not isinstance(reason, str):
+        if reason is not None and not isinstance(reason, SelectionHandoffReason):
             self._fail_closed_selection(
-                f"{selector_label} handoff: invalid selector decision",
+                SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -388,36 +418,37 @@ class PipelineAgent:
                 events=events,
             )
         if proposal is not None and (
-            not isinstance(proposal.procedure_id, str) or not isinstance(proposal.intent, str)
+            not isinstance(proposal.procedure_id, str)
+            or not proposal.procedure_id.strip()
+            or not isinstance(proposal.intent, str)
+            or not proposal.intent.strip()
         ):
             self._fail_closed_selection(
-                f"{selector_label} handoff: invalid selector decision",
+                SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-        normalized_reason = None if reason is None else reason.strip()
         has_proposal = proposal is not None
-        has_reason = normalized_reason is not None and normalized_reason != ""
+        has_reason = reason is not None
         if has_proposal == has_reason:
             self._fail_closed_selection(
-                f"{selector_label} handoff: invalid selector decision",
+                SelectionReasonCode.INVALID_DECISION,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-        return proposal, normalized_reason
+        return proposal, reason
 
     def _validate_selection_arguments(
         self,
         descriptor: ProcedureDescriptor,
         arguments: dict[str, str],
         *,
-        selector_label: str,
         trace_id: str,
         request: WorkRequest,
         classification: Classification,
@@ -426,7 +457,7 @@ class PipelineAgent:
     ) -> dict[str, str]:
         if not isinstance(arguments, dict):
             self._fail_closed_selection(
-                f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                SelectionReasonCode.INVALID_ARGUMENTS,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -436,7 +467,7 @@ class PipelineAgent:
         expected_arguments = {argument.name: argument for argument in descriptor.arguments}
         if set(arguments) != set(expected_arguments):
             self._fail_closed_selection(
-                f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                SelectionReasonCode.INVALID_ARGUMENTS,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -446,9 +477,19 @@ class PipelineAgent:
         validated: dict[str, str] = {}
         for name, schema in expected_arguments.items():
             value = arguments[name]
-            if not isinstance(value, schema.value_type):
+            if schema.value_type is ArgumentValueType.TEXT:
+                if not isinstance(value, str):
+                    self._fail_closed_selection(
+                        SelectionReasonCode.INVALID_ARGUMENTS,
+                        trace_id=trace_id,
+                        request=request,
+                        classification=classification,
+                        created_at=created_at,
+                        events=events,
+                    )
+            else:
                 self._fail_closed_selection(
-                    f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                    SelectionReasonCode.INVALID_ARGUMENTS,
                     trace_id=trace_id,
                     request=request,
                     classification=classification,
@@ -457,7 +498,7 @@ class PipelineAgent:
                 )
             if not schema.allow_blank and not value.strip():
                 self._fail_closed_selection(
-                    f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                    SelectionReasonCode.INVALID_ARGUMENTS,
                     trace_id=trace_id,
                     request=request,
                     classification=classification,
@@ -468,7 +509,7 @@ class PipelineAgent:
                 schema.max_length is not None and len(value) > schema.max_length
             ):
                 self._fail_closed_selection(
-                    f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                    SelectionReasonCode.INVALID_ARGUMENTS,
                     trace_id=trace_id,
                     request=request,
                     classification=classification,
@@ -480,28 +521,18 @@ class PipelineAgent:
 
     def _validated_probability(
         self,
-        value: float,
+        value: object,
         *,
-        error_detail: str,
         trace_id: str,
         request: WorkRequest,
         classification: Classification,
         created_at: datetime,
         events: list[TraceEvent],
     ) -> float:
-        if type(value) is bool or not isinstance(value, (int, float)) or not isfinite(value):
+        normalized = parse_probability(value)
+        if normalized is None:
             self._fail_closed_selection(
-                error_detail,
-                trace_id=trace_id,
-                request=request,
-                classification=classification,
-                created_at=created_at,
-                events=events,
-            )
-        normalized = float(value)
-        if normalized < 0.0 or normalized > 1.0:
-            self._fail_closed_selection(
-                error_detail,
+                SelectionReasonCode.INVALID_CONFIDENCE,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -510,22 +541,91 @@ class PipelineAgent:
             )
         return normalized
 
-    def _selector_label(self) -> str:
-        if self._selector is None:
-            return "selector"
-        return f"{self._selector.name} [{self._selector.locality}]"
+    def _enforce_selection_policy(
+        self,
+        *,
+        request: WorkRequest,
+        classification: Classification,
+        procedure: Procedure,
+        descriptor: ProcedureDescriptor,
+        trace_id: str,
+        created_at: datetime,
+        events: list[TraceEvent],
+    ) -> None:
+        if self._selector_metadata is None:
+            self._fail_closed_selection(
+                SelectionReasonCode.NO_SELECTOR,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+                stage="select-policy",
+            )
+        if self._selector_metadata.locality is SelectorLocality.REMOTE:
+            self._fail_closed_selection(
+                SelectionReasonCode.REMOTE_SELECTION,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+                stage="select-policy",
+            )
+        if (
+            not procedure.pure
+            or descriptor.effect is not ProcedureEffect.READ_ONLY
+            or descriptor.risk is not ProcedureRisk.NONE
+            or descriptor.requires_confirmation
+        ):
+            self._fail_closed_selection(
+                SelectionReasonCode.POLICY_DENIED,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+                stage="select-policy",
+            )
+        if not procedure.has_selection_grounding:
+            self._fail_closed_selection(
+                SelectionReasonCode.GROUNDING_UNAVAILABLE,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+                stage="select-policy",
+            )
+        if not procedure.selection_is_grounded(request, classification):
+            self._fail_closed_selection(
+                SelectionReasonCode.GROUNDING_FAILED,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+                stage="select-policy",
+            )
+        events.append(
+            TraceEvent(
+                "select-policy",
+                self._selection_event_detail(SelectionReasonCode.APPROVED),
+            )
+        )
 
     def _fail_closed_selection(
         self,
-        detail: str,
+        reason_code: SelectionReasonCode,
         *,
         trace_id: str,
         request: WorkRequest,
         classification: Classification,
         created_at: datetime,
         events: list[TraceEvent],
+        stage: str = "select",
     ) -> Never:
-        events.append(TraceEvent("select", detail))
+        events.append(TraceEvent(stage, self._selection_event_detail(reason_code)))
         self._record_unsupported_trace(
             trace_id=trace_id,
             request=request,
@@ -534,6 +634,11 @@ class PipelineAgent:
             events=events,
         )
         raise UnsupportedWork(request.prompt, trace_id)
+
+    def _selection_event_detail(self, reason_code: SelectionReasonCode) -> str:
+        if self._selector_metadata is None:
+            return f"code={reason_code.value}"
+        return f"provider={self._selector_metadata.provider_id} code={reason_code.value}"
 
     def _record_unsupported_trace(
         self,

@@ -1,26 +1,37 @@
 from __future__ import annotations
 
 import math
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from af.bootstrap import create_application
 from af.config import Settings
+from af.domain.procedures import BaseProcedure
 from af.framework.errors import (
+    InvalidPrompt,
     InvalidProviderConfiguration,
     InvalidRoutingPolicy,
+    InvalidSelectionProposal,
     UnsupportedWork,
     VerificationFailed,
 )
-from af.framework.routing import OptimisationGoal, RoutingPolicy
+from af.framework.routing import OptimisationGoal, ProcedureRegistry, RoutingPolicy
 from af.framework.types import (
+    ArgumentValueType,
     ProcedureArgumentDescriptor,
     ProcedureDescriptor,
+    ProcedureEffect,
+    ProcedureResult,
+    ProcedureRisk,
+    RouteMetrics,
     SelectionDecision,
+    SelectionHandoffReason,
     SelectionProposal,
+    SelectionReasonCode,
     SelectorLocality,
     WorkRequest,
+    WorkTier,
 )
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
@@ -133,6 +144,97 @@ class FailingSelector:
         raise RuntimeError(f"provider exploded for {prompt}: secret-token")
 
 
+class StringRemoteSelector(RecordingSelector):
+    @property
+    def locality(self) -> SelectorLocality:
+        return cast(SelectorLocality, "remote")
+
+
+class MutableLocalitySelector(RecordingSelector):
+    @property
+    def locality(self) -> SelectorLocality:
+        return self._locality
+
+    def switch_to_remote(self) -> None:
+        self._locality = cast(SelectorLocality, SelectorLocality.REMOTE)
+
+
+class ExplodingNameSelector(RecordingSelector):
+    @property
+    def name(self) -> str:
+        raise RuntimeError("SECRET-name")
+
+
+class NamedSelector(RecordingSelector):
+    def __init__(self, name: str, decision: SelectionDecision) -> None:
+        super().__init__(decision)
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+
+class ExplodingLocalitySelector(RecordingSelector):
+    @property
+    def locality(self) -> SelectorLocality:
+        raise RuntimeError("SECRET-locality")
+
+
+class SideEffectProcedure(BaseProcedure):
+    id = "side-effect"
+    tier = WorkTier.PROCEDURAL
+    pure = False
+    replay_safe = False
+    metrics = RouteMetrics(cost=5, latency=5, intelligence=1)
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="side.effect",
+        arguments=(),
+        effect=ProcedureEffect.SIDE_EFFECT,
+        risk=ProcedureRisk.ELEVATED,
+        requires_confirmation=True,
+    )
+
+    def __init__(self) -> None:
+        self.execute_calls = 0
+
+    def supports(self, classification) -> bool:  # type: ignore[no-untyped-def]
+        return classification.intent == "side.effect"
+
+    def execute(self, classification) -> ProcedureResult:  # type: ignore[no-untyped-def]
+        del classification
+        self.execute_calls += 1
+        return ProcedureResult(output="done")
+
+    def validate(self, classification) -> None:  # type: ignore[no-untyped-def]
+        if classification.intent != "side.effect" or classification.arguments:
+            raise InvalidSelectionProposal("invalid arguments for side-effect")
+
+
+class MalformedDescriptorProcedure(BaseProcedure):
+    tier = WorkTier.PROCEDURAL
+    pure = True
+    replay_safe = True
+    metrics = RouteMetrics(cost=1, latency=1, intelligence=1)
+
+    def __init__(self, *, procedure_id: str, descriptor: ProcedureDescriptor) -> None:
+        self.id = procedure_id
+        self.selection_descriptor = descriptor
+
+    def supports(self, classification) -> bool:  # type: ignore[no-untyped-def]
+        return classification.intent == self.selection_descriptor.intent
+
+    def execute(self, classification) -> ProcedureResult:  # type: ignore[no-untyped-def]
+        del classification
+        return ProcedureResult(output="ok")
+
+    def validate(self, classification) -> None:  # type: ignore[no-untyped-def]
+        if classification.intent != self.selection_descriptor.intent:
+            raise InvalidSelectionProposal("invalid intent")
+
+
 def test_local_selector_can_route_unknown_work_through_registered_procedure() -> None:
     selector = RecordingSelector(
         SelectionDecision(
@@ -150,10 +252,12 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
         selector=selector,
     )
 
-    outcome = application.agent.handle(WorkRequest(prompt="count r please"))
+    outcome = application.agent.handle(
+        WorkRequest(prompt="please count the letter r in strawberry")
+    )
     trace = application.traces.get(outcome.trace_id)
 
-    assert selector.prompts == ["count r please"]
+    assert selector.prompts == ["please count the letter r in strawberry"]
     assert selector.catalogues == [
         (
             ProcedureDescriptor(
@@ -161,6 +265,9 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 version="1.0.0",
                 intent="system.hello",
                 arguments=(),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
             ),
             ProcedureDescriptor(
                 procedure_id="character-count",
@@ -169,19 +276,22 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 arguments=(
                     ProcedureArgumentDescriptor(
                         name="text",
-                        value_type=str,
+                        value_type=ArgumentValueType.TEXT,
                         min_length=1,
                         max_length=10_000,
                         allow_blank=False,
                     ),
                     ProcedureArgumentDescriptor(
                         name="character",
-                        value_type=str,
+                        value_type=ArgumentValueType.TEXT,
                         min_length=1,
                         max_length=1,
                         allow_blank=True,
                     ),
                 ),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
             ),
         )
     ]
@@ -197,6 +307,9 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
         and "local" in event.detail
         and "0.95" in event.detail
         for event in trace.events
+    )
+    assert any(
+        event.stage == "select-policy" and "approved" in event.detail for event in trace.events
     )
 
 
@@ -227,11 +340,19 @@ def test_remote_selector_requires_explicit_opt_in() -> None:
         selector=selector,
     )
 
-    outcome = application.agent.handle(WorkRequest(prompt="count r please"))
-    trace = application.traces.get(outcome.trace_id)
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="please count the letter r in strawberry"))
 
-    assert outcome.output == "3"
-    assert any(event.stage == "select" and "remote" in event.detail for event in trace.events)
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select-policy"
+        and SelectionReasonCode.REMOTE_SELECTION.value in event.detail
+        for event in trace.events
+    )
 
 
 def test_unknown_work_fails_when_no_selector_is_installed(application) -> None:  # type: ignore[no-untyped-def]
@@ -239,12 +360,124 @@ def test_unknown_work_fails_when_no_selector_is_installed(application) -> None: 
         application.agent.handle(WorkRequest(prompt="invent a new universe"))
 
 
+def test_string_locality_selector_is_rejected_at_composition() -> None:
+    with pytest.raises(InvalidProviderConfiguration, match="selector provider metadata is invalid"):
+        create_application(
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+            selector=StringRemoteSelector(
+                SelectionDecision(
+                    proposal=SelectionProposal(
+                        procedure_id="character-count",
+                        intent="text.character_count",
+                        arguments={"text": "strawberry", "character": "r"},
+                        confidence=0.95,
+                    )
+                )
+            ),
+        )
+
+
+def test_selector_metadata_is_snapshotted_once() -> None:
+    selector = MutableLocalitySelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="character-count",
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=0.95,
+            )
+        )
+    )
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
+    selector.switch_to_remote()
+
+    outcome = application.agent.handle(
+        WorkRequest(prompt="please count the letter r in strawberry")
+    )
+    trace = application.traces.get(outcome.trace_id)
+
+    assert outcome.output == "3"
+    assert any(
+        event.stage == "select"
+        and "locality=local" in event.detail
+        and "locality=remote" not in event.detail
+        for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        ExplodingNameSelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=0.95,
+                )
+            )
+        ),
+        ExplodingLocalitySelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=0.95,
+                )
+            )
+        ),
+    ],
+)
+def test_selector_metadata_property_failures_are_sanitized(selector: RecordingSelector) -> None:
+    with pytest.raises(
+        InvalidProviderConfiguration,
+        match="selector provider metadata is invalid",
+    ) as captured:
+        create_application(
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+            selector=selector,
+        )
+
+    assert "SECRET" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["SECRET-provider", "remote://selector", "bad\nselector", "x" * 65],
+)
+def test_selector_provider_id_must_be_bounded_and_opaque(name: str) -> None:
+    with pytest.raises(InvalidProviderConfiguration, match="selector provider metadata is invalid"):
+        create_application(
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+            selector=NamedSelector(
+                name,
+                SelectionDecision(
+                    proposal=SelectionProposal(
+                        procedure_id="character-count",
+                        intent="text.character_count",
+                        arguments={"text": "strawberry", "character": "r"},
+                        confidence=0.95,
+                    )
+                ),
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("decision", "expected_reason"),
     [
         (
-            SelectionDecision(reason="ambiguous between registered procedures"),
-            "ambiguous",
+            SelectionDecision(reason=SelectionHandoffReason.AMBIGUOUS),
+            SelectionReasonCode.AMBIGUOUS.value,
         ),
         (
             SelectionDecision(
@@ -255,29 +488,29 @@ def test_unknown_work_fails_when_no_selector_is_installed(application) -> None: 
                     confidence=0.49,
                 )
             ),
-            "confidence",
+            SelectionReasonCode.BELOW_THRESHOLD.value,
         ),
         (
             SelectionDecision(
                 proposal=SelectionProposal(
-                    procedure_id="missing",
+                    procedure_id="SECRET-missing",
                     intent="text.character_count",
                     arguments={"text": "strawberry", "character": "r"},
                     confidence=0.95,
                 )
             ),
-            "unknown procedure",
+            SelectionReasonCode.UNKNOWN_PROCEDURE.value,
         ),
         (
             SelectionDecision(
                 proposal=SelectionProposal(
                     procedure_id="hello",
-                    intent="system.goodbye",
+                    intent="SECRET.goodbye",
                     arguments={},
                     confidence=0.95,
                 )
             ),
-            "unsupported intent",
+            SelectionReasonCode.UNSUPPORTED_INTENT.value,
         ),
         (
             SelectionDecision(
@@ -288,7 +521,7 @@ def test_unknown_work_fails_when_no_selector_is_installed(application) -> None: 
                     confidence=0.95,
                 )
             ),
-            "invalid arguments",
+            SelectionReasonCode.INVALID_ARGUMENTS.value,
         ),
     ],
 )
@@ -313,13 +546,14 @@ def test_invalid_selector_proposals_fail_closed_without_execution(
     assert any(
         event.stage == "select" and expected_reason in event.detail for event in trace.events
     )
+    assert "SECRET" not in " ".join(event.detail for event in trace.events)
 
 
 @pytest.mark.parametrize(
     "confidence",
-    [math.nan, math.inf, -math.inf, -0.01, 1.01],
+    [True, math.nan, math.inf, -math.inf, -0.01, 1.01, 10**400],
 )
-def test_invalid_selector_confidence_fails_closed_without_execution(confidence: float) -> None:
+def test_invalid_selector_confidence_fails_closed_without_execution(confidence: object) -> None:
     application = create_application(
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
@@ -344,49 +578,41 @@ def test_invalid_selector_confidence_fails_closed_without_execution(confidence: 
     assert trace.route is None
     assert all(event.stage != "execute" for event in trace.events)
     assert any(
-        event.stage == "select" and "invalid confidence" in event.detail for event in trace.events
-    )
-
-
-@pytest.mark.parametrize(
-    "threshold",
-    [math.nan, math.inf, -math.inf, -0.01, 1.01],
-)
-def test_invalid_selector_threshold_fails_closed_without_execution(threshold: float) -> None:
-    application = create_application(
-        settings=Settings(selector_confidence_threshold=threshold),
-        task_repository=InMemoryTaskRepository(),
-        trace_repository=InMemoryTraceRepository(),
-        selector=RecordingSelector(
-            SelectionDecision(
-                proposal=SelectionProposal(
-                    procedure_id="character-count",
-                    intent="text.character_count",
-                    arguments={"text": "strawberry", "character": "r"},
-                    confidence=0.95,
-                )
-            )
-        ),
-    )
-
-    with pytest.raises(UnsupportedWork) as captured:
-        application.agent.handle(WorkRequest(prompt="route this somehow"))
-
-    trace = application.traces.get(captured.value.trace_id)
-
-    assert trace.status == "unsupported"
-    assert trace.route is None
-    assert all(event.stage != "execute" for event in trace.events)
-    assert any(
-        event.stage == "select" and "invalid selector threshold" in event.detail
+        event.stage == "select" and SelectionReasonCode.INVALID_CONFIDENCE.value in event.detail
         for event in trace.events
     )
 
 
 @pytest.mark.parametrize(
+    "threshold",
+    [True, math.nan, math.inf, -math.inf, -0.01, 1.01, 10**400],
+)
+def test_invalid_selector_threshold_is_rejected_at_composition(threshold: object) -> None:
+    with pytest.raises(
+        InvalidProviderConfiguration,
+        match="selector confidence threshold must be a finite probability in \\[0, 1\\]",
+    ):
+        create_application(
+            settings=Settings(selector_confidence_threshold=cast(float, threshold)),
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+            selector=RecordingSelector(
+                SelectionDecision(
+                    proposal=SelectionProposal(
+                        procedure_id="character-count",
+                        intent="text.character_count",
+                        arguments={"text": "strawberry", "character": "r"},
+                        confidence=0.95,
+                    )
+                )
+            ),
+        )
+
+
+@pytest.mark.parametrize(
     ("decision", "expected_reason"),
     [
-        (SelectionDecision(), "invalid selector decision"),
+        (SelectionDecision(), SelectionReasonCode.INVALID_DECISION.value),
         (
             SelectionDecision(
                 proposal=SelectionProposal(
@@ -395,11 +621,14 @@ def test_invalid_selector_threshold_fails_closed_without_execution(threshold: fl
                     arguments={"text": "strawberry", "character": "r"},
                     confidence=0.95,
                 ),
-                reason="ambiguous",
+                reason=SelectionHandoffReason.AMBIGUOUS,
             ),
-            "invalid selector decision",
+            SelectionReasonCode.INVALID_DECISION.value,
         ),
-        (SelectionDecision(reason="   "), "invalid selector decision"),
+        (
+            cast(SelectionDecision, SelectionDecision(reason=cast(Any, "SECRET-ambiguous"))),
+            SelectionReasonCode.INVALID_DECISION.value,
+        ),
     ],
 )
 def test_malformed_selector_decisions_fail_closed_without_execution(
@@ -423,6 +652,7 @@ def test_malformed_selector_decisions_fail_closed_without_execution(
     assert any(
         event.stage == "select" and expected_reason in event.detail for event in trace.events
     )
+    assert "SECRET" not in " ".join(event.detail for event in trace.events)
 
 
 @pytest.mark.parametrize(
@@ -464,7 +694,8 @@ def test_selector_argument_validation_fails_closed_without_execution(
     assert trace.route is None
     assert all(event.stage != "execute" for event in trace.events)
     assert any(
-        event.stage == "select" and "invalid arguments" in event.detail for event in trace.events
+        event.stage == "select" and SelectionReasonCode.INVALID_ARGUMENTS.value in event.detail
+        for event in trace.events
     )
 
 
@@ -485,10 +716,174 @@ def test_selector_failures_are_sanitized_and_fail_closed() -> None:
     assert all(event.stage != "execute" for event in trace.events)
     assert any(
         event.stage == "select"
-        and "selector failure" in event.detail
+        and SelectionReasonCode.SELECTOR_FAILURE.value in event.detail
         and "secret-token" not in event.detail
         for event in trace.events
     )
+
+
+def test_selector_misroute_fails_grounding_policy_without_execution() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=0.95,
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(
+            WorkRequest(prompt="Please calculate the escape velocity of Earth")
+        )
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select-policy"
+        and SelectionReasonCode.GROUNDING_FAILED.value in event.detail
+        for event in trace.events
+    )
+
+
+def test_selected_side_effect_procedure_is_denied_before_execution() -> None:
+    selector = RecordingSelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="side-effect",
+                intent="side.effect",
+                arguments={},
+                confidence=0.95,
+            )
+        )
+    )
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
+    procedure = SideEffectProcedure()
+    application.container.resolve(ProcedureRegistry).register(procedure)
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="perform the side effect"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert procedure.execute_calls == 0
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert any(
+        event.stage == "select-policy" and SelectionReasonCode.POLICY_DENIED.value in event.detail
+        for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [cast(str, None), "", "   ", "a" * 10_001],
+)
+def test_agent_public_boundary_rejects_invalid_prompts_without_tracing(prompt: str) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(InvalidPrompt):
+        application.agent.handle(WorkRequest(prompt=prompt))
+
+    assert application.traces.list() == []
+
+
+@pytest.mark.parametrize(
+    ("procedure_id", "descriptor"),
+    [
+        (
+            "character-count",
+            ProcedureDescriptor(
+                procedure_id="different-id",
+                version="1.0.0",
+                intent="text.character_count",
+                arguments=(),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
+            ),
+        ),
+        (
+            "character-count",
+            ProcedureDescriptor(
+                procedure_id="character-count",
+                version="1.0.0",
+                intent="text.character_count",
+                arguments=(
+                    ProcedureArgumentDescriptor(
+                        name="text",
+                        value_type=ArgumentValueType.TEXT,
+                        min_length=1,
+                        max_length=10_000,
+                        allow_blank=False,
+                    ),
+                    ProcedureArgumentDescriptor(
+                        name="text",
+                        value_type=ArgumentValueType.TEXT,
+                        min_length=1,
+                        max_length=1,
+                        allow_blank=False,
+                    ),
+                ),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
+            ),
+        ),
+        (
+            "character-count",
+            cast(
+                ProcedureDescriptor,
+                ProcedureDescriptor(
+                    procedure_id="character-count",
+                    version="1.0.0",
+                    intent="text.character_count",
+                    arguments=(
+                        cast(
+                            ProcedureArgumentDescriptor,
+                            ProcedureArgumentDescriptor(
+                                name="text",
+                                value_type=cast(ArgumentValueType, "python.type"),
+                                min_length=1,
+                                max_length=10_000,
+                                allow_blank=False,
+                            ),
+                        ),
+                    ),
+                    effect=ProcedureEffect.READ_ONLY,
+                    risk=ProcedureRisk.NONE,
+                    requires_confirmation=False,
+                ),
+            ),
+        ),
+    ],
+)
+def test_registry_rejects_malformed_selection_descriptors(
+    procedure_id: str,
+    descriptor: ProcedureDescriptor,
+) -> None:
+    registry = ProcedureRegistry()
+
+    with pytest.raises(ValueError):
+        registry.register(
+            MalformedDescriptorProcedure(procedure_id=procedure_id, descriptor=descriptor)
+        )
 
 
 def test_routing_policy_requires_one_or_two_explicit_goals() -> None:

@@ -33,12 +33,19 @@ class Procedure(Protocol):
     tier: WorkTier
     pure: bool
     replay_safe: bool
+    has_selection_grounding: bool
     metrics: RouteMetrics
     selection_descriptor: ProcedureDescriptor
 
     def supports(self, classification: Classification) -> bool: ...
 
     def validate(self, classification: Classification) -> None: ...
+
+    def selection_is_grounded(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+    ) -> bool: ...
 
     def execute(self, classification: Classification) -> ProcedureResult: ...
 
