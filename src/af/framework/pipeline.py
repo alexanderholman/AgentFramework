@@ -44,6 +44,12 @@ from af.framework.types import (
     parse_probability,
 )
 
+_HANDOFF_REASON_CODES = {
+    SelectionHandoffReason.AMBIGUOUS: SelectionReasonCode.AMBIGUOUS,
+    SelectionHandoffReason.UNAVAILABLE: SelectionReasonCode.UNAVAILABLE,
+    SelectionHandoffReason.UNSUPPORTED: SelectionReasonCode.UNSUPPORTED,
+}
+
 
 class PipelineAgent:
     """Coordinate AF capabilities; it contains no domain-specific work logic."""
@@ -349,11 +355,7 @@ class PipelineAgent:
                     created_at=created_at,
                     events=events,
                 )
-            handoff_reason_code = {
-                SelectionHandoffReason.AMBIGUOUS: SelectionReasonCode.AMBIGUOUS,
-                SelectionHandoffReason.UNAVAILABLE: SelectionReasonCode.UNAVAILABLE,
-                SelectionHandoffReason.UNSUPPORTED: SelectionReasonCode.UNSUPPORTED,
-            }.get(handoff_reason)
+            handoff_reason_code = _HANDOFF_REASON_CODES.get(handoff_reason)
             if handoff_reason_code is None:
                 self._fail_closed_selection(
                     SelectionReasonCode.INVALID_DECISION,
@@ -745,7 +747,7 @@ class PipelineAgent:
                 events=events,
                 stage="select-policy",
             )
-        if grounded is not True:
+        if type(grounded) is not bool or not grounded:
             self._fail_closed_selection(
                 SelectionReasonCode.GROUNDING_FAILED,
                 trace_id=trace_id,
