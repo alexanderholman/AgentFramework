@@ -196,7 +196,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
     )
     def manifest() -> str:
         routes = sorted(descriptor.procedure_id for descriptor in registry.catalogue())
-        tiers = sorted({procedure.tier.name.lower() for procedure in registry.all()})
+        tiers = sorted({descriptor.tier.name.lower() for descriptor in registry.catalogue()})
         return json.dumps(
             {
                 "name": "AF Agent Framework",

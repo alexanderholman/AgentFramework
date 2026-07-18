@@ -69,6 +69,7 @@ class SelectionReasonCode(StrEnum):
     POLICY_DENIED = "policy_denied"
     REMOTE_SELECTION = "remote_selection"
     SELECTOR_FAILURE = "selector_failure"
+    UNAVAILABLE = "unavailable"
     UNKNOWN_PROCEDURE = "unknown_procedure"
     UNSUPPORTED = "unsupported"
     UNSUPPORTED_INTENT = "unsupported_intent"
@@ -128,6 +129,10 @@ class ProcedureDescriptor:
     effect: ProcedureEffect
     risk: ProcedureRisk
     requires_confirmation: bool = False
+    tier: WorkTier = WorkTier.PROCEDURAL
+    pure: bool = False
+    replay_safe: bool = False
+    has_selection_grounding: bool = False
 
 
 @dataclass(frozen=True, slots=True)

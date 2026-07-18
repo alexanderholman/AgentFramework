@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import traceback
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -258,6 +259,89 @@ class GroundingFailureProcedure(BaseProcedure):
         raise RuntimeError("SECRET-grounding")
 
 
+class SecretValidationProcedure(BaseProcedure):
+    id = "secret-validation"
+    tier = WorkTier.PROCEDURAL
+    pure = True
+    replay_safe = True
+    has_selection_grounding = True
+    metrics = RouteMetrics(cost=1, latency=1, intelligence=1)
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="secret.validation",
+        arguments=(),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+
+    def __init__(self) -> None:
+        self.execute_calls = 0
+
+    def supports(self, classification: Classification) -> bool:
+        return classification.intent == "secret.validation"
+
+    def execute(self, classification: Classification) -> ProcedureResult:
+        del classification
+        self.execute_calls += 1
+        return ProcedureResult(output="done")
+
+    def validate(self, classification: Classification) -> None:
+        del classification
+        raise InvalidSelectionProposal("SECRET-validation")
+
+    def selection_is_grounded(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+    ) -> bool:
+        del request, classification
+        return True
+
+
+class SnapshotMutableProcedure(BaseProcedure):
+    id = "snapshot-mutable"
+    tier = WorkTier.PROCEDURAL
+    pure = True
+    replay_safe = True
+    has_selection_grounding = False
+    metrics = RouteMetrics(cost=1, latency=1, intelligence=1)
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="snapshot.mutable",
+        arguments=(),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+
+    def __init__(self, *, grounding_result: object = False) -> None:
+        self.execute_calls = 0
+        self._grounding_result = grounding_result
+
+    def supports(self, classification: Classification) -> bool:
+        return classification.intent == "snapshot.mutable"
+
+    def execute(self, classification: Classification) -> ProcedureResult:
+        del classification
+        self.execute_calls += 1
+        return ProcedureResult(output="done")
+
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "snapshot.mutable" or classification.arguments:
+            raise InvalidSelectionProposal("invalid arguments for snapshot-mutable")
+
+    def selection_is_grounded(
+        self,
+        request: WorkRequest,
+        classification: Classification,
+    ) -> bool:
+        del request, classification
+        return cast(bool, self._grounding_result)
+
+
 class MalformedDescriptorProcedure(BaseProcedure):
     tier = WorkTier.PROCEDURAL
     pure = True
@@ -313,6 +397,10 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 effect=ProcedureEffect.READ_ONLY,
                 risk=ProcedureRisk.NONE,
                 requires_confirmation=False,
+                tier=WorkTier.STATIC,
+                pure=True,
+                replay_safe=True,
+                has_selection_grounding=False,
             ),
             ProcedureDescriptor(
                 procedure_id="character-count",
@@ -337,6 +425,10 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 effect=ProcedureEffect.READ_ONLY,
                 risk=ProcedureRisk.NONE,
                 requires_confirmation=False,
+                tier=WorkTier.PROCEDURAL,
+                pure=True,
+                replay_safe=True,
+                has_selection_grounding=True,
             ),
         )
     ]
@@ -493,6 +585,14 @@ def test_selector_metadata_property_failures_are_sanitized(selector: RecordingSe
 
     assert "SECRET" not in str(captured.value)
     assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert "SECRET" not in "".join(
+        traceback.format_exception(
+            type(captured.value),
+            captured.value,
+            captured.value.__traceback__,
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -524,6 +624,10 @@ def test_selector_provider_id_must_be_bounded_and_opaque(name: str) -> None:
         (
             SelectionDecision(reason=SelectionHandoffReason.AMBIGUOUS),
             SelectionReasonCode.AMBIGUOUS.value,
+        ),
+        (
+            SelectionDecision(reason=SelectionHandoffReason.UNAVAILABLE),
+            SelectionReasonCode.UNAVAILABLE.value,
         ),
         (
             SelectionDecision(
@@ -794,12 +898,21 @@ def test_selector_failures_are_sanitized_and_fail_closed() -> None:
 
     assert trace.status == "unsupported"
     assert trace.route is None
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
     assert all(event.stage != "execute" for event in trace.events)
     assert any(
         event.stage == "select"
         and SelectionReasonCode.SELECTOR_FAILURE.value in event.detail
         and "secret-token" not in event.detail
         for event in trace.events
+    )
+    assert "SECRET" not in "".join(
+        traceback.format_exception(
+            type(captured.value),
+            captured.value,
+            captured.value.__traceback__,
+        )
     )
 
 
@@ -896,11 +1009,64 @@ def test_grounding_hook_failures_are_sanitized_and_fail_closed() -> None:
     assert procedure.execute_calls == 0
     assert trace.status == "unsupported"
     assert trace.route is None
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
     assert any(
         event.stage == "select-policy"
         and SelectionReasonCode.GROUNDING_FAILED.value in event.detail
         and "SECRET" not in event.detail
         for event in trace.events
+    )
+    assert "SECRET" not in "".join(
+        traceback.format_exception(
+            type(captured.value),
+            captured.value,
+            captured.value.__traceback__,
+        )
+    )
+
+
+def test_selected_procedure_validation_failures_are_sanitized_and_fail_closed() -> None:
+    selector = RecordingSelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="secret-validation",
+                intent="secret.validation",
+                arguments={},
+                confidence=0.95,
+            )
+        )
+    )
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
+    procedure = SecretValidationProcedure()
+    application.container.resolve(ProcedureRegistry).register(procedure)
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="trigger the secret validation path"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert procedure.execute_calls == 0
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert any(
+        event.stage == "select"
+        and SelectionReasonCode.INVALID_ARGUMENTS.value in event.detail
+        and "SECRET" not in event.detail
+        for event in trace.events
+    )
+    assert "SECRET" not in "".join(
+        traceback.format_exception(
+            type(captured.value),
+            captured.value,
+            captured.value.__traceback__,
+        )
     )
 
 
@@ -1150,6 +1316,96 @@ def test_registry_rejects_malformed_selection_descriptors(
         registry.register(
             MalformedDescriptorProcedure(procedure_id=procedure_id, descriptor=descriptor)
         )
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "message"),
+    [
+        ("tier", cast(WorkTier, 2), "invalid execution tier"),
+        ("pure", cast(bool, 1), "invalid purity policy"),
+        ("replay_safe", cast(bool, 1), "invalid replay safety policy"),
+        ("has_selection_grounding", cast(bool, 1), "invalid grounding policy"),
+    ],
+)
+def test_registry_rejects_invalid_procedure_safety_fields(
+    attribute: str,
+    value: object,
+    message: str,
+) -> None:
+    procedure = SnapshotMutableProcedure()
+    setattr(procedure, attribute, value)
+    registry = ProcedureRegistry()
+
+    with pytest.raises(ValueError, match=message):
+        registry.register(procedure)
+
+
+def test_selection_policy_uses_registered_grounding_snapshot() -> None:
+    selector = RecordingSelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="snapshot-mutable",
+                intent="snapshot.mutable",
+                arguments={},
+                confidence=0.95,
+            )
+        )
+    )
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
+    procedure = SnapshotMutableProcedure(grounding_result=True)
+    application.container.resolve(ProcedureRegistry).register(procedure)
+    procedure.has_selection_grounding = True
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="trigger the snapshot grounding path"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert procedure.execute_calls == 0
+    assert trace.status == "unsupported"
+    assert any(
+        event.stage == "select-policy"
+        and SelectionReasonCode.GROUNDING_UNAVAILABLE.value in event.detail
+        for event in trace.events
+    )
+
+
+def test_non_boolean_grounding_result_fails_closed_without_execution() -> None:
+    selector = RecordingSelector(
+        SelectionDecision(
+            proposal=SelectionProposal(
+                procedure_id="snapshot-mutable",
+                intent="snapshot.mutable",
+                arguments={},
+                confidence=0.95,
+            )
+        )
+    )
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=selector,
+    )
+    procedure = SnapshotMutableProcedure(grounding_result=1)
+    procedure.has_selection_grounding = True
+    application.container.resolve(ProcedureRegistry).register(procedure)
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="trigger the non-boolean grounding path"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert procedure.execute_calls == 0
+    assert trace.status == "unsupported"
+    assert any(
+        event.stage == "select-policy"
+        and SelectionReasonCode.GROUNDING_FAILED.value in event.detail
+        for event in trace.events
+    )
 
 
 def test_routing_policy_requires_one_or_two_explicit_goals() -> None:

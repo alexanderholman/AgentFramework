@@ -182,11 +182,16 @@ def create_application(
 def _resolve_selector_metadata(selector: Selector | None) -> SelectorMetadata | None:
     if selector is None:
         return None
+    metadata_is_invalid = False
     try:
         provider_id = selector.name
         locality = selector.locality
     except Exception:
-        raise InvalidProviderConfiguration("selector provider metadata is invalid") from None
+        metadata_is_invalid = True
+        provider_id = ""
+        locality = None
+    if metadata_is_invalid:
+        raise InvalidProviderConfiguration("selector provider metadata is invalid")
     if not is_valid_selector_provider_id(provider_id) or not isinstance(locality, SelectorLocality):
         raise InvalidProviderConfiguration("selector provider metadata is invalid")
     return SelectorMetadata(provider_id=provider_id, locality=locality)

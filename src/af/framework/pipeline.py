@@ -240,12 +240,16 @@ class PipelineAgent:
 
         regression_passed = verification.passed and (
             reused
-            or self._regression_gate.evaluate(
-                request,
-                classification,
-                procedure,
-                result,
-                self._verifier,
+            or (
+                descriptor.pure
+                and descriptor.replay_safe
+                and self._regression_gate.evaluate(
+                    request,
+                    classification,
+                    procedure,
+                    result,
+                    self._verifier,
+                )
             )
         )
         events.append(TraceEvent("test", "passed" if regression_passed else "not promotable"))
@@ -263,7 +267,7 @@ class PipelineAgent:
             intent=classification.intent,
             arguments=classification.arguments,
             route=procedure.id,
-            tier=procedure.tier.name.lower(),
+            tier=descriptor.tier.name.lower(),
             output=result.output,
             verified=verification.passed,
             reused=reused,
@@ -283,7 +287,7 @@ class PipelineAgent:
             output=result.output,
             intent=classification.intent,
             route=procedure.id,
-            tier=procedure.tier.name.lower(),
+            tier=descriptor.tier.name.lower(),
             status="completed",
             verified=True,
             reused=reused,
@@ -312,9 +316,13 @@ class PipelineAgent:
             )
         threshold = self._selector_confidence_threshold
 
+        selector_failed = False
         try:
             decision = self._selector.select(request.prompt, self._registry.catalogue())
         except Exception:
+            selector_failed = True
+            decision = None
+        if selector_failed:
             self._fail_closed_selection(
                 SelectionReasonCode.SELECTOR_FAILURE,
                 trace_id=trace_id,
@@ -341,8 +349,22 @@ class PipelineAgent:
                     created_at=created_at,
                     events=events,
                 )
+            handoff_reason_code = {
+                SelectionHandoffReason.AMBIGUOUS: SelectionReasonCode.AMBIGUOUS,
+                SelectionHandoffReason.UNAVAILABLE: SelectionReasonCode.UNAVAILABLE,
+                SelectionHandoffReason.UNSUPPORTED: SelectionReasonCode.UNSUPPORTED,
+            }.get(handoff_reason)
+            if handoff_reason_code is None:
+                self._fail_closed_selection(
+                    SelectionReasonCode.INVALID_DECISION,
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
             self._fail_closed_selection(
-                SelectionReasonCode(handoff_reason.value),
+                handoff_reason_code,
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
@@ -441,10 +463,12 @@ class PipelineAgent:
                 events=events,
             )
 
+        invalid_selected_classification = False
         try:
             procedure.validate(selected_classification)
-        except InvalidSelectionProposal as error:
-            del error
+        except InvalidSelectionProposal:
+            invalid_selected_classification = True
+        if invalid_selected_classification:
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_ARGUMENTS,
                 trace_id=trace_id,
@@ -478,7 +502,7 @@ class PipelineAgent:
 
     def _normalize_selection_decision(
         self,
-        decision: SelectionDecision,
+        decision: object,
         *,
         trace_id: str,
         request: WorkRequest,
@@ -681,7 +705,7 @@ class PipelineAgent:
                 stage="select-policy",
             )
         if (
-            not procedure.pure
+            not descriptor.pure
             or descriptor.effect is not ProcedureEffect.READ_ONLY
             or descriptor.risk is not ProcedureRisk.NONE
             or descriptor.requires_confirmation
@@ -695,7 +719,7 @@ class PipelineAgent:
                 events=events,
                 stage="select-policy",
             )
-        if not procedure.has_selection_grounding:
+        if not descriptor.has_selection_grounding:
             self._fail_closed_selection(
                 SelectionReasonCode.GROUNDING_UNAVAILABLE,
                 trace_id=trace_id,
@@ -705,9 +729,13 @@ class PipelineAgent:
                 events=events,
                 stage="select-policy",
             )
+        grounding_failed = False
         try:
             grounded = procedure.selection_is_grounded(request, classification)
         except Exception:
+            grounding_failed = True
+            grounded = False
+        if grounding_failed:
             self._fail_closed_selection(
                 SelectionReasonCode.GROUNDING_FAILED,
                 trace_id=trace_id,
@@ -717,7 +745,7 @@ class PipelineAgent:
                 events=events,
                 stage="select-policy",
             )
-        if not grounded:
+        if grounded is not True:
             self._fail_closed_selection(
                 SelectionReasonCode.GROUNDING_FAILED,
                 trace_id=trace_id,

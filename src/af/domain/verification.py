@@ -33,9 +33,11 @@ class DeterministicVerifier:
                 passed, "static greeting matched" if passed else "greeting mismatch"
             )
         if classification.intent == "text.character_count":
-            text = classification.arguments["text"].casefold()
+            text = classification.arguments["text"]
             character = classification.arguments["character"].casefold()
-            passed = result.output == str(text.count(character))
+            passed = result.output == str(
+                sum(1 for candidate in text if candidate.casefold() == character)
+            )
             return VerificationResult(
                 passed,
                 "independent count matched" if passed else "independent count mismatch",

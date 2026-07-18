@@ -123,6 +123,8 @@ def test_mcp_count_characters_uses_typed_route_without_selector() -> None:
                 ("ends?", "?", "1"),
                 ("line 1\nline 2", "\n", "1"),
                 ("mañana", "ñ", "1"),
+                ("Straße", "s", "1"),
+                ("Straße", "ß", "1"),
                 ("a" * PROMPT_MAX_LENGTH, "a", str(PROMPT_MAX_LENGTH)),
             ]
 

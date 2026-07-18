@@ -22,6 +22,16 @@ def test_count_character_rejects_more_than_one_character() -> None:
 
 
 @pytest.mark.parametrize(
+    ("character", "expected"),
+    [("s", 1), ("ß", 1)],
+)
+def test_count_character_matches_caseless_source_code_points_without_expansion(
+    character: str, expected: int
+) -> None:
+    assert count_character(text="Straße", character=character) == expected
+
+
+@pytest.mark.parametrize(
     ("prompt", "expected"),
     [
         ("how many rs in strawberry", {"text": "strawberry", "character": "r"}),

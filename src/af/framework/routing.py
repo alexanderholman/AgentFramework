@@ -17,6 +17,7 @@ from af.framework.types import (
     ProcedureDescriptor,
     ProcedureEffect,
     ProcedureRisk,
+    WorkTier,
     is_valid_argument_name,
     is_valid_procedure_id,
     is_valid_procedure_intent,
@@ -72,6 +73,14 @@ class ProcedureRegistry:
             raise ValueError(f"invalid procedure id: {procedure.id!r}")
         if not is_valid_procedure_version(procedure.version):
             raise ValueError(f"invalid procedure version: {procedure.version!r}")
+        if type(procedure.tier) is not WorkTier:
+            raise ValueError("procedure has an invalid execution tier")
+        if type(procedure.pure) is not bool:
+            raise ValueError("procedure has an invalid purity policy")
+        if type(procedure.replay_safe) is not bool:
+            raise ValueError("procedure has an invalid replay safety policy")
+        if type(procedure.has_selection_grounding) is not bool:
+            raise ValueError("procedure has an invalid grounding policy")
         descriptor = procedure.selection_descriptor
         if not isinstance(descriptor, ProcedureDescriptor):
             raise ValueError("procedure selection descriptor is invalid")
@@ -148,6 +157,10 @@ class ProcedureRegistry:
             effect=descriptor.effect,
             risk=descriptor.risk,
             requires_confirmation=descriptor.requires_confirmation,
+            tier=procedure.tier,
+            pure=procedure.pure,
+            replay_safe=procedure.replay_safe,
+            has_selection_grounding=procedure.has_selection_grounding,
         )
 
 
@@ -165,7 +178,10 @@ class LadderRouter:
         return min(candidates, key=self._score)
 
     def _score(self, procedure: Procedure) -> tuple[int, ...]:
-        score = [int(procedure.tier)]
+        descriptor = self._registry.descriptor(procedure.id)
+        if descriptor is None:
+            raise UnsupportedWork(procedure.id)
+        score = [int(descriptor.tier)]
         for goal in self._policy.goals:
             if goal is OptimisationGoal.CHEAPEST:
                 score.append(procedure.metrics.cost)
