@@ -729,3 +729,40 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+## Run #014 - Exact Push Head Append-Only Correction
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `3a0138c`
+- Requested test-first correction to preserve `03964ee` and Run #013 byte-for-byte while validating push append-only checks against the exact `github.event.after` commit instead of assuming the checked-out `HEAD`
+- Requirement to keep pull-request merge-base semantics unchanged, reject all-zero push heads, preserve the PR draft state, and append only this new record because source changes landed
+
+### Outputs
+- Added explicit append-only head resolution in `scripts/check_append_only.py` through `--head-ref` and `AF_APPEND_ONLY_HEAD_REF`, with fail-closed rejection for unresolved or all-zero push heads
+- Required the checked-out `HEAD` to match the expected exact push `after` commit before validation and kept exact push ancestry checks against that validated head instead of a merge-base substitute
+- Updated the AF Python workflow to pass `github.event.after` into append-only validation and to verify both push endpoints are available before the locked gate runs
+- Added focused governance regressions for a divergent checked-out head versus expected push `after`, all-zero push `after` rejection, and the new workflow environment contract
+
+### Verified Results
+- Ruff format check: 55 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 33 source files
+- Pytest: 208 passed, 1 warning
+- Coverage: 90.17 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed
+- Smoke: `uv run af hello` -> `Hello, world!`
+- Smoke: `uv run af ask 'how many rs in strawberry'` -> `3`
+
+### Issues Encountered
+- The sandbox clone started shallow, so the existing first-PR append-only topology test initially could not resolve `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; validation proceeded after `git fetch --unshallow origin` and `git fetch origin master:refs/remotes/origin/master`
+- The sandbox image did not initially provide `uv` on `PATH`; validation proceeded after installing `uv` for the current user
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning; the suite remained green and no dependency changes were introduced
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Script: `[SCRIPT:af-dev]`
+
+---

@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 20
     env:
       AF_APPEND_ONLY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
+      AF_APPEND_ONLY_HEAD_REF: ${{ github.event_name == 'push' && github.event.after || '' }}
       AF_APPEND_ONLY_BASE_STRATEGY: ${{ github.event_name == 'push' && 'exact' || 'merge-base' }}
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
@@ -31,7 +32,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Ensure push before commit is available
+      - name: Ensure push before and after commits are available
         if: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -43,10 +44,18 @@ jobs:
           import subprocess
           import sys
 
-          sha = os.environ["AF_APPEND_ONLY_BASE_REF"]
-          if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
-              raise SystemExit(f"invalid AF_APPEND_ONLY_BASE_REF: {sha!r}")
-          if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], check=False).returncode == 0:
+          base_sha = os.environ["AF_APPEND_ONLY_BASE_REF"]
+          head_sha = os.environ["AF_APPEND_ONLY_HEAD_REF"]
+          if re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
+              raise SystemExit(f"invalid AF_APPEND_ONLY_BASE_REF: {base_sha!r}")
+          if re.fullmatch(r"[0-9a-f]{40}", head_sha) is None or head_sha == "0" * 40:
+              raise SystemExit(f"invalid AF_APPEND_ONLY_HEAD_REF: {head_sha!r}")
+          if (
+              subprocess.run(["git", "cat-file", "-e", f"{head_sha}^{{commit}}"], check=False).returncode
+              != 0
+          ):
+              raise SystemExit(f"missing checked-out push head commit: {head_sha}")
+          if subprocess.run(["git", "cat-file", "-e", f"{base_sha}^{{commit}}"], check=False).returncode == 0:
               raise SystemExit(0)
           token = os.environ.get("GITHUB_TOKEN", "")
           if not token:
@@ -60,14 +69,14 @@ jobs:
                   "fetch",
                   "--no-tags",
                   "origin",
-                  sha,
+                  base_sha,
               ],
               check=False,
           )
           if fetch.returncode != 0:
               raise SystemExit(fetch.returncode)
           raise SystemExit(
-              subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], check=False).returncode
+              subprocess.run(["git", "cat-file", "-e", f"{base_sha}^{{commit}}"], check=False).returncode
           )
           PY
 

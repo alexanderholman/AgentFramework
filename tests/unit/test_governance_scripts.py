@@ -145,12 +145,15 @@ def _run_append_only(
     *,
     base_ref: str | None = None,
     base_strategy: str | None = None,
+    head_ref: str | None = None,
     ci: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run the append-only script for a repo root with optional base-ref and CI mode."""
     command = [sys.executable, str(APPEND_ONLY_SCRIPT), "--root", str(root)]
     if base_ref is not None:
         command.extend(["--base-ref", base_ref])
+    if head_ref is not None:
+        command.extend(["--head-ref", head_ref])
     environment = {"PATH": environ.get("PATH", "")}
     if base_strategy is not None:
         environment["AF_APPEND_ONLY_BASE_STRATEGY"] = base_strategy
@@ -262,6 +265,49 @@ def test_append_only_check_rejects_non_ancestor_push_before_sha(tmp_path: Path) 
     assert f"push base {before_sha} is not an ancestor of HEAD" in completed.stdout
 
 
+def test_append_only_check_rejects_checked_out_head_that_differs_from_push_after_sha(
+    tmp_path: Path,
+) -> None:
+    _init_append_only_repo(tmp_path)
+    before_sha = _git_stdout("rev-parse", "HEAD", cwd=tmp_path)
+    (tmp_path / "specs.md").write_text("specs.md\nbase line\nold pushed append\n", encoding="utf-8")
+    _git("add", "specs.md", cwd=tmp_path)
+    _git("commit", "-m", "old pushed append", cwd=tmp_path)
+    pushed_after_sha = _git_stdout("rev-parse", "HEAD", cwd=tmp_path)
+    _git("checkout", "-b", "replacement", before_sha, cwd=tmp_path)
+    (tmp_path / "specs.md").write_text(
+        "specs.md\nbase line\nreplacement append\n", encoding="utf-8"
+    )
+    _git("add", "specs.md", cwd=tmp_path)
+    _git("commit", "-m", "replacement append", cwd=tmp_path)
+
+    completed = _run_append_only(
+        tmp_path,
+        base_ref=before_sha,
+        base_strategy="exact",
+        head_ref=pushed_after_sha,
+        ci=True,
+    )
+
+    assert completed.returncode == 1
+    assert "does not match expected head" in completed.stdout
+
+
+def test_append_only_check_rejects_all_zero_push_after_sha(tmp_path: Path) -> None:
+    _init_append_only_repo(tmp_path)
+
+    completed = _run_append_only(
+        tmp_path,
+        base_ref="HEAD",
+        base_strategy="exact",
+        head_ref="0" * 40,
+        ci=True,
+    )
+
+    assert completed.returncode == 1
+    assert "invalid head revision" in completed.stdout
+
+
 def test_append_only_check_rejects_all_zero_push_before_sha_without_bootstrap_lineage(
     tmp_path: Path,
 ) -> None:
@@ -320,6 +366,8 @@ def test_python_workflow_uses_pr_merge_base_and_push_exact_base_sha() -> None:
 
     assert "github.event.pull_request.base.sha" in workflow
     assert "github.event.before" in workflow
+    assert "github.event.after" in workflow
     assert "AF_APPEND_ONLY_BASE_STRATEGY" in workflow
     assert "github.event_name == 'push' && 'exact' || 'merge-base'" in workflow
-    assert "Ensure push before commit is available" in workflow
+    assert "AF_APPEND_ONLY_HEAD_REF" in workflow
+    assert "Ensure push before and after commits are available" in workflow

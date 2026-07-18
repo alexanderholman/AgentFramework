@@ -105,6 +105,15 @@ def _resolve_base_strategy(explicit: str | None) -> str:
     return MERGE_BASE_STRATEGY
 
 
+def _resolve_head_ref(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    environment_ref = os.environ.get("AF_APPEND_ONLY_HEAD_REF", "").strip()
+    if environment_ref:
+        return environment_ref
+    return "HEAD"
+
+
 def _resolve_commit(root: Path, revision: str) -> str | None:
     completed = _git(root, "rev-parse", "--verify", f"{revision}^{{commit}}")
     if completed.returncode != 0:
@@ -112,7 +121,35 @@ def _resolve_commit(root: Path, revision: str) -> str | None:
     return completed.stdout.strip()
 
 
-def _resolve_base_revision(root: Path, base_ref: str, strategy: str) -> BaseResolution:
+def _resolve_head_revision(root: Path, head_ref: str) -> tuple[str | None, str | None]:
+    if _is_all_zero_ref(head_ref):
+        return None, f"append-only-check: invalid head revision {head_ref}"
+    commit = _resolve_commit(root, head_ref)
+    if commit is None:
+        return None, f"append-only-check: failed to resolve head revision for {head_ref}"
+    current_head = _resolve_commit(root, "HEAD")
+    if current_head is None:
+        return None, "append-only-check: failed to resolve checked-out HEAD"
+    if commit != current_head:
+        message = (
+            "append-only-check: checked-out HEAD "
+            f"{current_head} does not match expected head {commit}"
+        )
+        return (
+            None,
+            message,
+        )
+    return commit, None
+
+
+def _resolve_base_revision(
+    root: Path,
+    base_ref: str,
+    strategy: str,
+    *,
+    head_revision: str,
+    head_ref: str,
+) -> BaseResolution:
     if strategy == EXACT_STRATEGY:
         if _is_all_zero_ref(base_ref):
             return BaseResolution(revision=None, use_bootstrap_topology=True)
@@ -122,13 +159,13 @@ def _resolve_base_revision(root: Path, base_ref: str, strategy: str) -> BaseReso
                 revision=None,
                 failure=f"append-only-check: failed to resolve base revision for {base_ref}",
             )
-        if not _is_ancestor(root, commit, "HEAD"):
+        if not _is_ancestor(root, commit, head_revision):
             return BaseResolution(
                 revision=None,
-                failure=f"append-only-check: push base {commit} is not an ancestor of HEAD",
+                failure=f"append-only-check: push base {commit} is not an ancestor of {head_ref}",
             )
         return BaseResolution(revision=commit)
-    completed = _git(root, "merge-base", "HEAD", base_ref)
+    completed = _git(root, "merge-base", head_revision, base_ref)
     if completed.returncode != 0:
         return BaseResolution(
             revision=None,
@@ -264,6 +301,11 @@ def main() -> int:
         default=None,
         help="Whether to resolve the base ref by merge-base or as an exact ancestor",
     )
+    parser.add_argument(
+        "--head-ref",
+        default=None,
+        help="Exact checked-out head revision expected for validation",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -273,7 +315,19 @@ def main() -> int:
         return 0
 
     base_strategy = _resolve_base_strategy(args.base_strategy)
-    base_resolution = _resolve_base_revision(root, base_ref, base_strategy)
+    head_ref = _resolve_head_ref(args.head_ref)
+    head_revision, head_failure = _resolve_head_revision(root, head_ref)
+    if head_failure is not None:
+        print(head_failure)
+        return 1
+    assert head_revision is not None
+    base_resolution = _resolve_base_revision(
+        root,
+        base_ref,
+        base_strategy,
+        head_revision=head_revision,
+        head_ref=head_ref,
+    )
     if base_resolution.failure is not None:
         print(base_resolution.failure)
         return 1
