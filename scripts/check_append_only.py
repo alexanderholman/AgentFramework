@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Validate that governed files are preserved as append-only Git blobs."""
 
 from __future__ import annotations
 
@@ -11,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APPEND_ONLY_FILES = ("specs.md", "decisions.md", "agent_runs.md")
+# Reviewed bootstrap anchor for the first PR topology where the base predates
+# the governed files. Its frozen entries below are part of the governance proof.
 BOOTSTRAP_ANCHOR = "5457fcdd70aa50162fb798ba5e0efefc89809ea2"
 
 
@@ -35,6 +38,8 @@ class BlobReference:
     content: bytes
 
 
+# Frozen reviewed bootstrap state for the imported governance history. These
+# digests must only change with an intentional governance update.
 FROZEN_BOOTSTRAP_FILES: dict[str, FrozenBootstrapFile] = {
     "specs.md": FrozenBootstrapFile(
         mode="100644",

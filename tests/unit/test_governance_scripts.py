@@ -14,6 +14,8 @@ import yaml
 SCRIPT = Path(__file__).parents[2] / "scripts" / "check_repeatable_script_refs.py"
 APPEND_ONLY_SCRIPT = Path(__file__).parents[2] / "scripts" / "check_append_only.py"
 REPO_ROOT = Path(__file__).parents[2]
+# Reviewed bootstrap anchor and first-PR base topology from this repository's
+# imported governance history.
 BOOTSTRAP_ANCHOR = "5457fcdd70aa50162fb798ba5e0efefc89809ea2"
 FIRST_PR_BASE = "4e27a97f7887dfb4554ff2d74f8262c23deb25a4"
 has_script_ref = cast(
