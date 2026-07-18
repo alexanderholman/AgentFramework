@@ -1358,6 +1358,8 @@ def test_selection_policy_uses_registered_grounding_snapshot() -> None:
     )
     procedure = SnapshotMutableProcedure(grounding_result=True)
     application.container.resolve(ProcedureRegistry).register(procedure)
+    # Mutate the live procedure after registration to prove the trusted boundary
+    # enforces the snapshotted policy rather than runtime flag changes.
     procedure.has_selection_grounding = True
 
     with pytest.raises(UnsupportedWork) as captured:

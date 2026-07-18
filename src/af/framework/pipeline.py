@@ -322,6 +322,8 @@ class PipelineAgent:
             )
         threshold = self._selector_confidence_threshold
 
+        # Raise after the except block so the sanitized UnsupportedWork carries no
+        # selector-provider exception context or cause.
         selector_failed = False
         try:
             decision = self._selector.select(request.prompt, self._registry.catalogue())
@@ -466,6 +468,8 @@ class PipelineAgent:
                 events=events,
             )
 
+        # Raise after the except block so invalid proposal details do not remain in
+        # the exception chain of the sanitized handoff.
         invalid_selected_classification = False
         try:
             procedure.validate(selected_classification)
@@ -732,6 +736,8 @@ class PipelineAgent:
                 events=events,
                 stage="select-policy",
             )
+        # Raise after the except block so provider grounding failures do not remain
+        # reachable through the sanitized UnsupportedWork traceback or context.
         grounding_failed = False
         try:
             grounded = procedure.selection_is_grounded(request, classification)

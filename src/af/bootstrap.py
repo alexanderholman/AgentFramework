@@ -182,6 +182,8 @@ def create_application(
 def _resolve_selector_metadata(selector: Selector | None) -> SelectorMetadata | None:
     if selector is None:
         return None
+    # Raise after the except block so the sanitized configuration error keeps no
+    # provider exception context or cause.
     metadata_is_invalid = False
     try:
         provider_id = selector.name
