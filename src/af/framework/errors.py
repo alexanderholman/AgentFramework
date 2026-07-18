@@ -17,6 +17,10 @@ class InvalidPrompt(AFError, ValueError):
         super().__init__(message)
 
 
+class InvalidPagination(AFError, ValueError):
+    """Raised when a paginated list request is outside AF's supported bounds."""
+
+
 class InvalidRoutingPolicy(AFError, ValueError):
     """Raised when a policy does not make an explicit one-or-two goal trade-off."""
 

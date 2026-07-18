@@ -37,6 +37,16 @@ def test_sqlite_task_repository_update_list_delete_and_missing(tmp_path) -> None
         application.tasks.delete(created.id)
 
 
+def test_sqlite_task_repository_paginates_lists(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    settings = Settings(database_url=f"sqlite+pysqlite:///{tmp_path / 'paged.sqlite3'}")
+    application = create_application(settings=settings)
+    first = application.tasks.create("how many rs in strawberry")
+    second = application.tasks.create("how many bs in blueberry")
+
+    assert application.tasks.list(limit=1, offset=0) == [first]
+    assert application.tasks.list(limit=1, offset=1) == [second]
+
+
 def test_sqlite_trace_repository_is_persistent_and_append_only(tmp_path) -> None:  # type: ignore[no-untyped-def]
     settings = Settings(database_url=f"sqlite+pysqlite:///{tmp_path / 'traces.sqlite3'}")
     first_application = create_application(settings=settings)

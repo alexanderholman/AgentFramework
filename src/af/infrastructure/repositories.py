@@ -29,8 +29,13 @@ class InMemoryTaskRepository:
         except KeyError as error:
             raise TaskNotFound(task_id) from error
 
-    def list(self) -> list[Task]:
-        return sorted(self._tasks.values(), key=lambda task: task.created_at)
+    def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
+        tasks = sorted(self._tasks.values(), key=lambda task: task.created_at)
+        if offset:
+            tasks = tasks[offset:]
+        if limit is not None:
+            tasks = tasks[:limit]
+        return tasks
 
     def delete(self, task_id: str) -> None:
         if task_id not in self._tasks:
@@ -58,9 +63,12 @@ class SqlAlchemyTaskRepository:
                 raise TaskNotFound(task_id)
             return self._to_domain(row)
 
-    def list(self) -> list[Task]:
+    def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
         with self._database.sessions() as session:
-            rows = session.scalars(select(TaskRow).order_by(TaskRow.created_at)).all()
+            statement = select(TaskRow).order_by(TaskRow.created_at).offset(offset)
+            if limit is not None:
+                statement = statement.limit(limit)
+            rows = session.scalars(statement).all()
             return [self._to_domain(row) for row in rows]
 
     def delete(self, task_id: str) -> None:

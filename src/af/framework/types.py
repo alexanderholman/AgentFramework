@@ -12,6 +12,9 @@ from af.framework.errors import InvalidPrompt
 
 # Shared user-prompt ceiling enforced by the application boundary and reflected by adapters.
 PROMPT_MAX_LENGTH = 10_000
+TASK_LIST_DEFAULT_LIMIT = 50
+TASK_LIST_MAX_LIMIT = 100
+TASK_LIST_MAX_OFFSET = 10_000
 PROCEDURE_ARGUMENT_COUNT_MAX = 16
 ROUTE_METRIC_MAX = 10_000
 SELECTOR_PROVIDER_ID_MAX_LENGTH = 64

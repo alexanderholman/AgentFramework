@@ -7,11 +7,13 @@
   <p class="meta">{{ task.intent }} via {{ task.route }} ({{ task.tier }}), verified={{ task.verified }}, reused={{ task.reused }}, trace={{ task.trace_id }}</p>
   {% if error %}<p role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="/tasks/{{ task.id }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="prompt">Replace prompt and re-execute</label>
     <input id="prompt" name="prompt" value="{{ prompt }}" required maxlength="10000">
     <button type="submit">Update</button>
   </form>
   <form method="post" action="/tasks/{{ task.id }}/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit">Delete</button>
   </form>
 {% endblock %}

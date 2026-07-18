@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime
 from typing import Literal
 
@@ -12,11 +13,14 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
 from af import __version__
+from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
 from af.domain.tasks import Task
 from af.framework.errors import AFError
 from af.framework.routing import ProcedureRegistry
 from af.framework.types import ExecutionOutcome
+
+MCP_INTERNAL_ERROR_MESSAGE = "internal MCP adapter error (MCP_INTERNAL_ERROR)"
 
 
 class OutcomeModel(BaseModel):
@@ -78,6 +82,38 @@ def _annotations(
     )
 
 
+def _invoke_mcp_tool[T](callback: Callable[[], T]) -> T:
+    af_error: AFError | None = None
+    unexpected_failure = False
+    try:
+        return callback()
+    except AFError as error:
+        af_error = error
+    except Exception:
+        unexpected_failure = True
+    if af_error is not None:
+        raise ToolError(str(af_error))
+    if unexpected_failure:
+        raise ToolError(MCP_INTERNAL_ERROR_MESSAGE)
+    raise AssertionError("unreachable")
+
+
+def _invoke_mcp_resource[T](callback: Callable[[], T]) -> T:
+    af_error: AFError | None = None
+    unexpected_failure = False
+    try:
+        return callback()
+    except AFError as error:
+        af_error = error
+    except Exception:
+        unexpected_failure = True
+    if af_error is not None:
+        raise ValueError(str(af_error))
+    if unexpected_failure:
+        raise ValueError(MCP_INTERNAL_ERROR_MESSAGE)
+    raise AssertionError("unreachable")
+
+
 def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]:
     resolved = application or create_application()
     controller = resolved.tasks
@@ -103,7 +139,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_hello() -> OutcomeModel:
-        return OutcomeModel.from_outcome(controller.execute("hello"))
+        return _invoke_mcp_tool(lambda: OutcomeModel.from_outcome(controller.execute("hello")))
 
     @server.tool(
         name="af_ask",
@@ -112,10 +148,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_ask(prompt: str) -> OutcomeModel:
-        try:
-            return OutcomeModel.from_outcome(controller.execute(prompt))
-        except AFError as error:
-            raise ToolError(str(error)) from error
+        return _invoke_mcp_tool(lambda: OutcomeModel.from_outcome(controller.execute(prompt)))
 
     @server.tool(
         name="af_count_characters",
@@ -124,10 +157,9 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_count_characters(text: str, character: str) -> OutcomeModel:
-        try:
-            return OutcomeModel.from_outcome(controller.count_characters(text, character))
-        except AFError as error:
-            raise ToolError(str(error)) from error
+        return _invoke_mcp_tool(
+            lambda: OutcomeModel.from_outcome(controller.count_characters(text, character))
+        )
 
     @server.tool(
         name="af_list_tasks",
@@ -136,8 +168,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_list_tasks() -> TaskListModel:
-        items = [TaskModel.from_task(task) for task in controller.list()]
-        return TaskListModel(items=items, total=len(items))
+        return _invoke_mcp_tool(lambda: _list_tasks(controller))
 
     @server.tool(
         name="af_get_task",
@@ -146,10 +177,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_get_task(task_id: str) -> TaskModel:
-        try:
-            return TaskModel.from_task(controller.get(task_id))
-        except AFError as error:
-            raise ToolError(str(error)) from error
+        return _invoke_mcp_tool(lambda: TaskModel.from_task(controller.get(task_id)))
 
     @server.tool(
         name="af_create_task",
@@ -158,10 +186,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_create_task(prompt: str) -> TaskModel:
-        try:
-            return TaskModel.from_task(controller.create(prompt))
-        except AFError as error:
-            raise ToolError(str(error)) from error
+        return _invoke_mcp_tool(lambda: TaskModel.from_task(controller.create(prompt)))
 
     @server.tool(
         name="af_update_task",
@@ -170,10 +195,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_update_task(task_id: str, prompt: str) -> TaskModel:
-        try:
-            return TaskModel.from_task(controller.update(task_id, prompt))
-        except AFError as error:
-            raise ToolError(str(error)) from error
+        return _invoke_mcp_tool(lambda: TaskModel.from_task(controller.update(task_id, prompt)))
 
     @server.tool(
         name="af_delete_task",
@@ -182,11 +204,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         structured_output=True,
     )
     def af_delete_task(task_id: str) -> DeleteResult:
-        try:
-            controller.delete(task_id)
-        except AFError as error:
-            raise ToolError(str(error)) from error
-        return DeleteResult(id=task_id, deleted=True)
+        return _invoke_mcp_tool(lambda: _delete_task(controller, task_id))
 
     @server.resource(
         "af://manifest",
@@ -195,27 +213,42 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         mime_type="application/json",
     )
     def manifest() -> str:
-        routes = sorted(descriptor.procedure_id for descriptor in registry.catalogue())
-        tiers = sorted({descriptor.tier.name.lower() for descriptor in registry.catalogue()})
-        return json.dumps(
-            {
-                "name": "AF Agent Framework",
-                "version": __version__,
-                "lifecycle": [
-                    "classify",
-                    "route",
-                    "execute",
-                    "verify",
-                    "record",
-                    "test",
-                    "reuse",
-                ],
-                "routes": routes,
-                "tiers": tiers,
-            }
+        return _invoke_mcp_resource(
+            lambda: json.dumps(
+                {
+                    "name": "AF Agent Framework",
+                    "version": __version__,
+                    "lifecycle": [
+                        "classify",
+                        "route",
+                        "execute",
+                        "verify",
+                        "record",
+                        "test",
+                        "reuse",
+                    ],
+                    "routes": sorted(
+                        descriptor.procedure_id for descriptor in registry.catalogue()
+                    ),
+                    "tiers": sorted(
+                        {descriptor.tier.name.lower() for descriptor in registry.catalogue()}
+                    ),
+                }
+            )
         )
 
     return server
+
+
+def _list_tasks(controller: TaskController) -> TaskListModel:
+    tasks = controller.list()
+    items = [TaskModel.from_task(task) for task in tasks]
+    return TaskListModel(items=items, total=len(items))
+
+
+def _delete_task(controller: TaskController, task_id: str) -> DeleteResult:
+    controller.delete(task_id)
+    return DeleteResult(id=task_id, deleted=True)
 
 
 def main() -> None:

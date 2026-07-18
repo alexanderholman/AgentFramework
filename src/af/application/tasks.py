@@ -8,9 +8,11 @@ from uuid import uuid4
 
 from af.domain.tasks import Task, TaskRepository
 from af.framework.contracts import Agent
-from af.framework.errors import InvalidCharacter, InvalidPrompt
+from af.framework.errors import InvalidCharacter, InvalidPagination, InvalidPrompt
 from af.framework.types import (
     PROMPT_MAX_LENGTH,
+    TASK_LIST_MAX_LIMIT,
+    TASK_LIST_MAX_OFFSET,
     Classification,
     ExecutionOutcome,
     WorkRequest,
@@ -51,8 +53,9 @@ class TaskService:
     def get(self, task_id: str) -> Task:
         return self._repository.get(task_id)
 
-    def list(self) -> list[Task]:
-        return self._repository.list()
+    def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
+        normalized_limit, normalized_offset = self._normalize_list_window(limit, offset)
+        return self._repository.list(limit=normalized_limit, offset=normalized_offset)
 
     def update(self, task_id: str, prompt: str) -> Task:
         existing = self._repository.get(task_id)
@@ -96,6 +99,22 @@ class TaskService:
         return normalize_prompt(prompt)
 
     @staticmethod
+    def _normalize_list_window(limit: int | None, offset: int) -> tuple[int | None, int]:
+        if limit is None:
+            normalized_limit = None
+        elif type(limit) is not int:
+            raise InvalidPagination("limit must be an integer")
+        elif limit < 1 or limit > TASK_LIST_MAX_LIMIT:
+            raise InvalidPagination(f"limit must be between 1 and {TASK_LIST_MAX_LIMIT}")
+        else:
+            normalized_limit = limit
+        if type(offset) is not int:
+            raise InvalidPagination("offset must be an integer")
+        if offset < 0 or offset > TASK_LIST_MAX_OFFSET:
+            raise InvalidPagination(f"offset must be between 0 and {TASK_LIST_MAX_OFFSET}")
+        return normalized_limit, offset
+
+    @staticmethod
     def _normalize_count_text(text: str) -> str:
         if not isinstance(text, str):
             raise InvalidPrompt("prompt must be a string")
@@ -127,8 +146,13 @@ class TaskController:
     def get(self, task_id: str) -> Task:
         return self._service.get(task_id)
 
-    def list(self) -> list[Task]:
-        return self._service.list()
+    def list(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Task]:
+        return self._service.list(limit=limit, offset=offset)
 
     def update(self, task_id: str, prompt: str) -> Task:
         return self._service.update(task_id, prompt)

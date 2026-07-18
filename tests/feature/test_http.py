@@ -1,17 +1,39 @@
 from __future__ import annotations
 
+import re
+
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from af.bootstrap import create_application
 from af.framework.types import PROMPT_MAX_LENGTH
+from af.infrastructure.repositories import InMemoryTaskRepository
+from af.infrastructure.tracing import InMemoryTraceRepository
+from af.interfaces.graphql import create_graphql_router
 from af.interfaces.http import create_http_app
+
+CSRF_PATTERN = re.compile(r'name="csrf_token" value="([^"]+)"')
+
+
+def _extract_csrf_token(html: str) -> str:
+    match = CSRF_PATTERN.search(html)
+    assert match is not None
+    return match.group(1)
+
+
+def _graphql_client(controller: object) -> TestClient:
+    app = FastAPI()
+    app.include_router(create_graphql_router(controller), prefix="/graphql")
+    return TestClient(app)
 
 
 def test_html_index_and_form_answer(application) -> None:  # type: ignore[no-untyped-def]
     with TestClient(create_http_app(application)) as client:
         index = client.get("/")
+        csrf_token = _extract_csrf_token(index.text)
         created = client.post(
             "/tasks",
-            data={"prompt": "how many rs in strawberry"},
+            data={"prompt": "how many rs in strawberry", "csrf_token": csrf_token},
             follow_redirects=True,
         )
 
@@ -25,23 +47,28 @@ def test_html_index_and_form_answer(application) -> None:  # type: ignore[no-unt
 def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-def]
     with TestClient(create_http_app(application)) as client:
         empty_list = client.get("/tasks")
+        index = client.get("/")
+        create_token = _extract_csrf_token(index.text)
         create_response = client.post(
             "/tasks",
-            data={"prompt": "how many rs in strawberry"},
+            data={"prompt": "how many rs in strawberry", "csrf_token": create_token},
             follow_redirects=False,
         )
         task_location = create_response.headers["location"]
 
         populated_list = client.get("/tasks")
         shown = client.get(task_location)
+        update_token = _extract_csrf_token(shown.text)
         update_response = client.post(
             task_location,
-            data={"prompt": "how many bs in blueberry"},
+            data={"prompt": "how many bs in blueberry", "csrf_token": update_token},
             follow_redirects=False,
         )
         updated = client.get(task_location)
+        delete_token = _extract_csrf_token(updated.text)
         delete_response = client.post(
             f"{task_location}/delete",
+            data={"csrf_token": delete_token},
             follow_redirects=False,
         )
         deleted_list = client.get("/tasks")
@@ -69,7 +96,11 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
 
 def test_html_rejects_blank_create_with_html_feedback(application) -> None:  # type: ignore[no-untyped-def]
     with TestClient(create_http_app(application)) as client:
-        response = client.post("/tasks", data={"prompt": "   "})
+        index = client.get("/")
+        response = client.post(
+            "/tasks",
+            data={"prompt": "   ", "csrf_token": _extract_csrf_token(index.text)},
+        )
 
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("text/html")
@@ -81,13 +112,21 @@ def test_html_rejects_too_long_update_with_html_feedback(application) -> None:  
     too_long = "a" * 10_001
 
     with TestClient(create_http_app(application)) as client:
+        index = client.get("/")
         created = client.post(
             "/tasks",
-            data={"prompt": "how many rs in strawberry"},
+            data={
+                "prompt": "how many rs in strawberry",
+                "csrf_token": _extract_csrf_token(index.text),
+            },
             follow_redirects=False,
         )
         task_location = created.headers["location"]
-        response = client.post(task_location, data={"prompt": too_long})
+        shown = client.get(task_location)
+        response = client.post(
+            task_location,
+            data={"prompt": too_long, "csrf_token": _extract_csrf_token(shown.text)},
+        )
 
     task_id = task_location.removeprefix("/tasks/")
     task = application.tasks.get(task_id)
@@ -98,6 +137,83 @@ def test_html_rejects_too_long_update_with_html_feedback(application) -> None:  
     assert 'maxlength="10000"' in response.text
     assert task.prompt == "how many rs in strawberry"
     assert task.output == "3"
+
+
+def test_html_sets_csrf_cookie_and_allows_valid_mutations(application) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(create_http_app(application)) as client:
+        index = client.get("/")
+        create_token = _extract_csrf_token(index.text)
+        created = client.post(
+            "/tasks",
+            data={"prompt": "how many rs in strawberry", "csrf_token": create_token},
+            follow_redirects=False,
+        )
+        created_task = client.get(created.headers["location"])
+        update_token = _extract_csrf_token(created_task.text)
+        updated = client.post(
+            created.headers["location"],
+            data={"prompt": "how many bs in blueberry", "csrf_token": update_token},
+            follow_redirects=False,
+        )
+        updated_task = client.get(updated.headers["location"])
+        delete_token = _extract_csrf_token(updated_task.text)
+        deleted = client.post(
+            f"{updated.headers['location']}/delete",
+            data={"csrf_token": delete_token},
+            follow_redirects=False,
+        )
+
+    assert "__Host-af-csrf=" in index.headers["set-cookie"]
+    assert "HttpOnly" in index.headers["set-cookie"]
+    assert "SameSite=strict" in index.headers["set-cookie"]
+    assert created.status_code == 303
+    assert updated.status_code == 303
+    assert deleted.status_code == 303
+
+
+def test_html_rejects_csrf_failures_before_mutation(application) -> None:  # type: ignore[no-untyped-def]
+    app = create_http_app(application)
+    with TestClient(app) as client_a, TestClient(app) as client_b:
+        index_a = client_a.get("/")
+        index_b = client_b.get("/")
+        token_a = _extract_csrf_token(index_a.text)
+        token_b = _extract_csrf_token(index_b.text)
+
+        missing = client_a.post("/tasks", data={"prompt": "how many rs in strawberry"})
+        forged = client_a.post(
+            "/tasks",
+            data={"prompt": "how many rs in strawberry", "csrf_token": "forged"},
+        )
+        cross_origin = client_a.post(
+            "/tasks",
+            data={"prompt": "how many rs in strawberry", "csrf_token": token_a},
+            headers={"origin": "https://evil.example"},
+        )
+        created = client_a.post(
+            "/tasks",
+            data={"prompt": "how many rs in strawberry", "csrf_token": token_a},
+            follow_redirects=False,
+        )
+        task_location = created.headers["location"]
+        mismatched_update = client_a.post(
+            task_location,
+            data={"prompt": "how many bs in blueberry", "csrf_token": token_b},
+        )
+        shown = client_a.get(task_location)
+        delete_token = _extract_csrf_token(shown.text)
+        forged_delete = client_a.post(
+            f"{task_location}/delete",
+            data={"csrf_token": f"{delete_token}forged"},
+        )
+
+    task_id = task_location.removeprefix("/tasks/")
+    task = application.tasks.get(task_id)
+
+    for response in (missing, forged, cross_origin, mismatched_update, forged_delete):
+        assert response.status_code == 403
+    assert application.tasks.list() == [task]
+    assert task.output == "3"
+    assert len(application.traces.list()) == 1
 
 
 def test_rest_crud_status_and_reexecution(application) -> None:  # type: ignore[no-untyped-def]
@@ -167,7 +283,7 @@ def test_graphql_crud_shares_rest_repository(application) -> None:  # type: igno
         rest_value = client.get(f"/api/v1/tasks/{created['id']}").json()
         list_response = client.post(
             "/graphql",
-            json={"query": "{ tasks { id output verified } }"},
+            json={"query": "{ tasks(limit: 10, offset: 0) { id output verified } }"},
         ).json()
         update_response = client.post(
             "/graphql",
@@ -292,3 +408,147 @@ def test_graphql_rejects_too_long_task_prompt(application) -> None:  # type: ign
     )
     assert payload["errors"][0]["path"] == ["createTask"]
     assert payload["errors"][0]["extensions"] == {"code": "INVALIDPROMPT"}
+
+
+def test_graphql_sanitizes_unexpected_resolver_failures() -> None:
+    class ExplodingController:
+        def list(self, *, limit=None, offset=0):  # type: ignore[no-untyped-def]
+            raise RuntimeError("SECRET-database-url")
+
+        def create(self, prompt: str):  # type: ignore[no-untyped-def]
+            raise RuntimeError("SECRET-database-url")
+
+        def execute(self, prompt: str):  # type: ignore[no-untyped-def]
+            raise RuntimeError("SECRET-database-url")
+
+    with _graphql_client(ExplodingController()) as client:
+        list_response = client.post("/graphql", json={"query": "{ tasks { id } }"})
+        create_response = client.post(
+            "/graphql",
+            json={
+                "query": "mutation Create($input: TaskInput!) { createTask(input: $input) { id } }",
+                "variables": {"input": {"prompt": "how many rs in strawberry"}},
+            },
+        )
+        hello_response = client.post("/graphql", json={"query": "{ hello }"})
+
+    for response, path in (
+        (list_response, ["tasks"]),
+        (create_response, ["createTask"]),
+        (hello_response, ["hello"]),
+    ):
+        payload = response.json()
+        assert response.status_code == 200
+        assert "SECRET" not in response.text
+        assert payload["data"] is None
+        assert payload["errors"][0]["message"] == "internal GraphQL adapter error"
+        assert payload["errors"][0]["extensions"] == {"code": "INTERNAL_ERROR"}
+        assert payload["errors"][0]["path"] == path
+
+
+def test_graphql_rejects_oversized_body_before_execution() -> None:
+    class RecordingController:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def create(self, prompt: str):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            raise AssertionError(prompt)
+
+    controller = RecordingController()
+    oversized_prompt = "x" * 40_000
+
+    with _graphql_client(controller) as client:
+        response = client.post(
+            "/graphql",
+            json={
+                "query": "mutation Create($input: TaskInput!) { createTask(input: $input) { id } }",
+                "variables": {"input": {"prompt": oversized_prompt}},
+            },
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "data": None,
+        "errors": [
+            {
+                "message": "graphql request body must be at most 32768 bytes",
+                "extensions": {"code": "REQUEST_TOO_LARGE"},
+            }
+        ],
+    }
+    assert controller.calls == 0
+
+
+def test_graphql_rejects_alias_bombs_before_execution() -> None:
+    class RecordingController:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, prompt: str):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return type("Outcome", (), {"output": "Hello, world!"})()
+
+    controller = RecordingController()
+    aliases = " ".join(f"a{i}: hello" for i in range(1000))
+
+    with _graphql_client(controller) as client:
+        response = client.post("/graphql", json={"query": f"{{ {aliases} }}"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": None,
+        "errors": [
+            {
+                "message": "graphql query exceeds the configured complexity limits",
+                "extensions": {"code": "QUERY_TOO_COMPLEX"},
+            }
+        ],
+    }
+    assert controller.calls == 0
+
+
+def test_graphql_tasks_paginates_at_repository_boundary() -> None:
+    class RecordingTaskRepository(InMemoryTaskRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[tuple[int | None, int]] = []
+
+        def list(self, *, limit: int | None = None, offset: int = 0):  # type: ignore[override]
+            self.calls.append((limit, offset))
+            return super().list(limit=limit, offset=offset)
+
+    repository = RecordingTaskRepository()
+    application = create_application(
+        task_repository=repository,
+        trace_repository=InMemoryTraceRepository(),
+    )
+    application.tasks.create("how many rs in strawberry")
+    application.tasks.create("how many bs in blueberry")
+
+    with TestClient(create_http_app(application)) as client:
+        response = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 1) { prompt output } }"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {"tasks": [{"prompt": "how many bs in blueberry", "output": "2"}]}
+    }
+    assert repository.calls[-1] == (1, 1)
+
+
+def test_graphql_rejects_invalid_pagination_bounds(application) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(create_http_app(application)) as client:
+        response = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 101, offset: -1) { id } }"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert payload["errors"][0]["message"] == "limit must be between 1 and 100"
+    assert payload["errors"][0]["path"] == ["tasks"]
+    assert payload["errors"][0]["extensions"] == {"code": "INVALIDPAGINATION"}

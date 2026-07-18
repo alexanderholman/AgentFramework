@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 
 import anyio
+import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from af.bootstrap import create_application
+from af.framework.routing import ProcedureRegistry
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
@@ -210,5 +212,60 @@ def test_mcp_reports_domain_failures_as_tool_errors(application) -> None:  # typ
             assert listed.structuredContent is not None
             assert listed.structuredContent["total"] == 0
             assert listed.structuredContent["items"] == []
+
+    anyio.run(scenario)
+
+
+def test_mcp_sanitizes_unexpected_tool_failures() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    def explode(_: str | None = None) -> None:
+        raise RuntimeError("SECRET-database-url")
+
+    application.tasks.list = lambda: explode()  # type: ignore[assignment]
+    application.tasks.create = lambda prompt: explode(prompt)  # type: ignore[assignment]
+    application.tasks.execute = lambda prompt: explode(prompt)  # type: ignore[assignment]
+
+    async def scenario() -> None:
+        server = create_mcp_server(application)
+        async with create_connected_server_and_client_session(server) as session:
+            for tool_name, arguments in (
+                ("af_list_tasks", {}),
+                ("af_create_task", {"prompt": "how many rs in strawberry"}),
+                ("af_hello", {}),
+            ):
+                result = await session.call_tool(tool_name, arguments)
+                serialized = json.dumps(result.model_dump())
+
+                assert result.isError is True
+                assert result.structuredContent is None
+                assert "SECRET" not in serialized
+                assert result.content[0].type == "text"
+                assert "MCP_INTERNAL_ERROR" in result.content[0].text
+                assert "SECRET" not in result.content[0].text
+
+    anyio.run(scenario)
+
+
+def test_mcp_sanitizes_unexpected_resource_failures() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    registry = application.container.resolve(ProcedureRegistry)
+    registry.catalogue = lambda: (_ for _ in ()).throw(RuntimeError("SECRET-manifest"))  # type: ignore[assignment]
+
+    async def scenario() -> None:
+        server = create_mcp_server(application)
+        async with create_connected_server_and_client_session(server) as session:
+            with pytest.raises(Exception) as error_info:
+                await session.read_resource("af://manifest")
+
+        message = str(error_info.value)
+        assert "SECRET" not in message
+        assert "MCP_INTERNAL_ERROR" in message
 
     anyio.run(scenario)
