@@ -139,7 +139,7 @@ def _run_append_only(
     command = [sys.executable, str(APPEND_ONLY_SCRIPT), "--root", str(root)]
     if base_ref is not None:
         command.extend(["--base-ref", base_ref])
-    environment = dict(environ)
+    environment = {"PATH": environ.get("PATH", "")}
     if ci:
         environment["CI"] = "true"
     return subprocess.run(
@@ -184,6 +184,8 @@ def test_append_only_check_has_explicit_local_skip_without_git_context(tmp_path:
 
 
 def test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology() -> None:
+    # This intentionally exercises the repository's reviewed first-PR topology:
+    # the real base predates the governed files and must fall back to the anchor.
     completed = _run_append_only(REPO_ROOT, base_ref=FIRST_PR_BASE, ci=True)
 
     assert completed.returncode == 0

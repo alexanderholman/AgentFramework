@@ -28,6 +28,7 @@ class TreeEntry:
 class FrozenBootstrapFile:
     mode: str
     blob_id: str
+    # Hex digest of the frozen blob bytes, checked in addition to the Git object ID.
     sha256: str
 
 
@@ -178,15 +179,15 @@ def _resolve_references(
     }
     missing_paths = [path for path, entry in base_entries.items() if entry is None]
     if not missing_paths:
-        references = {
-            relative_path: BlobReference(
+        references: dict[str, BlobReference] = {}
+        for relative_path in APPEND_ONLY_FILES:
+            entry = base_entries[relative_path]
+            assert entry is not None
+            references[relative_path] = BlobReference(
                 revision=base_revision,
-                entry=base_entries[relative_path],
-                content=_load_blob_bytes(root, base_entries[relative_path].object_id),
+                entry=entry,
+                content=_load_blob_bytes(root, entry.object_id),
             )
-            for relative_path in APPEND_ONLY_FILES
-            if base_entries[relative_path] is not None
-        }
         return references, []
     if len(missing_paths) != len(APPEND_ONLY_FILES):
         return {}, [
