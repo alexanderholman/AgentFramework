@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from af.bootstrap import AFApplication, create_application
+from af.config import Settings
+from af.domain.tasks import Task
+from af.framework.errors import InvalidPrompt
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces.graphql import create_graphql_router
 from af.interfaces.http import create_http_app
+from af.interfaces.http_body import HTTP_MAX_BODY_BYTES
 
 CSRF_PATTERN = re.compile(r'name="csrf_token" value="([^"]+)"')
 TEST_HOST = "127.0.0.1"
@@ -30,6 +36,24 @@ def _graphql_client(controller: object) -> TestClient:
 
 def _http_client(application: AFApplication, *, scheme: str = "http") -> TestClient:
     return TestClient(create_http_app(application), base_url=f"{scheme}://{TEST_HOST}")
+
+
+def _task(prompt: str, *, task_id: str = "task-1") -> Task:
+    now = datetime.now(UTC)
+    return Task(
+        id=task_id,
+        prompt=prompt,
+        output="3",
+        intent="text.character_count",
+        route="character-count",
+        tier="procedural",
+        status="completed",
+        verified=True,
+        reused=False,
+        trace_id=f"trace-{task_id}",
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def test_html_index_and_form_answer(application) -> None:  # type: ignore[no-untyped-def]
@@ -234,6 +258,71 @@ def test_html_rejects_csrf_failures_before_mutation(application) -> None:  # typ
     assert application.tasks.list() == [task]
     assert task.output == "3"
     assert len(application.traces.list()) == 1
+
+
+def test_http_accepts_max_unicode_prompt_bodies_but_rejects_10001_in_domain() -> None:
+    prompt = "😀" * PROMPT_MAX_LENGTH
+    too_long = prompt + "😀"
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    create_calls: list[str] = []
+
+    def create(prompt_value: str) -> Task:
+        create_calls.append(prompt_value)
+        if len(prompt_value) > PROMPT_MAX_LENGTH:
+            raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")
+        return _task(prompt_value, task_id=f"task-{len(create_calls)}")
+
+    application.tasks.create = create  # type: ignore[assignment]
+
+    with _http_client(application) as client:
+        index = client.get("/")
+        html_ok = client.post(
+            "/tasks",
+            data={"prompt": prompt, "csrf_token": _extract_csrf_token(index.text)},
+            follow_redirects=False,
+        )
+        html_too_long = client.post(
+            "/tasks",
+            data={"prompt": too_long, "csrf_token": _extract_csrf_token(index.text)},
+        )
+        rest_ok = client.post("/api/v1/tasks", json={"prompt": prompt})
+        rest_too_long = client.post("/api/v1/tasks", json={"prompt": too_long})
+        graphql_ok = client.post(
+            "/graphql",
+            json={
+                "query": "mutation Create($input: TaskInput!) { createTask(input: $input) { id } }",
+                "variables": {"input": {"prompt": prompt}},
+            },
+        )
+        graphql_too_long = client.post(
+            "/graphql",
+            json={
+                "query": "mutation Create($input: TaskInput!) { createTask(input: $input) { id } }",
+                "variables": {"input": {"prompt": too_long}},
+            },
+        )
+
+    assert html_ok.status_code == 303
+    assert html_too_long.status_code == 422
+    assert "at most 10000 characters" in html_too_long.text
+    assert rest_ok.status_code == 201
+    assert rest_too_long.status_code == 422
+    assert rest_too_long.json()["detail"][0]["msg"] == (
+        "String should have at most 10000 characters"
+    )
+    assert graphql_ok.status_code == 200
+    assert graphql_ok.json() == {"data": {"createTask": {"id": "task-3"}}}
+    assert graphql_too_long.status_code == 200
+    assert graphql_too_long.json()["errors"][0]["message"] == (
+        "prompt must be at most 10000 characters"
+    )
+    assert html_ok.status_code != 413
+    assert rest_ok.status_code != 413
+    assert graphql_ok.status_code != 413
+    assert create_calls == [prompt, prompt, prompt, too_long]
 
 
 def test_rest_crud_status_and_reexecution(application) -> None:  # type: ignore[no-untyped-def]
@@ -493,7 +582,7 @@ def test_graphql_rejects_oversized_body_before_execution() -> None:
             raise AssertionError(prompt)
 
     controller = RecordingController()
-    oversized_prompt = "x" * 40_000
+    oversized_prompt = "x" * HTTP_MAX_BODY_BYTES
 
     with _graphql_client(controller) as client:
         response = client.post(
@@ -509,12 +598,30 @@ def test_graphql_rejects_oversized_body_before_execution() -> None:
         "data": None,
         "errors": [
             {
-                "message": "graphql request body must be at most 32768 bytes",
+                "message": f"graphql request body must be at most {HTTP_MAX_BODY_BYTES} bytes",
                 "extensions": {"code": "REQUEST_TOO_LARGE"},
             }
         ],
     }
     assert controller.calls == 0
+
+
+def test_http_rejects_oversized_html_and_rest_bodies_before_mutation(application) -> None:  # type: ignore[no-untyped-def]
+    oversized_form_prompt = "a" * HTTP_MAX_BODY_BYTES
+    oversized_json_prompt = "a" * HTTP_MAX_BODY_BYTES
+
+    with _http_client(application) as client:
+        index = client.get("/")
+        html = client.post(
+            "/tasks",
+            data={"prompt": oversized_form_prompt, "csrf_token": _extract_csrf_token(index.text)},
+        )
+        rest = client.post("/api/v1/tasks", json={"prompt": oversized_json_prompt})
+
+    assert html.status_code == 413
+    assert rest.status_code == 413
+    assert application.tasks.list() == []
+    assert application.traces.list() == []
 
 
 def test_graphql_rejects_alias_bombs_before_execution() -> None:
@@ -542,6 +649,47 @@ def test_graphql_rejects_alias_bombs_before_execution() -> None:
             }
         ],
     }
+    assert controller.calls == 0
+
+
+def test_graphql_rejects_fragment_dag_and_cycle_before_execution() -> None:
+    class RecordingController:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list(self, *, limit=None, offset=0):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return []
+
+    controller = RecordingController()
+    dag_fragments = "\n".join(
+        [
+            "fragment F0 on Query { a0: tasks(limit: 1, offset: 0) { id } }",
+            *[f"fragment F{i} on Query {{ ...F{i - 1} ...F{i - 1} }}" for i in range(1, 17)],
+        ]
+    )
+    dag_query = f"query Example {{ ...F16 }}\n{dag_fragments}"
+    cycle_query = """
+        query Example { ...LoopA }
+        fragment LoopA on Query { ...LoopB }
+        fragment LoopB on Query { ...LoopA }
+    """
+
+    with _graphql_client(controller) as client:
+        dag = client.post("/graphql", json={"query": dag_query})
+        cycle = client.post("/graphql", json={"query": cycle_query})
+
+    for response in (dag, cycle):
+        assert response.status_code == 200
+        assert response.json() == {
+            "data": None,
+            "errors": [
+                {
+                    "message": "graphql query exceeds the configured complexity limits",
+                    "extensions": {"code": "QUERY_TOO_COMPLEX"},
+                }
+            ],
+        }
     assert controller.calls == 0
 
 
@@ -672,6 +820,34 @@ def test_http_rejects_untrusted_host_headers_before_html_and_graphql_execution(
     assert application.traces.list() == []
 
 
+def test_http_requires_explicit_allowed_hosts_for_non_loopback_bind() -> None:
+    application = create_application(
+        settings=Settings(host="0.0.0.0"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(Exception, match="allowed host"):
+        create_http_app(application)
+
+
+def test_http_allows_configured_host_for_non_loopback_bind() -> None:
+    application = create_application(
+        settings=Settings(host="0.0.0.0", allowed_hosts=("af.internal",)),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    client = TestClient(create_http_app(application), base_url="http://af.internal")
+    try:
+        allowed = client.get("/", headers={"host": "af.internal"})
+        blocked = client.get("/", headers={"host": "evil.invalid"})
+    finally:
+        client.close()
+
+    assert allowed.status_code == 200
+    assert blocked.status_code == 400
+
+
 def test_graphql_tasks_paginates_at_repository_boundary() -> None:
     class RecordingTaskRepository(InMemoryTaskRepository):
         def __init__(self) -> None:
@@ -716,3 +892,71 @@ def test_graphql_rejects_invalid_pagination_bounds(application) -> None:  # type
     assert payload["errors"][0]["message"] == "limit must be between 1 and 100"
     assert payload["errors"][0]["path"] == ["tasks"]
     assert payload["errors"][0]["extensions"] == {"code": "INVALIDPAGINATION"}
+
+
+def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(application) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        negotiated = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/graphql-response+json"},
+        )
+        legacy = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/json"},
+        )
+        unsupported = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "text/plain"},
+        )
+        wrong_type = client.post(
+            "/graphql",
+            content='{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
+            headers={"content-type": "application/jsonp"},
+        )
+        get_mutation = client.get(
+            "/graphql",
+            params={
+                "query": (
+                    "mutation CreateTask { "
+                    'createTask(input: {prompt: "how many rs in strawberry"}) { id }'
+                    " }"
+                ),
+                "operationName": "CreateTask",
+            },
+            headers={"accept": "application/graphql-response+json"},
+        )
+
+    assert negotiated.status_code == 200
+    assert negotiated.headers["content-type"].startswith("application/graphql-response+json")
+    assert legacy.status_code == 200
+    assert legacy.headers["content-type"].startswith("application/json")
+    assert unsupported.status_code == 406
+    assert unsupported.json()["errors"][0]["extensions"] == {"code": "NOT_ACCEPTABLE"}
+    assert wrong_type.status_code == 415
+    assert wrong_type.json()["errors"][0]["extensions"] == {"code": "UNSUPPORTED_MEDIA_TYPE"}
+    assert get_mutation.status_code == 405
+    assert get_mutation.headers["allow"] == "POST"
+
+
+def test_graphql_sanitizes_task_presentation_failures() -> None:
+    class CorruptTask:
+        id = "task-1"
+        prompt = "how many rs in strawberry"
+
+        @property
+        def output(self) -> str:
+            raise RuntimeError("SECRET-task-output")
+
+    class CorruptController:
+        def list(self, *, limit=None, offset=0):  # type: ignore[no-untyped-def]
+            return [CorruptTask()]
+
+    with _graphql_client(CorruptController()) as client:
+        response = client.post("/graphql", json={"query": "{ tasks(limit: 1, offset: 0) { id } }"})
+
+    assert response.status_code == 200
+    assert "SECRET" not in response.text
+    assert response.json()["errors"][0]["message"] == "internal GraphQL adapter error"

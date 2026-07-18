@@ -537,3 +537,40 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+## Run #009 - Final HTTP and GraphQL Standards Correction Pass
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `4d8dd52`
+- Requested bounded HTTP/GraphQL standards correction for GraphQL complexity traversal, HTTP body ceilings, trusted host configuration, and Streamable HTTP MCP transport trust
+- Requirement to keep the PR in draft, preserve Run #008 byte-for-byte, and append this record only after source changes with exact gate and smoke evidence
+
+### Outputs
+- Replaced recursive GraphQL fragment-expansion pre-checks with one bounded, saturating traversal that enforces a fixed traversal budget, rejects fragment cycles, and fails closed before any resolver
+- Raised the shared HTTP request-body ceiling to 131072 bytes, enforced it through a bounded ASGI receive/replay boundary for HTML, REST, and GraphQL, and kept the 10000-character domain limit authoritative for Unicode prompts
+- Separated HTTP bind addresses from trusted host configuration with strict loopback defaults, explicit non-loopback allowed hosts, and matching CLI/configuration support
+- Completed GraphQL-over-HTTP media-type and Accept negotiation, sanitized Task-to-GraphQL presentation failures, and required explicit transport trust settings for non-loopback Streamable HTTP MCP
+
+### Verified Results
+- Ruff format check: 54 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 32 source files
+- Pytest: 194 passed, 1 warning
+- Coverage: 91.14 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed
+- Smoke: `.venv/bin/python -m af hello` -> `Hello, world!`
+- Smoke: `.venv/bin/python -m af ask 'how many rs in strawberry'` -> `3`
+
+### Issues Encountered
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning; the suite remained green and no new dependency was added
+- The latest visible AF Python workflow run for this PR head remained `action_required` with zero jobs, so owner/manual approval is still required before GitHub Actions can execute on the branch
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Workflow run: https://github.com/alexanderholman/AgentFramework/actions/runs/29654399448
+- Script: `[SCRIPT:af-dev]`
+
+---

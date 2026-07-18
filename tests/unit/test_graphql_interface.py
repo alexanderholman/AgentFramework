@@ -33,6 +33,20 @@ from af.interfaces.graphql import (
     _validate_get_operation,
     create_graphql_router,
 )
+from af.interfaces.http_body import HTTP_MAX_BODY_BYTES
+
+
+def _fragment_dag(levels: int) -> str:
+    fragments = ["fragment F0 on Query { a0: tasks(limit: 1, offset: 0) { id } }"]
+    for level in range(1, levels + 1):
+        fragments.append(f"fragment F{level} on Query {{ ...F{level - 1} ...F{level - 1} }}")
+    return f"query Example {{ ...F{levels} }}\n" + "\n".join(fragments)
+
+
+def _fragment_chain(length: int) -> str:
+    fragments = [f"fragment F{i} on Query {{ ...F{i + 1} }}" for i in range(length - 1)]
+    fragments.append(f"fragment F{length - 1} on Query {{ tasks(limit: 1, offset: 0) {{ id }} }}")
+    return "query Example { ...F0 }\n" + "\n".join(fragments)
 
 
 def _request(
@@ -180,6 +194,34 @@ def test_graphql_complexity_helpers_cover_fragments_and_limits() -> None:
         _parse_query_document('{ task(id: "task-1") ')
 
 
+def test_graphql_complexity_traversal_rejects_cycles_and_long_chains() -> None:
+    with pytest.raises(_GraphQLRequestError, match="complexity limits") as cycle_error:
+        _parse_query_document(
+            """
+            query Example { ...LoopA }
+            fragment LoopA on Query { ...LoopB }
+            fragment LoopB on Query { ...LoopA }
+            """
+        )
+    assert cycle_error.value.code == GRAPHQL_QUERY_TOO_COMPLEX_CODE
+
+    with pytest.raises(_GraphQLRequestError, match="complexity limits") as chain_error:
+        _parse_query_document(_fragment_chain(1_100))
+    assert chain_error.value.code == GRAPHQL_QUERY_TOO_COMPLEX_CODE
+
+    with pytest.raises(_GraphQLRequestError, match="complexity limits") as dag_error:
+        _parse_query_document(_fragment_dag(16))
+    assert dag_error.value.code == GRAPHQL_QUERY_TOO_COMPLEX_CODE
+
+
+def test_graphql_complexity_allows_an_at_limit_valid_document() -> None:
+    root_fields = "\n".join(f"a{i}: tasks(limit: 8, offset: {i * 8}) {{ id }}" for i in range(25))
+
+    document = _parse_query_document(f"query Example {{ {root_fields} }}")
+
+    assert document.kind == "document"
+
+
 def test_graphql_complexity_rejects_excessive_task_nodes() -> None:
     aliases = " ".join(f"a{i}: tasks(limit: 100, offset: 0) {{ prompt output }}" for i in range(3))
 
@@ -225,11 +267,13 @@ async def test_graphql_request_payload_validation_paths() -> None:
             )
         )
 
-    with pytest.raises(Exception, match="graphql request body must be at most 32768 bytes"):
+    with pytest.raises(
+        Exception, match=f"graphql request body must be at most {HTTP_MAX_BODY_BYTES} bytes"
+    ):
         await _parse_request_payload(
             _request(
                 method="GET",
-                query_string=f"query={'x' * 32769}".encode("ascii"),
+                query_string=f"query={'x' * (HTTP_MAX_BODY_BYTES + 1)}".encode("ascii"),
             )
         )
 
@@ -293,7 +337,10 @@ async def test_graphql_body_limits_and_error_formatting() -> None:
 
     oversized = _request(
         method="POST",
-        headers={"content-type": "application/json", "content-length": "40000"},
+        headers={
+            "content-type": "application/json",
+            "content-length": str(HTTP_MAX_BODY_BYTES + 1),
+        },
         body=b"{}",
     )
     with pytest.raises(_GraphQLRequestError) as error_info:

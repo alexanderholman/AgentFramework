@@ -33,6 +33,14 @@ from af.application.tasks import TaskController
 from af.domain.tasks import Task
 from af.framework.errors import AFError, TaskNotFound
 from af.framework.types import TASK_LIST_DEFAULT_LIMIT, TASK_LIST_MAX_LIMIT
+from af.interfaces.http_body import (
+    BOUNDED_BODY_SCOPE_KEY,
+    HTTP_MAX_BODY_BYTES,
+    InvalidContentLengthHeader,
+    RequestBodyTooLarge,
+    read_bounded_chunks,
+    validate_content_length_header,
+)
 
 GRAPHQL_INTERNAL_ERROR_CODE = "INTERNAL_ERROR"
 GRAPHQL_INTERNAL_ERROR_MESSAGE = "internal GraphQL adapter error"
@@ -40,14 +48,18 @@ GRAPHQL_BAD_REQUEST_CODE = "BAD_REQUEST"
 GRAPHQL_METHOD_NOT_ALLOWED_CODE = "METHOD_NOT_ALLOWED"
 GRAPHQL_REQUEST_TOO_LARGE_CODE = "REQUEST_TOO_LARGE"
 GRAPHQL_QUERY_TOO_COMPLEX_CODE = "QUERY_TOO_COMPLEX"
-GRAPHQL_MAX_BODY_BYTES = 32_768
+GRAPHQL_NOT_ACCEPTABLE_CODE = "NOT_ACCEPTABLE"
+GRAPHQL_UNSUPPORTED_MEDIA_TYPE_CODE = "UNSUPPORTED_MEDIA_TYPE"
 GRAPHQL_MAX_ALIASES = 50
 GRAPHQL_MAX_DEPTH = 8
 GRAPHQL_MAX_ROOT_FIELDS = 25
 GRAPHQL_MAX_TASK_NODES = 200
+GRAPHQL_MAX_TRAVERSAL_STEPS = 1_024
 GRAPHQL_INVALID_DOCUMENT_MESSAGE = "Unable to parse GraphQL query document"
 GRAPHQL_INVALID_QUERY_PARAMS_MESSAGE = "Unable to decode GraphQL query parameters"
 GRAPHQL_INVALID_JSON_MESSAGE = "Unable to parse request body as JSON"
+GRAPHQL_RESPONSE_MEDIA_TYPE = "application/graphql-response+json"
+GRAPHQL_LEGACY_JSON_MEDIA_TYPE = "application/json"
 
 GraphQLSelection = SelectionNode
 
@@ -60,11 +72,19 @@ class _GraphQLRequestPayload:
 
 
 class _GraphQLRequestError(Exception):
-    def __init__(self, message: str, code: str, *, status_code: int) -> None:
+    def __init__(
+        self,
+        message: str,
+        code: str,
+        *,
+        status_code: int,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code
         self.status_code = status_code
+        self.headers = dict(headers or {})
 
 
 @strawberry.type
@@ -139,6 +159,23 @@ async def _run_graphql_operation[T](operation: Callable[[], Awaitable[T]]) -> T:
     raise AssertionError("unreachable")
 
 
+def _graphql_response_media_type(accept_header: str | None) -> str:
+    if accept_header is None or not accept_header.strip():
+        return GRAPHQL_RESPONSE_MEDIA_TYPE
+    accepts = {
+        part.split(";", 1)[0].strip().lower() for part in accept_header.split(",") if part.strip()
+    }
+    if GRAPHQL_RESPONSE_MEDIA_TYPE in accepts or "*/*" in accepts or "application/*" in accepts:
+        return GRAPHQL_RESPONSE_MEDIA_TYPE
+    if GRAPHQL_LEGACY_JSON_MEDIA_TYPE in accepts:
+        return GRAPHQL_LEGACY_JSON_MEDIA_TYPE
+    raise _GraphQLRequestError(
+        "Unsupported Accept header",
+        GRAPHQL_NOT_ACCEPTABLE_CODE,
+        status_code=status.HTTP_406_NOT_ACCEPTABLE,
+    )
+
+
 @strawberry.type
 class Query:
     @strawberry.field
@@ -148,29 +185,26 @@ class Query:
         limit: int = TASK_LIST_DEFAULT_LIMIT,
         offset: int = 0,
     ) -> list[TaskType]:
-        tasks = await _run_graphql_operation(
-            lambda: run_in_threadpool(
+        async def load_tasks() -> list[TaskType]:
+            tasks = await run_in_threadpool(
                 _controller(info).list,
                 limit=limit,
                 offset=offset,
             )
-        )
-        return [TaskType.from_task(task) for task in tasks]
+            return [TaskType.from_task(task) for task in tasks]
+
+        return await _run_graphql_operation(load_tasks)
 
     @strawberry.field
     async def task(self, info: Info[Any, Any], id: strawberry.ID) -> TaskType | None:
-        unexpected_failure = False
-        try:
-            task = await run_in_threadpool(_controller(info).get, str(id))
-        except TaskNotFound:
-            return None
-        except Exception:
-            unexpected_failure = True
-            task = None
-        if unexpected_failure:
-            raise _internal_graphql_error()
-        assert task is not None
-        return TaskType.from_task(task)
+        async def load_task() -> TaskType | None:
+            try:
+                task = await run_in_threadpool(_controller(info).get, str(id))
+            except TaskNotFound:
+                return None
+            return TaskType.from_task(task)
+
+        return await _run_graphql_operation(load_task)
 
 
 @strawberry.type
@@ -185,10 +219,11 @@ class Mutation:
 
     @strawberry.mutation
     async def create_task(self, info: Info[Any, Any], input: TaskInput) -> TaskType:
-        task = await _run_graphql_operation(
-            lambda: run_in_threadpool(_controller(info).create, input.prompt)
-        )
-        return TaskType.from_task(task)
+        async def create() -> TaskType:
+            task = await run_in_threadpool(_controller(info).create, input.prompt)
+            return TaskType.from_task(task)
+
+        return await _run_graphql_operation(create)
 
     @strawberry.mutation
     async def update_task(
@@ -197,14 +232,15 @@ class Mutation:
         id: strawberry.ID,
         input: TaskInput,
     ) -> TaskType:
-        task = await _run_graphql_operation(
-            lambda: run_in_threadpool(
+        async def update() -> TaskType:
+            task = await run_in_threadpool(
                 _controller(info).update,
                 str(id),
                 input.prompt,
             )
-        )
-        return TaskType.from_task(task)
+            return TaskType.from_task(task)
+
+        return await _run_graphql_operation(update)
 
     @strawberry.mutation
     async def delete_task(self, info: Info[Any, Any], id: strawberry.ID) -> bool:
@@ -220,10 +256,14 @@ def _graphql_error_response(
     code: str,
     *,
     status_code: int,
+    media_type: str = GRAPHQL_RESPONSE_MEDIA_TYPE,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"data": None, "errors": [{"message": message, "extensions": {"code": code}}]},
+        media_type=media_type,
+        headers=dict(headers or {}),
     )
 
 
@@ -239,122 +279,13 @@ def _format_error(error: GraphQLError) -> dict[str, object]:
     return dict(error.formatted)
 
 
-def _selection_depth(
-    selections: Sequence[GraphQLSelection],
-    fragments: Mapping[str, FragmentDefinitionNode],
-    *,
-    depth: int,
-    active_fragments: frozenset[str] = frozenset(),
-) -> int:
-    max_depth = depth
-    for selection in selections:
-        if isinstance(selection, FieldNode):
-            if selection.selection_set is not None:
-                max_depth = max(
-                    max_depth,
-                    _selection_depth(
-                        selection.selection_set.selections,
-                        fragments,
-                        depth=depth + 1,
-                        active_fragments=active_fragments,
-                    ),
-                )
-        elif isinstance(selection, InlineFragmentNode):
-            max_depth = max(
-                max_depth,
-                _selection_depth(
-                    selection.selection_set.selections,
-                    fragments,
-                    depth=depth,
-                    active_fragments=active_fragments,
-                ),
-            )
-        elif isinstance(selection, FragmentSpreadNode):
-            fragment_name = selection.name.value
-            if fragment_name in active_fragments:
-                continue
-            fragment = fragments.get(fragment_name)
-            if fragment is None:
-                continue
-            max_depth = max(
-                max_depth,
-                _selection_depth(
-                    fragment.selection_set.selections,
-                    fragments,
-                    depth=depth,
-                    active_fragments=active_fragments | {fragment_name},
-                ),
-            )
-    return max_depth
-
-
-def _count_aliases(
-    selections: Sequence[GraphQLSelection],
-    fragments: Mapping[str, FragmentDefinitionNode],
-    *,
-    active_fragments: frozenset[str] = frozenset(),
-) -> int:
-    aliases = 0
-    for selection in selections:
-        if isinstance(selection, FieldNode):
-            if selection.alias is not None:
-                aliases += 1
-            if selection.selection_set is not None:
-                aliases += _count_aliases(
-                    selection.selection_set.selections,
-                    fragments,
-                    active_fragments=active_fragments,
-                )
-        elif isinstance(selection, InlineFragmentNode):
-            aliases += _count_aliases(
-                selection.selection_set.selections,
-                fragments,
-                active_fragments=active_fragments,
-            )
-        elif isinstance(selection, FragmentSpreadNode):
-            fragment_name = selection.name.value
-            if fragment_name in active_fragments:
-                continue
-            fragment = fragments.get(fragment_name)
-            if fragment is None:
-                continue
-            aliases += _count_aliases(
-                fragment.selection_set.selections,
-                fragments,
-                active_fragments=active_fragments | {fragment_name},
-            )
-    return aliases
-
-
-def _count_root_fields(
-    selections: Sequence[GraphQLSelection],
-    fragments: Mapping[str, FragmentDefinitionNode],
-    *,
-    active_fragments: frozenset[str] = frozenset(),
-) -> int:
-    total = 0
-    for selection in selections:
-        if isinstance(selection, FieldNode):
-            total += 1
-        elif isinstance(selection, InlineFragmentNode):
-            total += _count_root_fields(
-                selection.selection_set.selections,
-                fragments,
-                active_fragments=active_fragments,
-            )
-        elif isinstance(selection, FragmentSpreadNode):
-            fragment_name = selection.name.value
-            if fragment_name in active_fragments:
-                continue
-            fragment = fragments.get(fragment_name)
-            if fragment is None:
-                continue
-            total += _count_root_fields(
-                fragment.selection_set.selections,
-                fragments,
-                active_fragments=active_fragments | {fragment_name},
-            )
-    return total
+@dataclass(frozen=True, slots=True)
+class _ComplexityMetrics:
+    aliases: int
+    depth: int
+    root_fields: int
+    task_nodes: int
+    traversal_steps: int
 
 
 def _task_limit_from_field(field: FieldNode) -> int:
@@ -377,42 +308,120 @@ def _task_limit_from_field(field: FieldNode) -> int:
     return TASK_LIST_MAX_LIMIT
 
 
+def _complexity_error() -> _GraphQLRequestError:
+    return _GraphQLRequestError(
+        "graphql query exceeds the configured complexity limits",
+        GRAPHQL_QUERY_TOO_COMPLEX_CODE,
+        status_code=status.HTTP_200_OK,
+    )
+
+
+def _measure_complexity(
+    selections: Sequence[GraphQLSelection],
+    fragments: Mapping[str, FragmentDefinitionNode],
+    *,
+    depth: int,
+) -> _ComplexityMetrics:
+    aliases = 0
+    max_depth = depth
+    root_fields = 0
+    task_nodes = 0
+    traversal_steps = 0
+    stack: list[tuple[GraphQLSelection, int, bool, frozenset[str]]] = [
+        (selection, depth, True, frozenset()) for selection in reversed(selections)
+    ]
+    while stack:
+        selection, current_depth, at_root, active_fragments = stack.pop()
+        traversal_steps += 1
+        if traversal_steps > GRAPHQL_MAX_TRAVERSAL_STEPS:
+            raise _complexity_error()
+        if isinstance(selection, FieldNode):
+            max_depth = max(max_depth, current_depth)
+            if selection.alias is not None:
+                aliases += 1
+            if at_root:
+                root_fields += 1
+            if selection.name.value == "tasks":
+                task_nodes += _task_limit_from_field(selection)
+            if (
+                aliases > GRAPHQL_MAX_ALIASES
+                or max_depth > GRAPHQL_MAX_DEPTH
+                or root_fields > GRAPHQL_MAX_ROOT_FIELDS
+                or task_nodes > GRAPHQL_MAX_TASK_NODES
+            ):
+                raise _complexity_error()
+            if selection.selection_set is not None:
+                stack.extend(
+                    (nested, current_depth + 1, False, active_fragments)
+                    for nested in reversed(selection.selection_set.selections)
+                )
+            continue
+        if isinstance(selection, InlineFragmentNode):
+            stack.extend(
+                (nested, current_depth, at_root, active_fragments)
+                for nested in reversed(selection.selection_set.selections)
+            )
+            continue
+        if isinstance(selection, FragmentSpreadNode):
+            fragment_name = selection.name.value
+            if fragment_name in active_fragments:
+                raise _complexity_error()
+            fragment = fragments.get(fragment_name)
+            if fragment is None:
+                continue
+            next_fragments = active_fragments | {fragment_name}
+            stack.extend(
+                (nested, current_depth, at_root, next_fragments)
+                for nested in reversed(fragment.selection_set.selections)
+            )
+    return _ComplexityMetrics(
+        aliases=aliases,
+        depth=max_depth,
+        root_fields=root_fields,
+        task_nodes=task_nodes,
+        traversal_steps=traversal_steps,
+    )
+
+
+def _selection_depth(
+    selections: Sequence[GraphQLSelection],
+    fragments: Mapping[str, FragmentDefinitionNode],
+    *,
+    depth: int,
+    active_fragments: frozenset[str] = frozenset(),
+) -> int:
+    del active_fragments
+    return _measure_complexity(selections, fragments, depth=depth).depth
+
+
+def _count_aliases(
+    selections: Sequence[GraphQLSelection],
+    fragments: Mapping[str, FragmentDefinitionNode],
+    *,
+    active_fragments: frozenset[str] = frozenset(),
+) -> int:
+    del active_fragments
+    return _measure_complexity(selections, fragments, depth=1).aliases
+
+
+def _count_root_fields(
+    selections: Sequence[GraphQLSelection],
+    fragments: Mapping[str, FragmentDefinitionNode],
+    *,
+    active_fragments: frozenset[str] = frozenset(),
+) -> int:
+    del active_fragments
+    return _measure_complexity(selections, fragments, depth=1).root_fields
+
+
 def _count_task_nodes(
     selections: Sequence[GraphQLSelection],
     fragments: Mapping[str, FragmentDefinitionNode],
     *,
     active_fragments: frozenset[str] = frozenset(),
 ) -> int:
-    total = 0
-    for selection in selections:
-        if isinstance(selection, FieldNode):
-            if selection.name.value == "tasks":
-                total += _task_limit_from_field(selection)
-            if selection.selection_set is not None:
-                total += _count_task_nodes(
-                    selection.selection_set.selections,
-                    fragments,
-                    active_fragments=active_fragments,
-                )
-        elif isinstance(selection, InlineFragmentNode):
-            total += _count_task_nodes(
-                selection.selection_set.selections,
-                fragments,
-                active_fragments=active_fragments,
-            )
-        elif isinstance(selection, FragmentSpreadNode):
-            fragment_name = selection.name.value
-            if fragment_name in active_fragments:
-                continue
-            fragment = fragments.get(fragment_name)
-            if fragment is None:
-                continue
-            total += _count_task_nodes(
-                fragment.selection_set.selections,
-                fragments,
-                active_fragments=active_fragments | {fragment_name},
-            )
-    return total
+    del active_fragments
+    return _measure_complexity(selections, fragments, depth=1).task_nodes
 
 
 def _validate_document_complexity(document: DocumentNode) -> None:
@@ -421,29 +430,9 @@ def _validate_document_complexity(document: DocumentNode) -> None:
         for definition in document.definitions
         if isinstance(definition, FragmentDefinitionNode)
     }
-    alias_count = 0
-    max_depth = 0
-    max_root_fields = 0
-    max_task_nodes = 0
     for definition in document.definitions:
-        if not isinstance(definition, OperationDefinitionNode):
-            continue
-        selections = definition.selection_set.selections
-        alias_count += _count_aliases(selections, fragments)
-        max_depth = max(max_depth, _selection_depth(selections, fragments, depth=1))
-        max_root_fields = max(max_root_fields, _count_root_fields(selections, fragments))
-        max_task_nodes = max(max_task_nodes, _count_task_nodes(selections, fragments))
-    if (
-        alias_count > GRAPHQL_MAX_ALIASES
-        or max_depth > GRAPHQL_MAX_DEPTH
-        or max_root_fields > GRAPHQL_MAX_ROOT_FIELDS
-        or max_task_nodes > GRAPHQL_MAX_TASK_NODES
-    ):
-        raise _GraphQLRequestError(
-            "graphql query exceeds the configured complexity limits",
-            GRAPHQL_QUERY_TOO_COMPLEX_CODE,
-            status_code=status.HTTP_200_OK,
-        )
+        if isinstance(definition, OperationDefinitionNode):
+            _measure_complexity(definition.selection_set.selections, fragments, depth=1)
 
 
 def _parse_query_document(query: str) -> DocumentNode:
@@ -499,6 +488,7 @@ def _validate_get_operation(document: DocumentNode, operation_name: str | None) 
             "GET requests may only execute query operations",
             GRAPHQL_METHOD_NOT_ALLOWED_CODE,
             status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+            headers={"Allow": "POST"},
         )
 
 
@@ -511,9 +501,9 @@ def _validate_bounded_text(value: str, *, label: str) -> None:
             GRAPHQL_BAD_REQUEST_CODE,
             status_code=status.HTTP_400_BAD_REQUEST,
         ) from None
-    if encoded_length > GRAPHQL_MAX_BODY_BYTES:
+    if encoded_length > HTTP_MAX_BODY_BYTES:
         raise _GraphQLRequestError(
-            f"graphql {label} must be at most {GRAPHQL_MAX_BODY_BYTES} bytes",
+            f"graphql {label} must be at most {HTTP_MAX_BODY_BYTES} bytes",
             GRAPHQL_REQUEST_TOO_LARGE_CODE,
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
         )
@@ -521,9 +511,9 @@ def _validate_bounded_text(value: str, *, label: str) -> None:
 
 def _parse_get_parameters(request: Request) -> dict[str, str]:
     raw_query_string = request.scope.get("query_string", b"")
-    if len(raw_query_string) > GRAPHQL_MAX_BODY_BYTES:
+    if len(raw_query_string) > HTTP_MAX_BODY_BYTES:
         raise _GraphQLRequestError(
-            f"graphql request body must be at most {GRAPHQL_MAX_BODY_BYTES} bytes",
+            f"graphql request body must be at most {HTTP_MAX_BODY_BYTES} bytes",
             GRAPHQL_REQUEST_TOO_LARGE_CODE,
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
         )
@@ -544,33 +534,31 @@ def _parse_get_parameters(request: Request) -> dict[str, str]:
 
 
 async def _read_bounded_body(request: Request) -> bytes:
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            if int(content_length) > GRAPHQL_MAX_BODY_BYTES:
-                raise _GraphQLRequestError(
-                    f"graphql request body must be at most {GRAPHQL_MAX_BODY_BYTES} bytes",
-                    GRAPHQL_REQUEST_TOO_LARGE_CODE,
-                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                )
-        except ValueError:
-            raise _GraphQLRequestError(
-                "invalid Content-Length header",
-                GRAPHQL_BAD_REQUEST_CODE,
-                status_code=status.HTTP_400_BAD_REQUEST,
-            ) from None
-    size = 0
-    chunks: list[bytes] = []
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > GRAPHQL_MAX_BODY_BYTES:
-            raise _GraphQLRequestError(
-                f"graphql request body must be at most {GRAPHQL_MAX_BODY_BYTES} bytes",
-                GRAPHQL_REQUEST_TOO_LARGE_CODE,
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
+    cached_body = request.scope.get(BOUNDED_BODY_SCOPE_KEY)
+    if isinstance(cached_body, bytes):
+        return cached_body
+    try:
+        validate_content_length_header(request.headers.get("content-length"))
+    except InvalidContentLengthHeader:
+        raise _GraphQLRequestError(
+            "invalid Content-Length header",
+            GRAPHQL_BAD_REQUEST_CODE,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        ) from None
+    except RequestBodyTooLarge:
+        raise _GraphQLRequestError(
+            f"graphql request body must be at most {HTTP_MAX_BODY_BYTES} bytes",
+            GRAPHQL_REQUEST_TOO_LARGE_CODE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        ) from None
+    try:
+        return await read_bounded_chunks(request.stream())
+    except RequestBodyTooLarge:
+        raise _GraphQLRequestError(
+            f"graphql request body must be at most {HTTP_MAX_BODY_BYTES} bytes",
+            GRAPHQL_REQUEST_TOO_LARGE_CODE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        ) from None
 
 
 async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
@@ -611,11 +599,12 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
             query=query, operation_name=operation_name, variables=variables
         )
 
-    if "application/json" not in (request.headers.get("content-type") or ""):
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
         raise _GraphQLRequestError(
             "Unsupported content type",
-            GRAPHQL_BAD_REQUEST_CODE,
-            status_code=status.HTTP_400_BAD_REQUEST,
+            GRAPHQL_UNSUPPORTED_MEDIA_TYPE_CODE,
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
         )
     body = await _read_bounded_body(request)
     try:
@@ -665,6 +654,15 @@ async def _handle_graphql_request(
     controller: TaskController,
 ) -> JSONResponse:
     try:
+        media_type = _graphql_response_media_type(request.headers.get("accept"))
+    except _GraphQLRequestError as error:
+        return _graphql_error_response(
+            error.message,
+            error.code,
+            status_code=error.status_code,
+            media_type=GRAPHQL_LEGACY_JSON_MEDIA_TYPE,
+        )
+    try:
         payload = await _parse_request_payload(request)
         document = _parse_query_document(payload.query)
         if request.method == "GET":
@@ -674,6 +672,8 @@ async def _handle_graphql_request(
             error.message,
             error.code,
             status_code=error.status_code,
+            media_type=media_type,
+            headers=error.headers,
         )
     result = await schema.execute(
         payload.query,
@@ -684,7 +684,11 @@ async def _handle_graphql_request(
     response_body: dict[str, object] = {"data": result.data}
     if result.errors:
         response_body["errors"] = [_format_error(error) for error in result.errors]
-    return JSONResponse(status_code=status.HTTP_200_OK, content=response_body)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=response_body,
+        media_type=media_type,
+    )
 
 
 def create_graphql_router(controller: TaskController) -> APIRouter:

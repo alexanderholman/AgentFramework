@@ -13,6 +13,8 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     mcp_transport: str = "stdio"
+    allowed_hosts: tuple[str, ...] = ()
+    allowed_origins: tuple[str, ...] = ()
     allow_remote_inference: bool = False
     selector_confidence_threshold: float = 0.8
 
@@ -26,6 +28,8 @@ class Settings:
             host=os.getenv("AF_HOST", defaults.host),
             port=int(os.getenv("AF_PORT", str(defaults.port))),
             mcp_transport=os.getenv("AF_MCP_TRANSPORT", defaults.mcp_transport),
+            allowed_hosts=_split_csv_env("AF_ALLOWED_HOSTS"),
+            allowed_origins=_split_csv_env("AF_ALLOWED_ORIGINS"),
             allow_remote_inference=os.getenv(
                 "AF_ALLOW_REMOTE_INFERENCE",
                 str(defaults.allow_remote_inference),
@@ -38,3 +42,10 @@ class Settings:
                 )
             ),
         )
+
+
+def _split_csv_env(name: str) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())

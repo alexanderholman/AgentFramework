@@ -47,6 +47,7 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
     def serve(
         host: Annotated[str | None, typer.Option()] = None,
         port: Annotated[int | None, typer.Option()] = None,
+        allowed_host: Annotated[list[str] | None, typer.Option("--allowed-host")] = None,
     ) -> None:
         """Serve HTML, REST, and GraphQL interfaces."""
         import uvicorn
@@ -55,7 +56,11 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
 
         resolved = current()
         uvicorn.run(
-            create_http_app(resolved),
+            create_http_app(
+                resolved,
+                bind_host=host or resolved.settings.host,
+                allowed_hosts=tuple(allowed_host or ()) or None,
+            ),
             host=host or resolved.settings.host,
             port=port or resolved.settings.port,
         )

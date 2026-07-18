@@ -7,6 +7,8 @@ import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from af.bootstrap import create_application
+from af.config import Settings
+from af.framework.errors import InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
@@ -269,3 +271,40 @@ def test_mcp_sanitizes_unexpected_resource_failures() -> None:
         assert "MCP_INTERNAL_ERROR" in message
 
     anyio.run(scenario)
+
+
+def test_streamable_http_mcp_requires_explicit_transport_trust_for_non_loopback_hosts() -> None:
+    application = create_application(
+        settings=Settings(host="0.0.0.0", mcp_transport="streamable-http"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(InvalidProviderConfiguration):
+        create_mcp_server(application)
+
+
+def test_streamable_http_mcp_keeps_loopback_default_and_accepts_explicit_transport_trust() -> None:
+    loopback = create_application(
+        settings=Settings(host="127.0.0.1", mcp_transport="streamable-http"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    loopback_server = create_mcp_server(loopback)
+    assert loopback_server.settings.transport_security is not None
+    assert "127.0.0.1:*" in loopback_server.settings.transport_security.allowed_hosts
+
+    lan = create_application(
+        settings=Settings(
+            host="0.0.0.0",
+            mcp_transport="streamable-http",
+            allowed_hosts=("af.internal",),
+            allowed_origins=("http://af.internal:8000",),
+        ),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    lan_server = create_mcp_server(lan)
+    assert lan_server.settings.transport_security is not None
+    assert lan_server.settings.transport_security.allowed_hosts == ["af.internal"]
+    assert lan_server.settings.transport_security.allowed_origins == ["http://af.internal:8000"]

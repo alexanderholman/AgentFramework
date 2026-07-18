@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import datetime
+from ipaddress import ip_address
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
@@ -16,7 +18,7 @@ from af import __version__
 from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
 from af.domain.tasks import Task
-from af.framework.errors import AFError
+from af.framework.errors import AFError, InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
 from af.framework.types import ExecutionOutcome
 
@@ -118,6 +120,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
     resolved = application or create_application()
     controller = resolved.tasks
     registry = resolved.container.resolve(ProcedureRegistry)
+    transport_security = _transport_security_for(resolved)
     server: FastMCP[None] = FastMCP(
         name="AF Agent Framework",
         instructions=(
@@ -130,6 +133,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
+        transport_security=transport_security,
     )
 
     @server.tool(
@@ -249,6 +253,35 @@ def _list_tasks(controller: TaskController) -> TaskListModel:
 def _delete_task(controller: TaskController, task_id: str) -> DeleteResult:
     controller.delete(task_id)
     return DeleteResult(id=task_id, deleted=True)
+
+
+def _transport_security_for(
+    application: AFApplication,
+) -> TransportSecuritySettings | None:
+    settings = application.settings
+    if settings.mcp_transport != "streamable-http":
+        return None
+    if _is_loopback_host(settings.host):
+        return None
+    if not settings.allowed_hosts or not settings.allowed_origins:
+        raise InvalidProviderConfiguration(
+            "streamable HTTP MCP requires explicit allowed hosts and origins for non-loopback hosts"
+        )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(settings.allowed_hosts),
+        allowed_origins=list(settings.allowed_origins),
+    )
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip()
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def main() -> None:
