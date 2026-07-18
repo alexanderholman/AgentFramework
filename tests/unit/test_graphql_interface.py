@@ -14,6 +14,7 @@ from af.framework.errors import InvalidPrompt
 from af.interfaces.graphql import (
     GRAPHQL_BAD_REQUEST_CODE,
     GRAPHQL_INTERNAL_ERROR_CODE,
+    GRAPHQL_INVALID_DOCUMENT_MESSAGE,
     GRAPHQL_QUERY_TOO_COMPLEX_CODE,
     GRAPHQL_REQUEST_TOO_LARGE_CODE,
     _count_aliases,
@@ -159,6 +160,7 @@ def test_graphql_complexity_helpers_cover_fragments_and_limits() -> None:
     assert _count_aliases(selections, fragments) == 2
     assert _count_root_fields(selections, fragments) == 3
     assert _selection_depth(selections, fragments, depth=1) == 2
+    assert _parse_query_document("{ hello }") == parse("{ hello }")
     _validate_document_complexity(document)
 
     alias_bomb = " ".join(f"a{i}: hello" for i in range(1000))
@@ -166,7 +168,7 @@ def test_graphql_complexity_helpers_cover_fragments_and_limits() -> None:
         _parse_query_document(f"{{ {alias_bomb} }}")
     assert error_info.value.code == GRAPHQL_QUERY_TOO_COMPLEX_CODE
 
-    with pytest.raises(Exception, match="Syntax Error"):
+    with pytest.raises(Exception, match=GRAPHQL_INVALID_DOCUMENT_MESSAGE):
         _parse_query_document("{ hello ")
 
 
@@ -188,9 +190,29 @@ async def test_graphql_request_payload_validation_paths() -> None:
             _request(method="GET", query_string=b"query=%7Bhello%7D&variables=not-json")
         )
 
+    with pytest.raises(Exception, match="Unable to decode GraphQL query parameters"):
+        await _parse_request_payload(_request(method="GET", query_string=b"query=%FF"))
+
     with pytest.raises(Exception, match="variables` must be an object"):
         await _parse_request_payload(
             _request(method="GET", query_string=b"query=%7Bhello%7D&variables=%5B1%5D")
+        )
+
+    deep_json = ("[" * 10_000) + "0" + ("]" * 10_000)
+    with pytest.raises(Exception, match="Unable to parse request body as JSON"):
+        await _parse_request_payload(
+            _request(
+                method="GET",
+                query_string=f"query=%7Bhello%7D&variables={deep_json}".encode("ascii"),
+            )
+        )
+
+    with pytest.raises(Exception, match="graphql request body must be at most 32768 bytes"):
+        await _parse_request_payload(
+            _request(
+                method="GET",
+                query_string=f"query={'x' * 32769}".encode("ascii"),
+            )
         )
 
     with pytest.raises(Exception, match="Unsupported content type"):

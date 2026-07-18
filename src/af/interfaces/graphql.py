@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
+from urllib.parse import parse_qsl
 
 import strawberry
 from fastapi import APIRouter, Request, status
@@ -34,12 +35,16 @@ from af.framework.types import TASK_LIST_DEFAULT_LIMIT
 GRAPHQL_INTERNAL_ERROR_CODE = "INTERNAL_ERROR"
 GRAPHQL_INTERNAL_ERROR_MESSAGE = "internal GraphQL adapter error"
 GRAPHQL_BAD_REQUEST_CODE = "BAD_REQUEST"
+GRAPHQL_METHOD_NOT_ALLOWED_CODE = "METHOD_NOT_ALLOWED"
 GRAPHQL_REQUEST_TOO_LARGE_CODE = "REQUEST_TOO_LARGE"
 GRAPHQL_QUERY_TOO_COMPLEX_CODE = "QUERY_TOO_COMPLEX"
 GRAPHQL_MAX_BODY_BYTES = 32_768
 GRAPHQL_MAX_ALIASES = 50
 GRAPHQL_MAX_DEPTH = 8
 GRAPHQL_MAX_ROOT_FIELDS = 25
+GRAPHQL_INVALID_DOCUMENT_MESSAGE = "Unable to parse GraphQL query document"
+GRAPHQL_INVALID_QUERY_PARAMS_MESSAGE = "Unable to decode GraphQL query parameters"
+GRAPHQL_INVALID_JSON_MESSAGE = "Unable to parse request body as JSON"
 
 GraphQLSelection = SelectionNode
 
@@ -376,16 +381,101 @@ def _validate_document_complexity(document: DocumentNode) -> None:
         )
 
 
-def _parse_query_document(query: str) -> None:
+def _parse_query_document(query: str) -> DocumentNode:
     try:
         document = parse(query)
-    except GraphQLSyntaxError as error:
+    except (GraphQLSyntaxError, RecursionError, ValueError):
         raise _GraphQLRequestError(
-            str(error),
+            GRAPHQL_INVALID_DOCUMENT_MESSAGE,
             GRAPHQL_BAD_REQUEST_CODE,
             status_code=status.HTTP_400_BAD_REQUEST,
         ) from None
     _validate_document_complexity(document)
+    return document
+
+
+def _select_operation(
+    document: DocumentNode,
+    operation_name: str | None,
+) -> OperationDefinitionNode:
+    operations = [
+        definition
+        for definition in document.definitions
+        if isinstance(definition, OperationDefinitionNode)
+    ]
+    if not operations:
+        raise _GraphQLRequestError(
+            "GraphQL document must define an operation",
+            GRAPHQL_BAD_REQUEST_CODE,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if operation_name is None:
+        if len(operations) != 1:
+            raise _GraphQLRequestError(
+                "operationName is required when a document defines multiple operations",
+                GRAPHQL_BAD_REQUEST_CODE,
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        return operations[0]
+    for operation in operations:
+        if operation.name is not None and operation.name.value == operation_name:
+            return operation
+    raise _GraphQLRequestError(
+        "unknown GraphQL operation",
+        GRAPHQL_BAD_REQUEST_CODE,
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _validate_get_operation(document: DocumentNode, operation_name: str | None) -> None:
+    operation = _select_operation(document, operation_name)
+    if getattr(operation.operation, "value", operation.operation) != "query":
+        raise _GraphQLRequestError(
+            "GET requests may only execute query operations",
+            GRAPHQL_METHOD_NOT_ALLOWED_CODE,
+            status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+
+def _validate_bounded_text(value: str, *, label: str) -> None:
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeError:
+        raise _GraphQLRequestError(
+            GRAPHQL_INVALID_QUERY_PARAMS_MESSAGE,
+            GRAPHQL_BAD_REQUEST_CODE,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        ) from None
+    if encoded_length > GRAPHQL_MAX_BODY_BYTES:
+        raise _GraphQLRequestError(
+            f"graphql {label} must be at most {GRAPHQL_MAX_BODY_BYTES} bytes",
+            GRAPHQL_REQUEST_TOO_LARGE_CODE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        )
+
+
+def _parse_get_parameters(request: Request) -> dict[str, str]:
+    raw_query_string = request.scope.get("query_string", b"")
+    if len(raw_query_string) > GRAPHQL_MAX_BODY_BYTES:
+        raise _GraphQLRequestError(
+            f"graphql request body must be at most {GRAPHQL_MAX_BODY_BYTES} bytes",
+            GRAPHQL_REQUEST_TOO_LARGE_CODE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        )
+    try:
+        pairs = parse_qsl(
+            raw_query_string.decode("ascii"),
+            keep_blank_values=True,
+            encoding="utf-8",
+            errors="strict",
+        )
+    except (UnicodeDecodeError, ValueError):
+        raise _GraphQLRequestError(
+            GRAPHQL_INVALID_QUERY_PARAMS_MESSAGE,
+            GRAPHQL_BAD_REQUEST_CODE,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        ) from None
+    return {key: value for key, value in pairs}
 
 
 async def _read_bounded_body(request: Request) -> bytes:
@@ -420,23 +510,28 @@ async def _read_bounded_body(request: Request) -> bytes:
 
 async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
     if request.method == "GET":
-        query = request.query_params.get("query")
-        operation_name = request.query_params.get("operationName")
-        variables_param = request.query_params.get("variables")
+        params = _parse_get_parameters(request)
+        query = params.get("query")
+        operation_name = params.get("operationName")
+        variables_param = params.get("variables")
         if query is None:
             raise _GraphQLRequestError(
                 "No GraphQL query found in the request",
                 GRAPHQL_BAD_REQUEST_CODE,
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+        _validate_bounded_text(query, label="query")
+        if operation_name is not None:
+            _validate_bounded_text(operation_name, label="operationName")
         if variables_param is None:
             variables: dict[str, object] | None = None
         else:
+            _validate_bounded_text(variables_param, label="variables")
             try:
                 parsed_variables = json.loads(variables_param)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError, UnicodeError, ValueError):
                 raise _GraphQLRequestError(
-                    "Unable to parse request body as JSON",
+                    GRAPHQL_INVALID_JSON_MESSAGE,
                     GRAPHQL_BAD_REQUEST_CODE,
                     status_code=status.HTTP_400_BAD_REQUEST,
                 ) from None
@@ -460,9 +555,9 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
     body = await _read_bounded_body(request)
     try:
         payload = json.loads(body)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError, UnicodeError, ValueError):
         raise _GraphQLRequestError(
-            "Unable to parse request body as JSON",
+            GRAPHQL_INVALID_JSON_MESSAGE,
             GRAPHQL_BAD_REQUEST_CODE,
             status_code=status.HTTP_400_BAD_REQUEST,
         ) from None
@@ -506,7 +601,9 @@ async def _handle_graphql_request(
 ) -> JSONResponse:
     try:
         payload = await _parse_request_payload(request)
-        _parse_query_document(payload.query)
+        document = _parse_query_document(payload.query)
+        if request.method == "GET":
+            _validate_get_operation(document, payload.operation_name)
     except _GraphQLRequestError as error:
         return _graphql_error_response(
             error.message,

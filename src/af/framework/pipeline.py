@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Never
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from af.framework.contracts import (
 from af.framework.errors import (
     InvalidPrompt,
     InvalidSelectionProposal,
+    InvalidWorkRequest,
     UnsupportedWork,
     VerificationFailed,
 )
@@ -27,6 +29,9 @@ from af.framework.types import (
     PROCEDURE_ID_MAX_LENGTH,
     PROCEDURE_INTENT_MAX_LENGTH,
     PROMPT_MAX_LENGTH,
+    WORK_REQUEST_ATTRIBUTE_COUNT_MAX,
+    WORK_REQUEST_ATTRIBUTE_KEY_MAX_LENGTH,
+    WORK_REQUEST_ATTRIBUTE_NUMBER_MAX_LENGTH,
     ArgumentValueType,
     Classification,
     ExecutionOutcome,
@@ -86,10 +91,7 @@ class PipelineAgent:
         self._selector_confidence_threshold = selector_confidence_threshold
 
     def handle(self, request: WorkRequest) -> ExecutionOutcome:
-        normalized_request = WorkRequest(
-            prompt=normalize_prompt(request.prompt),
-            attributes=request.attributes,
-        )
+        normalized_request = self._normalize_work_request(request, typed_prompt=False)
         return self._handle_request(normalized_request)
 
     def handle_classification(
@@ -874,7 +876,7 @@ class PipelineAgent:
         *,
         expected_procedure_id: str | None,
     ) -> tuple[WorkRequest, Classification, str | None]:
-        prompt = self._validate_typed_prompt(request.prompt)
+        normalized_request = self._normalize_work_request(request, typed_prompt=True)
         if type(classification) is not Classification:
             raise InvalidSelectionProposal("typed classification is invalid")
         if not is_valid_procedure_intent(classification.intent):
@@ -888,7 +890,7 @@ class PipelineAgent:
         if expected_procedure_id is not None and not is_valid_procedure_id(expected_procedure_id):
             raise InvalidSelectionProposal("typed classification is invalid")
         return (
-            WorkRequest(prompt=prompt, attributes=request.attributes),
+            normalized_request,
             Classification(
                 intent=classification.intent,
                 arguments=normalized_arguments,
@@ -896,6 +898,19 @@ class PipelineAgent:
                 classifier=classification.classifier,
             ),
             expected_procedure_id,
+        )
+
+    def _normalize_work_request(self, request: object, *, typed_prompt: bool) -> WorkRequest:
+        if type(request) is not WorkRequest:
+            raise InvalidWorkRequest()
+        prompt = (
+            self._validate_typed_prompt(request.prompt)
+            if typed_prompt
+            else normalize_prompt(request.prompt)
+        )
+        return WorkRequest(
+            prompt=prompt,
+            attributes=self._normalize_work_request_attributes(request.attributes),
         )
 
     @staticmethod
@@ -907,6 +922,42 @@ class PipelineAgent:
         if len(prompt) > PROMPT_MAX_LENGTH:
             raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")
         return prompt
+
+    @staticmethod
+    def _normalize_work_request_attributes(attributes: object) -> dict[str, object]:
+        if type(attributes) is not dict or len(attributes) > WORK_REQUEST_ATTRIBUTE_COUNT_MAX:
+            raise InvalidWorkRequest()
+        normalized: dict[str, object] = {}
+        for name, value in attributes.items():
+            if (
+                type(name) is not str
+                or not name
+                or len(name) > WORK_REQUEST_ATTRIBUTE_KEY_MAX_LENGTH
+            ):
+                raise InvalidWorkRequest()
+            if value is None or type(value) is bool:
+                normalized[name] = value
+                continue
+            if type(value) is str:
+                if len(value) > PROMPT_MAX_LENGTH:
+                    raise InvalidWorkRequest()
+                normalized[name] = value
+                continue
+            if type(value) is int:
+                if len(str(value)) > WORK_REQUEST_ATTRIBUTE_NUMBER_MAX_LENGTH:
+                    raise InvalidWorkRequest()
+                normalized[name] = value
+                continue
+            if type(value) is float:
+                if (
+                    not isfinite(value)
+                    or len(repr(value)) > WORK_REQUEST_ATTRIBUTE_NUMBER_MAX_LENGTH
+                ):
+                    raise InvalidWorkRequest()
+                normalized[name] = value
+                continue
+            raise InvalidWorkRequest()
+        return normalized
 
     @staticmethod
     def _normalize_typed_arguments(arguments: object) -> dict[str, str]:

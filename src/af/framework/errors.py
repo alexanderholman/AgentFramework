@@ -17,6 +17,11 @@ class InvalidPrompt(AFError, ValueError):
         super().__init__(message)
 
 
+class InvalidWorkRequest(AFError, ValueError):
+    def __init__(self, message: str = "work request is invalid") -> None:
+        super().__init__(message)
+
+
 class InvalidPagination(AFError, ValueError):
     """Raised when a paginated list request is outside AF's supported bounds."""
 

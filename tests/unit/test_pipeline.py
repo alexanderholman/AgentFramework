@@ -15,6 +15,7 @@ from af.framework.errors import (
     InvalidProviderConfiguration,
     InvalidRoutingPolicy,
     InvalidSelectionProposal,
+    InvalidWorkRequest,
     UnsupportedWork,
     VerificationFailed,
 )
@@ -900,6 +901,13 @@ class HostileDecision(SelectionDecision):
         return super().__getattribute__(name)
 
 
+class HostileWorkRequest(WorkRequest):
+    def __getattribute__(self, name: str) -> object:
+        if name in {"prompt", "attributes"}:
+            raise RuntimeError("SECRET-work-request")
+        return super().__getattribute__(name)
+
+
 def test_selector_argument_count_is_bounded_before_iteration() -> None:
     arguments = OversizedArgumentMap({"text": "strawberry", "character": "r", "extra": "boom"})
     application = create_application(
@@ -973,7 +981,34 @@ def test_hostile_selector_decisions_fail_closed_without_execution(
         )
         for event in trace.events
     )
-    assert "SECRET" not in " ".join(event.detail for event in trace.events)
+
+
+@pytest.mark.parametrize(
+    "work_request",
+    [
+        cast(WorkRequest, HostileWorkRequest(prompt="hello")),
+        WorkRequest(
+            prompt="hello",
+            attributes={"channel": "x" * (PROMPT_MAX_LENGTH + 1)},
+        ),
+    ],
+)
+def test_agent_handle_rejects_invalid_work_requests_without_tracing(
+    work_request: WorkRequest,
+) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises((InvalidPrompt, InvalidWorkRequest)) as captured:
+        application.agent.handle(work_request)
+
+    rendered = "".join(traceback.format_exception(captured.value))
+    assert "SECRET" not in rendered
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert application.traces.list() == []
     assert "SECRET" not in "".join(
         traceback.format_exception(
             type(captured.value),
@@ -1376,6 +1411,29 @@ def test_agent_handle_classification_rejects_malformed_typed_envelopes_without_t
             WorkRequest(prompt="typed prompt"),
             classification,
             expected_procedure_id=expected_procedure_id,
+        )
+
+    assert application.traces.list() == []
+
+
+def test_agent_handle_classification_rejects_invalid_work_request_attributes_without_tracing() -> (
+    None
+):
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(InvalidWorkRequest):
+        application.agent.handle_classification(
+            WorkRequest(prompt="typed prompt", attributes={"channel": object()}),
+            Classification(
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=1.0,
+                classifier="manual",
+            ),
+            expected_procedure_id="character-count",
         )
 
     assert application.traces.list() == []

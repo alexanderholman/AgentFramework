@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from ipaddress import ip_address
+
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from af import __version__
 from af.bootstrap import AFApplication, create_application
@@ -11,6 +14,21 @@ from af.framework.errors import InvalidPrompt, TaskNotFound, UnsupportedWork, Ve
 from af.interfaces.graphql import create_graphql_router
 from af.interfaces.rest import create_rest_router
 from af.interfaces.web import create_web_router
+
+
+def _trusted_hosts_for(host: str) -> list[str]:
+    normalized = host.strip()
+    allowed_hosts = {normalized}
+    if normalized == "localhost":
+        allowed_hosts.update({"127.0.0.1", "[::1]", "::1"})
+        return sorted(allowed_hosts)
+    try:
+        parsed = ip_address(normalized.strip("[]"))
+    except ValueError:
+        return sorted(allowed_hosts)
+    if parsed.is_loopback:
+        allowed_hosts.update({"127.0.0.1", "localhost", "[::1]", "::1"})
+    return sorted(allowed_hosts)
 
 
 def create_http_app(application: AFApplication | None = None) -> FastAPI:
@@ -21,6 +39,10 @@ def create_http_app(application: AFApplication | None = None) -> FastAPI:
         description="Classification-heavy, inference-light AF reference application",
     )
     app.state.af = resolved
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=_trusted_hosts_for(resolved.settings.host),
+    )
     app.include_router(create_web_router(resolved.tasks))
     app.include_router(create_rest_router(resolved.tasks))
     app.include_router(create_graphql_router(resolved.tasks), prefix="/graphql")

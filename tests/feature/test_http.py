@@ -13,6 +13,7 @@ from af.interfaces.graphql import create_graphql_router
 from af.interfaces.http import create_http_app
 
 CSRF_PATTERN = re.compile(r'name="csrf_token" value="([^"]+)"')
+TEST_HOST = "127.0.0.1"
 
 
 def _extract_csrf_token(html: str) -> str:
@@ -24,11 +25,15 @@ def _extract_csrf_token(html: str) -> str:
 def _graphql_client(controller: object) -> TestClient:
     app = FastAPI()
     app.include_router(create_graphql_router(controller), prefix="/graphql")
-    return TestClient(app)
+    return TestClient(app, base_url=f"http://{TEST_HOST}")
+
+
+def _http_client(application, *, scheme: str = "http") -> TestClient:  # type: ignore[no-untyped-def]
+    return TestClient(create_http_app(application), base_url=f"{scheme}://{TEST_HOST}")
 
 
 def test_html_index_and_form_answer(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         index = client.get("/")
         csrf_token = _extract_csrf_token(index.text)
         created = client.post(
@@ -45,7 +50,7 @@ def test_html_index_and_form_answer(application) -> None:  # type: ignore[no-unt
 
 
 def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         empty_list = client.get("/tasks")
         index = client.get("/")
         create_token = _extract_csrf_token(index.text)
@@ -95,7 +100,7 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
 
 
 def test_html_rejects_blank_create_with_html_feedback(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         index = client.get("/")
         response = client.post(
             "/tasks",
@@ -111,7 +116,7 @@ def test_html_rejects_blank_create_with_html_feedback(application) -> None:  # t
 def test_html_rejects_too_long_update_with_html_feedback(application) -> None:  # type: ignore[no-untyped-def]
     too_long = "a" * 10_001
 
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         index = client.get("/")
         created = client.post(
             "/tasks",
@@ -140,7 +145,7 @@ def test_html_rejects_too_long_update_with_html_feedback(application) -> None:  
 
 
 def test_html_sets_csrf_cookie_and_allows_valid_mutations(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         index = client.get("/")
         create_token = _extract_csrf_token(index.text)
         created = client.post(
@@ -164,16 +169,31 @@ def test_html_sets_csrf_cookie_and_allows_valid_mutations(application) -> None: 
         )
 
     assert "af-csrf=" in index.headers["set-cookie"]
+    assert "__Host-" not in index.headers["set-cookie"]
+    assert "Domain=" not in index.headers["set-cookie"]
+    assert "Path=/" in index.headers["set-cookie"]
     assert "HttpOnly" in index.headers["set-cookie"]
     assert "SameSite=strict" in index.headers["set-cookie"]
+    assert "Secure" not in index.headers["set-cookie"]
     assert created.status_code == 303
     assert updated.status_code == 303
     assert deleted.status_code == 303
 
 
+def test_html_csrf_cookie_sets_secure_only_over_https(application) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application, scheme="https") as client:
+        response = client.get("/")
+
+    assert "af-csrf=" in response.headers["set-cookie"]
+    assert "Domain=" not in response.headers["set-cookie"]
+    assert "Path=/" in response.headers["set-cookie"]
+    assert "HttpOnly" in response.headers["set-cookie"]
+    assert "SameSite=strict" in response.headers["set-cookie"]
+    assert "Secure" in response.headers["set-cookie"]
+
+
 def test_html_rejects_csrf_failures_before_mutation(application) -> None:  # type: ignore[no-untyped-def]
-    app = create_http_app(application)
-    with TestClient(app) as client_a, TestClient(app) as client_b:
+    with _http_client(application) as client_a, _http_client(application) as client_b:
         index_a = client_a.get("/")
         index_b = client_b.get("/")
         token_a = _extract_csrf_token(index_a.text)
@@ -217,7 +237,7 @@ def test_html_rejects_csrf_failures_before_mutation(application) -> None:  # typ
 
 
 def test_rest_crud_status_and_reexecution(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         created_response = client.post(
             "/api/v1/tasks", json={"prompt": "how many rs in strawberry"}
         )
@@ -246,7 +266,7 @@ def test_rest_crud_status_and_reexecution(application) -> None:  # type: ignore[
 
 
 def test_rest_rejects_blank_prompt(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         response = client.post("/api/v1/tasks", json={"prompt": "   "})
 
     assert response.status_code == 422
@@ -254,7 +274,7 @@ def test_rest_rejects_blank_prompt(application) -> None:  # type: ignore[no-unty
 
 
 def test_rest_rejects_too_long_prompt(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         response = client.post(
             "/api/v1/tasks",
             json={"prompt": "a" * (PROMPT_MAX_LENGTH + 1)},
@@ -265,7 +285,7 @@ def test_rest_rejects_too_long_prompt(application) -> None:  # type: ignore[no-u
 
 
 def test_graphql_crud_shares_rest_repository(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         create_response = client.post(
             "/graphql",
             json={
@@ -318,7 +338,7 @@ def test_graphql_crud_shares_rest_repository(application) -> None:  # type: igno
 
 
 def test_graphql_missing_task_and_mutation_errors(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         missing_query = client.post(
             "/graphql",
             json={
@@ -363,7 +383,7 @@ def test_graphql_missing_task_and_mutation_errors(application) -> None:  # type:
 
 
 def test_graphql_rejects_blank_task_prompt(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         response = client.post(
             "/graphql",
             json={
@@ -387,7 +407,7 @@ def test_graphql_rejects_blank_task_prompt(application) -> None:  # type: ignore
 
 
 def test_graphql_rejects_too_long_task_prompt(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         response = client.post(
             "/graphql",
             json={
@@ -508,6 +528,73 @@ def test_graphql_rejects_alias_bombs_before_execution() -> None:
     assert controller.calls == 0
 
 
+def test_graphql_get_rejects_non_query_operations_before_execution(application) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        mutation = client.get(
+            "/graphql",
+            params={
+                "query": """
+                    mutation CreateTask {
+                      createTask(input: {prompt: "how many rs in strawberry"}) { id }
+                    }
+                """,
+                "operationName": "CreateTask",
+            },
+        )
+        subscription = client.get(
+            "/graphql",
+            params={"query": "subscription WatchTasks { tasks { id } }"},
+        )
+        multi_operation_query = client.get(
+            "/graphql",
+            params={
+                "query": """
+                    query ReadTasks { ...TaskFields }
+                    mutation CreateTask {
+                      createTask(input: {prompt: "how many rs in strawberry"}) { id }
+                    }
+                    fragment TaskFields on Query {
+                      tasks(limit: 10, offset: 0) { id }
+                    }
+                """,
+                "operationName": "ReadTasks",
+            },
+        )
+
+    for response in (mutation, subscription):
+        assert response.status_code == 405
+        assert response.json() == {
+            "data": None,
+            "errors": [
+                {
+                    "message": "GET requests may only execute query operations",
+                    "extensions": {"code": "METHOD_NOT_ALLOWED"},
+                }
+            ],
+        }
+    assert multi_operation_query.status_code == 200
+    assert multi_operation_query.json() == {"data": {"tasks": []}}
+    assert application.tasks.list() == []
+    assert application.traces.list() == []
+
+
+def test_http_rejects_untrusted_host_headers_before_html_and_graphql_execution(
+    application,
+) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        html = client.get("/", headers={"host": "evil.invalid"})
+        graphql = client.get(
+            "/graphql",
+            params={"query": "{ hello }"},
+            headers={"host": "evil.invalid"},
+        )
+
+    assert html.status_code == 400
+    assert graphql.status_code == 400
+    assert application.tasks.list() == []
+    assert application.traces.list() == []
+
+
 def test_graphql_tasks_paginates_at_repository_boundary() -> None:
     class RecordingTaskRepository(InMemoryTaskRepository):
         def __init__(self) -> None:
@@ -526,7 +613,7 @@ def test_graphql_tasks_paginates_at_repository_boundary() -> None:
     application.tasks.create("how many rs in strawberry")
     application.tasks.create("how many bs in blueberry")
 
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         response = client.post(
             "/graphql",
             json={"query": "{ tasks(limit: 1, offset: 1) { prompt output } }"},
@@ -540,7 +627,7 @@ def test_graphql_tasks_paginates_at_repository_boundary() -> None:
 
 
 def test_graphql_rejects_invalid_pagination_bounds(application) -> None:  # type: ignore[no-untyped-def]
-    with TestClient(create_http_app(application)) as client:
+    with _http_client(application) as client:
         response = client.post(
             "/graphql",
             json={"query": "{ tasks(limit: 101, offset: -1) { id } }"},

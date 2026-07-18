@@ -4,6 +4,51 @@
 
 ---
 
+## Run #008 - Final GraphQL GET and Trusted-Boundary Hardening Pass
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `ab9e604`
+- Requested immediate correction for GraphQL GET mutation execution, bounded GET parsing,
+  loopback trusted-host and CSRF cookie policy, and public `WorkRequest` hardening
+- Requirement to keep the PR in draft, preserve append-only history, and append this record once
+
+### Outputs
+- Enforced GraphQL-over-HTTP query-only execution for GET requests before `schema.execute`,
+  including named multi-operation documents and fragment-backed query reads
+- Added bounded and sanitized GraphQL GET query-parameter parsing for query, variables, and
+  operation names, plus malformed Unicode and deep-JSON failure coverage
+- Added loopback trusted-host enforcement in the FastAPI HTTP kernel and strengthened HTML
+  CSRF cookie assertions for host-only loopback HTTP and Secure HTTPS behavior
+- Hardened the public `PipelineAgent.handle()` and typed `handle_classification()` boundaries
+  to require exact `WorkRequest` objects and bounded plain attributes before tracing or routing
+
+### Verified Results
+- Ruff format check: 52 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 31 source files
+- Pytest: 174 passed, 1 warning
+- Coverage: 90.65 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed
+
+### Issues Encountered
+- The sandbox image did not have `uv` on `PATH`; validation proceeded after installing it for
+  the current user
+- The repository clone was shallow, so the first-pr topology governance test initially could
+  not resolve `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; validation proceeded after
+  `git fetch --unshallow origin` and `git fetch origin master:refs/remotes/origin/master`
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  the suite remained green and no new dependency was added
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Script: `[SCRIPT:af-dev]`
+
+---
+
 ## Log Entry Format
 
 Each agent run entry MUST follow this format:
