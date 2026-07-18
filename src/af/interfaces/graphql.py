@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,8 +38,10 @@ from af.interfaces.http_body import (
     BOUNDED_BODY_SCOPE_KEY,
     HTTP_MAX_BODY_BYTES,
     InvalidContentLengthHeader,
+    InvalidRequestBody,
     RequestBodyTooLarge,
-    read_bounded_chunks,
+    content_length_headers_from_scope,
+    read_bounded_receive,
     validate_content_length_header,
 )
 
@@ -60,6 +63,7 @@ GRAPHQL_INVALID_QUERY_PARAMS_MESSAGE = "Unable to decode GraphQL query parameter
 GRAPHQL_INVALID_JSON_MESSAGE = "Unable to parse request body as JSON"
 GRAPHQL_RESPONSE_MEDIA_TYPE = "application/graphql-response+json"
 GRAPHQL_LEGACY_JSON_MEDIA_TYPE = "application/json"
+_QVALUE = re.compile(r"^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$")
 
 GraphQLSelection = SelectionNode
 
@@ -162,13 +166,22 @@ async def _run_graphql_operation[T](operation: Callable[[], Awaitable[T]]) -> T:
 def _graphql_response_media_type(accept_header: str | None) -> str:
     if accept_header is None or not accept_header.strip():
         return GRAPHQL_RESPONSE_MEDIA_TYPE
-    accepts = {
-        part.split(";", 1)[0].strip().lower() for part in accept_header.split(",") if part.strip()
-    }
-    if GRAPHQL_RESPONSE_MEDIA_TYPE in accepts or "*/*" in accepts or "application/*" in accepts:
-        return GRAPHQL_RESPONSE_MEDIA_TYPE
-    if GRAPHQL_LEGACY_JSON_MEDIA_TYPE in accepts:
-        return GRAPHQL_LEGACY_JSON_MEDIA_TYPE
+    supported = (GRAPHQL_RESPONSE_MEDIA_TYPE, GRAPHQL_LEGACY_JSON_MEDIA_TYPE)
+    best_media_type: str | None = None
+    best_rank: tuple[float, int] | None = None
+    for media_type in supported:
+        rank = _accept_rank(accept_header, media_type)
+        if rank is None:
+            continue
+        if (
+            best_rank is None
+            or rank > best_rank
+            or (rank == best_rank and media_type == GRAPHQL_RESPONSE_MEDIA_TYPE)
+        ):
+            best_media_type = media_type
+            best_rank = rank
+    if best_media_type is not None:
+        return best_media_type
     raise _GraphQLRequestError(
         "Unsupported Accept header",
         GRAPHQL_NOT_ACCEPTABLE_CODE,
@@ -538,7 +551,9 @@ async def _read_bounded_body(request: Request) -> bytes:
     if isinstance(cached_body, bytes):
         return cached_body
     try:
-        validate_content_length_header(request.headers.get("content-length"))
+        expected_length = validate_content_length_header(
+            content_length_headers_from_scope(request.scope.get("headers", []))
+        )
     except InvalidContentLengthHeader:
         raise _GraphQLRequestError(
             "invalid Content-Length header",
@@ -552,12 +567,18 @@ async def _read_bounded_body(request: Request) -> bytes:
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
         ) from None
     try:
-        return await read_bounded_chunks(request.stream())
+        return await read_bounded_receive(request.receive, expected_length=expected_length)
     except RequestBodyTooLarge:
         raise _GraphQLRequestError(
             f"graphql request body must be at most {HTTP_MAX_BODY_BYTES} bytes",
             GRAPHQL_REQUEST_TOO_LARGE_CODE,
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        ) from None
+    except InvalidRequestBody:
+        raise _GraphQLRequestError(
+            "invalid request body",
+            GRAPHQL_BAD_REQUEST_CODE,
+            status_code=status.HTTP_400_BAD_REQUEST,
         ) from None
 
 
@@ -599,8 +620,7 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
             query=query, operation_name=operation_name, variables=variables
         )
 
-    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-    if content_type != "application/json":
+    if _parse_content_type(request.headers.get("content-type")) != "application/json":
         raise _GraphQLRequestError(
             "Unsupported content type",
             GRAPHQL_UNSUPPORTED_MEDIA_TYPE_CODE,
@@ -703,3 +723,88 @@ def create_graphql_router(controller: TaskController) -> APIRouter:
         return await _handle_graphql_request(request, controller)
 
     return router
+
+
+def _accept_rank(accept_header: str, media_type: str) -> tuple[float, int] | None:
+    best_rank: tuple[float, int] | None = None
+    for raw_part in accept_header.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        candidate_type, parameters = _parse_media_type(
+            part,
+            message="Unsupported Accept header",
+            code=GRAPHQL_NOT_ACCEPTABLE_CODE,
+            status_code=status.HTTP_406_NOT_ACCEPTABLE,
+        )
+        quality = _parse_quality(parameters)
+        if quality == 0:
+            continue
+        specificity = _media_specificity(candidate_type, media_type)
+        if specificity < 0:
+            continue
+        rank = (quality, specificity)
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
+    return best_rank
+
+
+def _parse_content_type(content_type_header: str | None) -> str | None:
+    if content_type_header is None or not content_type_header.strip():
+        return None
+    media_type, _ = _parse_media_type(
+        content_type_header.strip(),
+        message="Unsupported content type",
+        code=GRAPHQL_UNSUPPORTED_MEDIA_TYPE_CODE,
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    )
+    return media_type
+
+
+def _parse_media_type(
+    value: str,
+    *,
+    message: str,
+    code: str,
+    status_code: int,
+) -> tuple[str, dict[str, str]]:
+    parts = [part.strip() for part in value.split(";")]
+    media_type = parts[0].lower()
+    if "/" not in media_type or media_type.count("/") != 1:
+        raise _GraphQLRequestError(message, code, status_code=status_code)
+    parameters: dict[str, str] = {}
+    for raw_parameter in parts[1:]:
+        if not raw_parameter or "=" not in raw_parameter:
+            raise _GraphQLRequestError(message, code, status_code=status_code)
+        name, raw_value = raw_parameter.split("=", 1)
+        parameter_name = name.strip().lower()
+        parameter_value = raw_value.strip().strip('"')
+        if not parameter_name or not parameter_value:
+            raise _GraphQLRequestError(message, code, status_code=status_code)
+        parameters[parameter_name] = parameter_value
+    return media_type, parameters
+
+
+def _parse_quality(parameters: dict[str, str]) -> float:
+    quality = parameters.get("q")
+    if quality is None:
+        return 1.0
+    if not _QVALUE.fullmatch(quality):
+        raise _GraphQLRequestError(
+            "Unsupported Accept header",
+            GRAPHQL_NOT_ACCEPTABLE_CODE,
+            status_code=status.HTTP_406_NOT_ACCEPTABLE,
+        )
+    return float(quality)
+
+
+def _media_specificity(accepted_media_type: str, media_type: str) -> int:
+    if accepted_media_type == media_type:
+        return 2
+    if accepted_media_type == "*/*":
+        return 0
+    accepted_type, accepted_subtype = accepted_media_type.split("/", 1)
+    media_type_name, _media_subtype = media_type.split("/", 1)
+    if accepted_type == media_type_name and accepted_subtype == "*":
+        return 1
+    return -1

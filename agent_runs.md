@@ -574,3 +574,41 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+## Run #010 - Final HTTP/MCP Post-Pass Correction
+**Date**: 2026-07-18
+**Agent**: GitHub Copilot Coding Agent
+**Status**: Completed
+
+### Inputs
+- Pull request #2 follow-up on head `4d046bd`
+- Requested executable post-pass correction for HTTP media negotiation, bounded ASGI body framing, IPv6 loopback trusted-host handling, and end-to-end Streamable HTTP MCP transport trust
+- Requirement to keep the PR in draft, preserve Run #009 byte-for-byte, and append this record only if source changes landed
+
+### Outputs
+- Hardened GraphQL Accept and Content-Type parsing to honor media parameters and `q=0`, reject malformed quality values and structural parameter garbage, and deterministically prefer the GraphQL response media type only when equally acceptable
+- Tightened the shared bounded-body boundary to reject duplicate or malformed `Content-Length`, incomplete ASGI disconnects, and declared-versus-observed length mismatches before any HTML, REST, or GraphQL handler work
+- Replaced the HTTP trusted-host dependency with AF-owned canonical host parsing/matching so loopback IPv4/IPv6, bracketed IPv6, and configured host-or-host:port allowlists behave correctly while malformed or unrelated hosts fail closed
+- Canonicalized and validated explicit Streamable HTTP MCP allowed hosts and origins, expanded non-loopback direct-host entries to the configured AF port for exact SDK matching, and anchored governance validation helpers to the repository project plus dev extras for repeatable script execution from temporary working directories
+
+### Verified Results
+- Ruff format check: 55 files already formatted
+- Ruff lint: all checks passed
+- Strict mypy: no issues in 33 source files
+- Pytest: 199 passed, 1 warning
+- Coverage: 90.93 percent; required minimum 90 percent
+- Governance validation: 36 of 36 passed
+- Smoke: `uv run af hello` -> `Hello, world!`
+- Smoke: `uv run af ask 'how many rs in strawberry'` -> `3`
+
+### Issues Encountered
+- The sandbox clone was initially shallow, so the first-PR append-only topology check could not resolve `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; validation proceeded after `git fetch --unshallow origin` and `git fetch origin master:refs/remotes/origin/master`
+- The sandbox image did not initially provide `uv` on `PATH`; validation proceeded after installing `uv` for the current user
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning; the suite remained green and no new dependency was added
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/2
+- Workflow run: https://github.com/alexanderholman/AgentFramework/actions/runs/29655304393
+- Script: `[SCRIPT:af-dev]`
+
+---

@@ -34,8 +34,13 @@ def _graphql_client(controller: object) -> TestClient:
     return TestClient(app, base_url=f"http://{TEST_HOST}")
 
 
-def _http_client(application: AFApplication, *, scheme: str = "http") -> TestClient:
-    return TestClient(create_http_app(application), base_url=f"{scheme}://{TEST_HOST}")
+def _http_client(
+    application: AFApplication,
+    *,
+    scheme: str = "http",
+    base_url: str | None = None,
+) -> TestClient:
+    return TestClient(create_http_app(application), base_url=base_url or f"{scheme}://{TEST_HOST}")
 
 
 def _task(prompt: str, *, task_id: str = "task-1") -> Task:
@@ -848,6 +853,36 @@ def test_http_allows_configured_host_for_non_loopback_bind() -> None:
     assert blocked.status_code == 400
 
 
+def test_http_accepts_loopback_ipv6_and_configured_hosts_with_ports() -> None:
+    loopback = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    with _http_client(loopback) as client:
+        for host in ("[::1]:8000", "[::1]", "::1", "127.0.0.1:8000", "localhost:8000"):
+            response = client.get("/", headers={"host": host})
+            assert response.status_code == 200
+
+        assert client.get("/", headers={"host": "evil.invalid"}).status_code == 400
+
+    lan = create_application(
+        settings=Settings(host="0.0.0.0", allowed_hosts=("af.internal", "192.168.1.20")),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    with _http_client(lan, base_url="http://af.internal:8000") as client:
+        for host in (
+            "af.internal",
+            "af.internal:8000",
+            "192.168.1.20",
+            "192.168.1.20:8000",
+        ):
+            response = client.get("/", headers={"host": host})
+            assert response.status_code == 200
+
+        assert client.get("/", headers={"host": "evil.invalid:8000"}).status_code == 400
+
+
 def test_graphql_tasks_paginates_at_repository_boundary() -> None:
     class RecordingTaskRepository(InMemoryTaskRepository):
         def __init__(self) -> None:
@@ -906,6 +941,26 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
             json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
             headers={"accept": "application/json"},
         )
+        graphql_q_zero = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/graphql-response+json;q=0"},
+        )
+        json_q_zero = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "text/plain, application/json;q=0"},
+        )
+        prefer_json = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/json, application/graphql-response+json;q=0.5"},
+        )
+        wildcard = client.post(
+            "/graphql",
+            json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
+            headers={"accept": "application/*;q=0.8"},
+        )
         unsupported = client.post(
             "/graphql",
             json={"query": "{ tasks(limit: 1, offset: 0) { id } }"},
@@ -915,6 +970,11 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
             "/graphql",
             content='{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
             headers={"content-type": "application/jsonp"},
+        )
+        malformed_content_type = client.post(
+            "/graphql",
+            content='{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
+            headers={"content-type": "application/json; garbage"},
         )
         get_mutation = client.get(
             "/graphql",
@@ -933,10 +993,20 @@ def test_graphql_negotiates_media_types_and_rejects_unsupported_accept(applicati
     assert negotiated.headers["content-type"].startswith("application/graphql-response+json")
     assert legacy.status_code == 200
     assert legacy.headers["content-type"].startswith("application/json")
+    assert graphql_q_zero.status_code == 406
+    assert json_q_zero.status_code == 406
+    assert prefer_json.status_code == 200
+    assert prefer_json.headers["content-type"].startswith("application/json")
+    assert wildcard.status_code == 200
+    assert wildcard.headers["content-type"].startswith("application/graphql-response+json")
     assert unsupported.status_code == 406
     assert unsupported.json()["errors"][0]["extensions"] == {"code": "NOT_ACCEPTABLE"}
     assert wrong_type.status_code == 415
     assert wrong_type.json()["errors"][0]["extensions"] == {"code": "UNSUPPORTED_MEDIA_TYPE"}
+    assert malformed_content_type.status_code == 415
+    assert malformed_content_type.json()["errors"][0]["extensions"] == {
+        "code": "UNSUPPORTED_MEDIA_TYPE"
+    }
     assert get_mutation.status_code == 405
     assert get_mutation.headers["allow"] == "POST"
 

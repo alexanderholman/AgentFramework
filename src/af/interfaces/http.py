@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from ipaddress import ip_address
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from af import __version__
@@ -31,52 +29,47 @@ from af.interfaces.http_body import (
     BOUNDED_BODY_SCOPE_KEY,
     HTTP_MAX_BODY_BYTES,
     InvalidContentLengthHeader,
+    InvalidRequestBody,
     RequestBodyTooLarge,
+    content_length_headers_from_scope,
     read_bounded_receive,
     replay_receive,
     validate_content_length_header,
 )
+from af.interfaces.http_trust import format_host, host_matches, parse_host_value
 from af.interfaces.rest import create_rest_router
 from af.interfaces.web import create_web_router
 
 
+def _scope_header_values(scope: Scope, header_name: str) -> tuple[str, ...]:
+    normalized_header = header_name.lower()
+    values: list[str] = []
+    for key, value in scope.get("headers", []):
+        if key.decode("latin-1").lower() == normalized_header:
+            values.append(value.decode("latin-1"))
+    return tuple(values)
+
+
 def _trusted_hosts_for(host: str, configured_hosts: Sequence[str] = ()) -> list[str]:
     explicit_hosts = {
-        normalized_host
+        format_host(parse_host_value(configured_host, error_message="allowed host is invalid"))
         for configured_host in configured_hosts
-        for normalized_host in _normalize_trusted_host(configured_host)
     }
     if explicit_hosts:
         return sorted(explicit_hosts)
     if _is_loopback_host(host):
-        return ["127.0.0.1", "::1", "[::1]", "localhost"]
+        return ["127.0.0.1", "::1", "localhost"]
     raise InvalidProviderConfiguration(
         "non-loopback HTTP bind requires at least one explicit allowed host"
     )
 
 
-def _normalize_trusted_host(host: str) -> tuple[str, ...]:
-    normalized = host.strip()
-    if not normalized or "*" in normalized or "/" in normalized:
-        raise InvalidProviderConfiguration("allowed host is invalid")
-    try:
-        parsed = ip_address(normalized.strip("[]"))
-    except ValueError:
-        return (normalized,)
-    if parsed.version == 6:
-        canonical = parsed.compressed
-        return (canonical, f"[{canonical}]")
-    return (parsed.compressed,)
-
-
 def _is_loopback_host(host: str) -> bool:
-    normalized = host.strip()
-    if normalized == "localhost":
-        return True
     try:
-        return ip_address(normalized.strip("[]")).is_loopback
-    except ValueError:
+        normalized = parse_host_value(host, error_message="host is invalid").host
+    except InvalidProviderConfiguration:
         return False
+    return normalized in {"127.0.0.1", "::1", "localhost"}
 
 
 class _BoundedBodyMiddleware:
@@ -87,13 +80,10 @@ class _BoundedBodyMiddleware:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
-        headers = {
-            key.decode("latin-1"): value.decode("latin-1")
-            for key, value in scope.get("headers", [])
-        }
+        header_values = content_length_headers_from_scope(scope.get("headers", []))
         try:
-            validate_content_length_header(headers.get("content-length"))
-            body = await read_bounded_receive(receive)
+            expected_length = validate_content_length_header(header_values)
+            body = await read_bounded_receive(receive, expected_length=expected_length)
         except InvalidContentLengthHeader:
             await self._send_error_response(
                 scope,
@@ -101,6 +91,15 @@ class _BoundedBodyMiddleware:
                 send,
                 status_code=status.HTTP_400_BAD_REQUEST,
                 message="invalid Content-Length header",
+            )
+            return
+        except InvalidRequestBody:
+            await self._send_error_response(
+                scope,
+                receive,
+                send,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                message="invalid request body",
             )
             return
         except RequestBodyTooLarge:
@@ -157,6 +156,42 @@ class _BoundedBodyMiddleware:
         await response(scope, receive, send)
 
 
+class _TrustedHostMiddleware:
+    def __init__(self, app: ASGIApp, *, allowed_hosts: Sequence[str]) -> None:
+        self._app = app
+        self._allowed_hosts = tuple(
+            parse_host_value(host, error_message="allowed host is invalid")
+            for host in allowed_hosts
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        host_headers = _scope_header_values(scope, "host")
+        if len(host_headers) != 1:
+            response = PlainTextResponse(
+                "Invalid host header", status_code=status.HTTP_400_BAD_REQUEST
+            )
+            await response(scope, receive, send)
+            return
+        try:
+            actual_host = parse_host_value(host_headers[0], error_message="host header is invalid")
+        except InvalidProviderConfiguration:
+            response = PlainTextResponse(
+                "Invalid host header", status_code=status.HTTP_400_BAD_REQUEST
+            )
+            await response(scope, receive, send)
+            return
+        if not any(host_matches(allowed_host, actual_host) for allowed_host in self._allowed_hosts):
+            response = PlainTextResponse(
+                "Invalid host header", status_code=status.HTTP_400_BAD_REQUEST
+            )
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
 def create_http_app(
     application: AFApplication | None = None,
     *,
@@ -176,7 +211,7 @@ def create_http_app(
     app.state.af = resolved
     app.add_middleware(_BoundedBodyMiddleware)
     app.add_middleware(
-        TrustedHostMiddleware,
+        _TrustedHostMiddleware,
         allowed_hosts=_trusted_hosts_for(resolved_bind_host, resolved_allowed_hosts),
     )
     app.include_router(create_web_router(resolved.tasks))

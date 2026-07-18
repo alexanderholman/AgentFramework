@@ -4,6 +4,7 @@ import json
 
 import anyio
 import pytest
+from fastapi.testclient import TestClient
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from af.bootstrap import create_application
@@ -24,6 +25,17 @@ EXPECTED_TOOLS = {
     "af_create_task",
     "af_update_task",
     "af_delete_task",
+}
+
+INITIALIZE_REQUEST = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "pytest", "version": "1.0"},
+    },
 }
 
 
@@ -294,6 +306,22 @@ def test_streamable_http_mcp_keeps_loopback_default_and_accepts_explicit_transpo
     assert loopback_server.settings.transport_security is not None
     assert "127.0.0.1:*" in loopback_server.settings.transport_security.allowed_hosts
 
+    with TestClient(
+        loopback_server.streamable_http_app(), base_url="http://127.0.0.1:8000"
+    ) as client:
+        loopback_response = client.post(
+            "/mcp",
+            json=INITIALIZE_REQUEST,
+            headers={
+                "accept": "application/json",
+                "host": "127.0.0.1:8000",
+                "origin": "http://127.0.0.1:8000",
+            },
+        )
+
+    assert loopback_response.status_code == 200
+    assert loopback_response.json()["result"]["serverInfo"]["name"] == "AF Agent Framework"
+
     lan = create_application(
         settings=Settings(
             host="0.0.0.0",
@@ -306,5 +334,61 @@ def test_streamable_http_mcp_keeps_loopback_default_and_accepts_explicit_transpo
     )
     lan_server = create_mcp_server(lan)
     assert lan_server.settings.transport_security is not None
-    assert lan_server.settings.transport_security.allowed_hosts == ["af.internal"]
+    assert "af.internal:8000" in lan_server.settings.transport_security.allowed_hosts
     assert lan_server.settings.transport_security.allowed_origins == ["http://af.internal:8000"]
+
+    with TestClient(lan_server.streamable_http_app(), base_url="http://af.internal:8000") as client:
+        allowed = client.post(
+            "/mcp",
+            json=INITIALIZE_REQUEST,
+            headers={
+                "accept": "application/json",
+                "host": "af.internal:8000",
+                "origin": "http://af.internal:8000",
+            },
+        )
+        bad_host = client.post(
+            "/mcp",
+            json=INITIALIZE_REQUEST,
+            headers={
+                "accept": "application/json",
+                "host": "evil.invalid:8000",
+                "origin": "http://af.internal:8000",
+            },
+        )
+        bad_origin = client.post(
+            "/mcp",
+            json=INITIALIZE_REQUEST,
+            headers={
+                "accept": "application/json",
+                "host": "af.internal:8000",
+                "origin": "http://evil.invalid",
+            },
+        )
+
+    assert allowed.status_code == 200
+    assert allowed.json()["result"]["serverInfo"]["name"] == "AF Agent Framework"
+    assert bad_host.status_code == 421
+    assert bad_origin.status_code == 403
+
+
+def test_streamable_http_mcp_rejects_invalid_explicit_transport_entries() -> None:
+    for allowed_hosts, allowed_origins in (
+        (("*",), ("http://af.internal:8000",)),
+        (("af.internal/path",), ("http://af.internal:8000",)),
+        (("af.internal",), ("http://af.internal/path",)),
+        (("af.internal",), ("http://*.invalid",)),
+    ):
+        application = create_application(
+            settings=Settings(
+                host="0.0.0.0",
+                mcp_transport="streamable-http",
+                allowed_hosts=allowed_hosts,
+                allowed_origins=allowed_origins,
+            ),
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+        )
+
+        with pytest.raises(InvalidProviderConfiguration):
+            create_mcp_server(application)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 HTTP_MAX_BODY_BYTES = 131_072
@@ -17,18 +17,36 @@ class RequestBodyTooLarge(Exception):
     """Raised when an HTTP request body exceeds the configured byte limit."""
 
 
-def validate_content_length_header(content_length: str | None) -> None:
-    """Validate an optional Content-Length header against AF's HTTP body ceiling."""
+class InvalidRequestBody(Exception):
+    """Raised when an HTTP request body is truncated or mismatched."""
+
+
+def content_length_headers_from_scope(
+    headers: Iterable[tuple[bytes, bytes]],
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for key, value in headers:
+        if key.decode("latin-1").lower() == "content-length":
+            values.append(value.decode("latin-1"))
+    return tuple(values)
+
+
+def validate_content_length_header(content_length: str | tuple[str, ...] | None) -> int | None:
+    """Validate optional Content-Length header values against AF's HTTP body ceiling."""
     if content_length is None:
-        return
-    try:
-        parsed = int(content_length)
-    except ValueError:
-        raise InvalidContentLengthHeader from None
-    if parsed < 0:
+        return None
+    values = (content_length,) if isinstance(content_length, str) else content_length
+    if not values:
+        return None
+    if len(values) != 1:
         raise InvalidContentLengthHeader
+    candidate = values[0]
+    if not candidate.isascii() or not candidate.isdigit():
+        raise InvalidContentLengthHeader
+    parsed = int(candidate)
     if parsed > HTTP_MAX_BODY_BYTES:
         raise RequestBodyTooLarge
+    return parsed
 
 
 async def read_bounded_chunks(chunks: AsyncIterable[bytes]) -> bytes:
@@ -45,21 +63,29 @@ async def read_bounded_chunks(chunks: AsyncIterable[bytes]) -> bytes:
 
 async def read_bounded_receive(
     receive: Callable[[], Awaitable[Mapping[str, Any]]],
+    *,
+    expected_length: int | None = None,
 ) -> bytes:
     """Read the ASGI receive channel into memory while enforcing the shared byte ceiling."""
 
     async def chunks() -> AsyncIterable[bytes]:
+        size = 0
         while True:
             message = await receive()
             if message["type"] == "http.disconnect":
-                break
+                raise InvalidRequestBody
             if message["type"] != "http.request":
                 continue
             body = message.get("body", b"")
             if not isinstance(body, bytes):
                 body = b""
+            size += len(body)
+            if size > HTTP_MAX_BODY_BYTES:
+                raise RequestBodyTooLarge
             yield body
             if not bool(message.get("more_body", False)):
+                if expected_length is not None and size != expected_length:
+                    raise InvalidRequestBody
                 break
 
     return await read_bounded_chunks(chunks())

@@ -18,10 +18,12 @@ from af.interfaces.graphql import (
     GRAPHQL_MAX_TASK_NODES,
     GRAPHQL_QUERY_TOO_COMPLEX_CODE,
     GRAPHQL_REQUEST_TOO_LARGE_CODE,
+    GRAPHQL_RESPONSE_MEDIA_TYPE,
     _count_aliases,
     _count_root_fields,
     _count_task_nodes,
     _format_error,
+    _graphql_response_media_type,
     _GraphQLRequestError,
     _parse_query_document,
     _parse_request_payload,
@@ -232,6 +234,29 @@ def test_graphql_complexity_rejects_excessive_task_nodes() -> None:
     assert GRAPHQL_MAX_TASK_NODES < 300
 
 
+def test_graphql_response_media_type_honors_quality_and_rejects_invalid_ranges() -> None:
+    assert _graphql_response_media_type(None) == GRAPHQL_RESPONSE_MEDIA_TYPE
+    assert (
+        _graphql_response_media_type(
+            "application/json;q=0.8, application/graphql-response+json;q=0.8"
+        )
+        == GRAPHQL_RESPONSE_MEDIA_TYPE
+    )
+    assert (
+        _graphql_response_media_type("application/json, application/graphql-response+json;q=0.5")
+        == "application/json"
+    )
+
+    for accept in (
+        "application/graphql-response+json;q=0",
+        "text/plain, application/json;q=0",
+        "application/json;q=bogus",
+    ):
+        with pytest.raises(_GraphQLRequestError, match="Unsupported Accept header") as error_info:
+            _graphql_response_media_type(accept)
+        assert error_info.value.status_code == 406
+
+
 @pytest.mark.anyio
 async def test_graphql_request_payload_validation_paths() -> None:
     get_request = _request(
@@ -280,6 +305,24 @@ async def test_graphql_request_payload_validation_paths() -> None:
     with pytest.raises(Exception, match="Unsupported content type"):
         await _parse_request_payload(
             _request(method="POST", headers={"content-type": "text/plain"})
+        )
+
+    valid_charset = await _parse_request_payload(
+        _request(
+            method="POST",
+            headers={"content-type": "application/json; charset=utf-8"},
+            body=b'{"query":"{ tasks(limit: 1, offset: 0) { id } }"}',
+        )
+    )
+    assert valid_charset.query == "{ tasks(limit: 1, offset: 0) { id } }"
+
+    with pytest.raises(Exception, match="Unsupported content type"):
+        await _parse_request_payload(
+            _request(
+                method="POST",
+                headers={"content-type": "application/json; garbage"},
+                body=b'{"query":"{ hello }"}',
+            )
         )
 
     with pytest.raises(Exception, match="Unable to parse request body as JSON"):

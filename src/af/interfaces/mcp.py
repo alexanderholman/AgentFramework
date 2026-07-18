@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import datetime
-from ipaddress import ip_address
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -21,6 +20,13 @@ from af.domain.tasks import Task
 from af.framework.errors import AFError, InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
 from af.framework.types import ExecutionOutcome
+from af.interfaces.http_trust import (
+    ParsedHost,
+    format_host,
+    format_origin,
+    parse_host_value,
+    parse_origin_value,
+)
 
 MCP_INTERNAL_ERROR_MESSAGE = "internal MCP adapter error (MCP_INTERNAL_ERROR)"
 
@@ -267,21 +273,55 @@ def _transport_security_for(
         raise InvalidProviderConfiguration(
             "streamable HTTP MCP requires explicit allowed hosts and origins for non-loopback hosts"
         )
+    allowed_hosts = _canonical_transport_hosts(settings.allowed_hosts, port=settings.port)
+    allowed_origins = _canonical_transport_origins(settings.allowed_origins)
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=list(settings.allowed_hosts),
-        allowed_origins=list(settings.allowed_origins),
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
     )
 
 
 def _is_loopback_host(host: str) -> bool:
-    normalized = host.strip()
-    if normalized == "localhost":
-        return True
     try:
-        return ip_address(normalized.strip("[]")).is_loopback
-    except ValueError:
+        return parse_host_value(host, error_message="host is invalid").host in {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+        }
+    except InvalidProviderConfiguration:
         return False
+
+
+def _canonical_transport_hosts(values: tuple[str, ...], *, port: int) -> list[str]:
+    canonical: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        parsed = parse_host_value(value, error_message="allowed host is invalid")
+        for candidate in _host_transport_candidates(parsed, port=port):
+            if candidate not in seen:
+                seen.add(candidate)
+                canonical.append(candidate)
+    return canonical
+
+
+def _host_transport_candidates(parsed: ParsedHost, *, port: int) -> tuple[str, ...]:
+    if parsed.port is not None:
+        return (format_host(parsed),)
+    return (format_host(parsed), format_host(ParsedHost(parsed.host, port)))
+
+
+def _canonical_transport_origins(values: tuple[str, ...]) -> list[str]:
+    canonical: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        candidate = format_origin(
+            parse_origin_value(value, error_message="allowed origin is invalid")
+        )
+        if candidate not in seen:
+            seen.add(candidate)
+            canonical.append(candidate)
+    return canonical
 
 
 def main() -> None:

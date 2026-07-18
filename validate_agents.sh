@@ -14,6 +14,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
 
 run_test() {
     local test_id=$1
@@ -109,7 +110,7 @@ file_exists() {
 }
 
 run_uv_python() {
-    uv run "$@"
+    uv run --project "$REPO_ROOT" --extra dev "$@"
 }
 
 if [ -f "agents.yaml" ]; then
