@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+from typing import cast
+
 import pytest
 
 from af.bootstrap import create_application
@@ -12,6 +15,8 @@ from af.framework.errors import (
 )
 from af.framework.routing import OptimisationGoal, RoutingPolicy
 from af.framework.types import (
+    ProcedureArgumentDescriptor,
+    ProcedureDescriptor,
     SelectionDecision,
     SelectionProposal,
     SelectorLocality,
@@ -60,7 +65,11 @@ class ExplodingSelector:
     def locality(self) -> SelectorLocality:
         return SelectorLocality.LOCAL
 
-    def select(self, prompt: str, catalogue: tuple[str, ...]) -> SelectionDecision:
+    def select(
+        self,
+        prompt: str,
+        catalogue: tuple[ProcedureDescriptor, ...],
+    ) -> SelectionDecision:
         raise AssertionError(
             f"selector must not receive deterministic work: {prompt} / {catalogue!r}"
         )
@@ -87,7 +96,7 @@ class RecordingSelector:
         self._decision = decision
         self._locality = locality
         self.prompts: list[str] = []
-        self.catalogues: list[tuple[str, ...]] = []
+        self.catalogues: list[tuple[ProcedureDescriptor, ...]] = []
 
     @property
     def name(self) -> str:
@@ -97,10 +106,31 @@ class RecordingSelector:
     def locality(self) -> SelectorLocality:
         return self._locality
 
-    def select(self, prompt: str, catalogue: tuple[str, ...]) -> SelectionDecision:
+    def select(
+        self,
+        prompt: str,
+        catalogue: tuple[ProcedureDescriptor, ...],
+    ) -> SelectionDecision:
         self.prompts.append(prompt)
         self.catalogues.append(catalogue)
         return self._decision
+
+
+class FailingSelector:
+    @property
+    def name(self) -> str:
+        return "failing-test-selector"
+
+    @property
+    def locality(self) -> SelectorLocality:
+        return SelectorLocality.LOCAL
+
+    def select(
+        self,
+        prompt: str,
+        catalogue: tuple[ProcedureDescriptor, ...],
+    ) -> SelectionDecision:
+        raise RuntimeError(f"provider exploded for {prompt}: secret-token")
 
 
 def test_local_selector_can_route_unknown_work_through_registered_procedure() -> None:
@@ -124,7 +154,37 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
     trace = application.traces.get(outcome.trace_id)
 
     assert selector.prompts == ["count r please"]
-    assert selector.catalogues == [("hello", "character-count")]
+    assert selector.catalogues == [
+        (
+            ProcedureDescriptor(
+                procedure_id="hello",
+                version="1.0.0",
+                intent="system.hello",
+                arguments=(),
+            ),
+            ProcedureDescriptor(
+                procedure_id="character-count",
+                version="1.0.0",
+                intent="text.character_count",
+                arguments=(
+                    ProcedureArgumentDescriptor(
+                        name="text",
+                        value_type=str,
+                        min_length=1,
+                        max_length=10_000,
+                        allow_blank=False,
+                    ),
+                    ProcedureArgumentDescriptor(
+                        name="character",
+                        value_type=str,
+                        min_length=1,
+                        max_length=1,
+                        allow_blank=True,
+                    ),
+                ),
+            ),
+        )
+    ]
     assert outcome.route == "character-count"
     assert outcome.tier == "procedural"
     assert outcome.verified is True
@@ -252,6 +312,182 @@ def test_invalid_selector_proposals_fail_closed_without_execution(
     assert all(event.stage != "execute" for event in trace.events)
     assert any(
         event.stage == "select" and expected_reason in event.detail for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    [math.nan, math.inf, -math.inf, -0.01, 1.01],
+)
+def test_invalid_selector_confidence_fails_closed_without_execution(confidence: float) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=confidence,
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select" and "invalid confidence" in event.detail for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    "threshold",
+    [math.nan, math.inf, -math.inf, -0.01, 1.01],
+)
+def test_invalid_selector_threshold_fails_closed_without_execution(threshold: float) -> None:
+    application = create_application(
+        settings=Settings(selector_confidence_threshold=threshold),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=0.95,
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select" and "invalid selector threshold" in event.detail
+        for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_reason"),
+    [
+        (SelectionDecision(), "invalid selector decision"),
+        (
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments={"text": "strawberry", "character": "r"},
+                    confidence=0.95,
+                ),
+                reason="ambiguous",
+            ),
+            "invalid selector decision",
+        ),
+        (SelectionDecision(reason="   "), "invalid selector decision"),
+    ],
+)
+def test_malformed_selector_decisions_fail_closed_without_execution(
+    decision: SelectionDecision,
+    expected_reason: str,
+) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(decision),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select" and expected_reason in event.detail for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        cast(dict[str, str], {"text": "strawberry"}),
+        cast(dict[str, str], {"text": "strawberry", "character": "r", "extra": "x"}),
+        cast(dict[str, str], {"text": "strawberry", "character": None}),
+        {"text": "   ", "character": "r"},
+        {"text": "a" * 10_001, "character": "r"},
+        {"text": "strawberry", "character": ""},
+        {"text": "strawberry", "character": "rr"},
+    ],
+)
+def test_selector_argument_validation_fails_closed_without_execution(
+    arguments: dict[str, str],
+) -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=RecordingSelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="character-count",
+                    intent="text.character_count",
+                    arguments=arguments,
+                    confidence=0.95,
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select" and "invalid arguments" in event.detail for event in trace.events
+    )
+
+
+def test_selector_failures_are_sanitized_and_fail_closed() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=FailingSelector(),
+    )
+
+    with pytest.raises(UnsupportedWork) as captured:
+        application.agent.handle(WorkRequest(prompt="route this somehow"))
+
+    trace = application.traces.get(captured.value.trace_id)
+
+    assert trace.status == "unsupported"
+    assert trace.route is None
+    assert all(event.stage != "execute" for event in trace.events)
+    assert any(
+        event.stage == "select"
+        and "selector failure" in event.detail
+        and "secret-token" not in event.detail
+        for event in trace.events
     )
 
 

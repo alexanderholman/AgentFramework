@@ -9,10 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from af.application.tasks import TaskController
 from af.domain.tasks import Task
+from af.framework.types import PROMPT_MAX_LENGTH
 
 
 class TaskPrompt(BaseModel):
-    prompt: str = Field(min_length=1, max_length=10_000)
+    prompt: str = Field(min_length=1, max_length=PROMPT_MAX_LENGTH)
 
     @field_validator("prompt")
     @classmethod

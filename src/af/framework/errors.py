@@ -13,8 +13,8 @@ class InvalidCharacter(AFError, ValueError):
 
 
 class InvalidPrompt(AFError, ValueError):
-    def __init__(self) -> None:
-        super().__init__("prompt must not be blank")
+    def __init__(self, message: str = "prompt must not be blank") -> None:
+        super().__init__(message)
 
 
 class InvalidRoutingPolicy(AFError, ValueError):

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum, StrEnum
 
+PROMPT_MAX_LENGTH = 10_000
+
 
 class WorkTier(IntEnum):
     STATIC = 0
@@ -44,6 +46,23 @@ class SelectionProposal:
 class SelectionDecision:
     proposal: SelectionProposal | None = None
     reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProcedureArgumentDescriptor:
+    name: str
+    value_type: type[str]
+    min_length: int = 0
+    max_length: int | None = None
+    allow_blank: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ProcedureDescriptor:
+    procedure_id: str
+    version: str
+    intent: str
+    arguments: tuple[ProcedureArgumentDescriptor, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,7 +9,7 @@ from uuid import uuid4
 from af.domain.tasks import Task, TaskRepository
 from af.framework.contracts import Agent
 from af.framework.errors import InvalidPrompt
-from af.framework.types import ExecutionOutcome, WorkRequest
+from af.framework.types import PROMPT_MAX_LENGTH, ExecutionOutcome, WorkRequest
 
 
 class TaskService:
@@ -75,7 +75,9 @@ class TaskService:
     def _normalize(prompt: str) -> str:
         normalized = prompt.strip()
         if not normalized:
-            raise InvalidPrompt
+            raise InvalidPrompt()
+        if len(normalized) > PROMPT_MAX_LENGTH:
+            raise InvalidPrompt(f"prompt must be at most {PROMPT_MAX_LENGTH} characters")
         return normalized
 
 

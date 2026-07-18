@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from af.framework.contracts import Procedure
 from af.framework.errors import InvalidRoutingPolicy, UnsupportedWork
-from af.framework.types import Classification
+from af.framework.types import Classification, ProcedureDescriptor
 
 
 class OptimisationGoal(StrEnum):
@@ -39,6 +39,9 @@ class ProcedureRegistry:
 
     def all(self) -> tuple[Procedure, ...]:
         return tuple(self._procedures.values())
+
+    def catalogue(self) -> tuple[ProcedureDescriptor, ...]:
+        return tuple(procedure.selection_descriptor for procedure in self._procedures.values())
 
     def get(self, procedure_id: str) -> Procedure | None:
         return self._procedures.get(procedure_id)

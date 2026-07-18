@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from af.framework.errors import InvalidPrompt, TaskNotFound
+from af.framework.types import PROMPT_MAX_LENGTH
 
 
 def test_task_service_crud_reexecutes_updates(application) -> None:  # type: ignore[no-untyped-def]
@@ -25,3 +26,11 @@ def test_task_service_crud_reexecutes_updates(application) -> None:  # type: ign
 def test_blank_task_prompt_is_rejected(application) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(InvalidPrompt):
         application.tasks.create("   ")
+
+
+def test_too_long_task_prompt_is_rejected(application) -> None:  # type: ignore[no-untyped-def]
+    with pytest.raises(
+        InvalidPrompt,
+        match=f"prompt must be at most {PROMPT_MAX_LENGTH} characters",
+    ):
+        application.tasks.create("a" * (PROMPT_MAX_LENGTH + 1))

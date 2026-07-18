@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from af.framework.types import PROMPT_MAX_LENGTH
 from af.interfaces.http import create_http_app
 
 
@@ -256,3 +257,27 @@ def test_graphql_rejects_blank_task_prompt(application) -> None:  # type: ignore
     assert payload["errors"][0]["path"] == ["createTask"]
     assert payload["errors"][0]["extensions"] == {"code": "INVALIDPROMPT"}
     assert listed.json() == {"data": {"tasks": []}}
+
+
+def test_graphql_rejects_too_long_task_prompt(application) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(create_http_app(application)) as client:
+        response = client.post(
+            "/graphql",
+            json={
+                "query": """
+                    mutation Create($input: TaskInput!) {
+                      createTask(input: $input) { id }
+                    }
+                """,
+                "variables": {"input": {"prompt": "a" * (PROMPT_MAX_LENGTH + 1)}},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert payload["errors"][0]["message"] == (
+        f"prompt must be at most {PROMPT_MAX_LENGTH} characters"
+    )
+    assert payload["errors"][0]["path"] == ["createTask"]
+    assert payload["errors"][0]["extensions"] == {"code": "INVALIDPROMPT"}

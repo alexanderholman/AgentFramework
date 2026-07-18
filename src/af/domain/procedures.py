@@ -6,7 +6,10 @@ from abc import ABC, abstractmethod
 
 from af.framework.errors import InvalidCharacter, InvalidSelectionProposal
 from af.framework.types import (
+    PROMPT_MAX_LENGTH,
     Classification,
+    ProcedureArgumentDescriptor,
+    ProcedureDescriptor,
     ProcedureResult,
     RouteMetrics,
     WorkTier,
@@ -57,6 +60,12 @@ class PureProcedureMixin:
 
 class HelloProcedure(PureProcedureMixin, BaseProcedure):
     id = "hello"
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="system.hello",
+        arguments=(),
+    )
     tier = WorkTier.STATIC
     metrics = RouteMetrics(cost=0, latency=0, intelligence=0)
 
@@ -77,6 +86,27 @@ class HelloProcedure(PureProcedureMixin, BaseProcedure):
 
 class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
     id = "character-count"
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="text.character_count",
+        arguments=(
+            ProcedureArgumentDescriptor(
+                name="text",
+                value_type=str,
+                min_length=1,
+                max_length=PROMPT_MAX_LENGTH,
+                allow_blank=False,
+            ),
+            ProcedureArgumentDescriptor(
+                name="character",
+                value_type=str,
+                min_length=1,
+                max_length=1,
+                allow_blank=True,
+            ),
+        ),
+    )
     tier = WorkTier.PROCEDURAL
     metrics = RouteMetrics(cost=1, latency=1, intelligence=1)
 

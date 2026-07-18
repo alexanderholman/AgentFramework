@@ -9,9 +9,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from af.application.tasks import TaskController
+from af.framework.types import PROMPT_MAX_LENGTH
 
 TEMPLATE_DIRECTORY = Path(__file__).parent.parent / "views" / "templates"
-PROMPT_MAX_LENGTH = 10_000
 
 
 def _validate_prompt(prompt: str) -> str | None:

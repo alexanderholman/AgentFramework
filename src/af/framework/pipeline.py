@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import isfinite
+from typing import Never
 from uuid import uuid4
 
 from af.framework.contracts import (
@@ -18,7 +20,10 @@ from af.framework.routing import LadderRouter, ProcedureRegistry
 from af.framework.types import (
     Classification,
     ExecutionOutcome,
+    ProcedureDescriptor,
     RunTrace,
+    SelectionDecision,
+    SelectionProposal,
     TraceEvent,
     WorkRequest,
 )
@@ -202,132 +207,333 @@ class PipelineAgent:
         if classification.intent != "unknown":
             return classification, None
         if self._selector is None:
-            events.append(TraceEvent("select", "human handoff: no selector installed"))
-            self._record_unsupported_trace(
+            self._fail_closed_selection(
+                "human handoff: no selector installed",
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-            raise UnsupportedWork(request.prompt, trace_id)
-
-        decision = self._selector.select(
-            request.prompt,
-            tuple(procedure.id for procedure in self._registry.all()),
+        selector_label = self._selector_label()
+        threshold = self._validated_probability(
+            self._selector_confidence_threshold,
+            error_detail=f"{selector_label} handoff: invalid selector threshold",
+            trace_id=trace_id,
+            request=request,
+            classification=classification,
+            created_at=created_at,
+            events=events,
         )
-        if decision.proposal is None:
-            reason = decision.reason or "selector requested human handoff"
-            events.append(
-                TraceEvent(
-                    "select",
-                    f"{self._selector.name} [{self._selector.locality}] handoff: {reason}",
-                )
-            )
-            self._record_unsupported_trace(
+        try:
+            decision = self._selector.select(request.prompt, self._registry.catalogue())
+        except Exception:
+            self._fail_closed_selection(
+                f"{selector_label} handoff: selector failure",
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-            raise UnsupportedWork(request.prompt, trace_id)
+        proposal, handoff_reason = self._normalize_selection_decision(
+            decision,
+            selector_label=selector_label,
+            trace_id=trace_id,
+            request=request,
+            classification=classification,
+            created_at=created_at,
+            events=events,
+        )
+        if proposal is None:
+            self._fail_closed_selection(
+                f"{selector_label} handoff: {handoff_reason}",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
 
-        proposal = decision.proposal
-        if proposal.confidence < self._selector_confidence_threshold:
-            events.append(
-                TraceEvent(
-                    "select",
-                    (
-                        f"{self._selector.name} [{self._selector.locality}] handoff: "
-                        f"confidence {proposal.confidence:.2f} below threshold "
-                        f"{self._selector_confidence_threshold:.2f}"
-                    ),
-                )
-            )
-            self._record_unsupported_trace(
+        validated_confidence = self._validated_probability(
+            proposal.confidence,
+            error_detail=f"{selector_label} handoff: invalid confidence",
+            trace_id=trace_id,
+            request=request,
+            classification=classification,
+            created_at=created_at,
+            events=events,
+        )
+        if validated_confidence < threshold:
+            self._fail_closed_selection(
+                (
+                    f"{selector_label} handoff: confidence {validated_confidence:.2f} "
+                    f"below threshold {threshold:.2f}"
+                ),
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-            raise UnsupportedWork(request.prompt, trace_id)
 
         procedure = self._registry.get(proposal.procedure_id)
         if procedure is None:
-            events.append(
-                TraceEvent(
-                    "select",
-                    (
-                        f"{self._selector.name} [{self._selector.locality}] handoff: "
-                        f"unknown procedure {proposal.procedure_id}"
-                    ),
-                )
-            )
-            self._record_unsupported_trace(
+            self._fail_closed_selection(
+                f"{selector_label} handoff: unknown procedure {proposal.procedure_id}",
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-            raise UnsupportedWork(request.prompt, trace_id)
+
+        if proposal.intent != procedure.selection_descriptor.intent:
+            self._fail_closed_selection(
+                f"{selector_label} handoff: unsupported intent {proposal.intent}",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
 
         selected_classification = Classification(
             intent=proposal.intent,
-            arguments=proposal.arguments,
-            confidence=proposal.confidence,
+            arguments=self._validate_selection_arguments(
+                procedure.selection_descriptor,
+                proposal.arguments,
+                selector_label=selector_label,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            ),
+            confidence=validated_confidence,
             classifier=self._selector.name,
         )
         if not procedure.supports(selected_classification):
-            events.append(
-                TraceEvent(
-                    "select",
-                    (
-                        f"{self._selector.name} [{self._selector.locality}] handoff: "
-                        f"unsupported intent {proposal.intent}"
-                    ),
-                )
-            )
-            self._record_unsupported_trace(
+            self._fail_closed_selection(
+                f"{selector_label} handoff: unsupported intent {proposal.intent}",
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-            raise UnsupportedWork(request.prompt, trace_id)
 
         try:
             procedure.validate(selected_classification)
         except InvalidSelectionProposal as error:
-            events.append(
-                TraceEvent(
-                    "select",
-                    (f"{self._selector.name} [{self._selector.locality}] handoff: {error}"),
-                )
-            )
-            self._record_unsupported_trace(
+            self._fail_closed_selection(
+                f"{selector_label} handoff: {error}",
                 trace_id=trace_id,
                 request=request,
                 classification=classification,
                 created_at=created_at,
                 events=events,
             )
-            raise UnsupportedWork(request.prompt, trace_id) from error
 
         events.append(
             TraceEvent(
                 "select",
                 (
-                    f"{self._selector.name} [{self._selector.locality}] selected "
+                    f"{selector_label} selected "
                     f"{proposal.procedure_id}/{proposal.intent} "
-                    f"confidence={proposal.confidence:.2f}"
+                    f"confidence={validated_confidence:.2f}"
                 ),
             )
         )
         return selected_classification, proposal.procedure_id
+
+    def _normalize_selection_decision(
+        self,
+        decision: SelectionDecision,
+        *,
+        selector_label: str,
+        trace_id: str,
+        request: WorkRequest,
+        classification: Classification,
+        created_at: datetime,
+        events: list[TraceEvent],
+    ) -> tuple[SelectionProposal | None, str | None]:
+        if not isinstance(decision, SelectionDecision):
+            self._fail_closed_selection(
+                f"{selector_label} handoff: invalid selector decision",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        proposal = decision.proposal
+        reason = decision.reason
+        if proposal is not None and not isinstance(proposal, SelectionProposal):
+            self._fail_closed_selection(
+                f"{selector_label} handoff: invalid selector decision",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        if reason is not None and not isinstance(reason, str):
+            self._fail_closed_selection(
+                f"{selector_label} handoff: invalid selector decision",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        if proposal is not None and (
+            not isinstance(proposal.procedure_id, str) or not isinstance(proposal.intent, str)
+        ):
+            self._fail_closed_selection(
+                f"{selector_label} handoff: invalid selector decision",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        normalized_reason = None if reason is None else reason.strip()
+        has_proposal = proposal is not None
+        has_reason = normalized_reason is not None and normalized_reason != ""
+        if has_proposal == has_reason:
+            self._fail_closed_selection(
+                f"{selector_label} handoff: invalid selector decision",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        return proposal, normalized_reason
+
+    def _validate_selection_arguments(
+        self,
+        descriptor: ProcedureDescriptor,
+        arguments: dict[str, str],
+        *,
+        selector_label: str,
+        trace_id: str,
+        request: WorkRequest,
+        classification: Classification,
+        created_at: datetime,
+        events: list[TraceEvent],
+    ) -> dict[str, str]:
+        if not isinstance(arguments, dict):
+            self._fail_closed_selection(
+                f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        expected_arguments = {argument.name: argument for argument in descriptor.arguments}
+        if set(arguments) != set(expected_arguments):
+            self._fail_closed_selection(
+                f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        validated: dict[str, str] = {}
+        for name, schema in expected_arguments.items():
+            value = arguments[name]
+            if not isinstance(value, schema.value_type):
+                self._fail_closed_selection(
+                    f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
+            if not schema.allow_blank and not value.strip():
+                self._fail_closed_selection(
+                    f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
+            if len(value) < schema.min_length or (
+                schema.max_length is not None and len(value) > schema.max_length
+            ):
+                self._fail_closed_selection(
+                    f"{selector_label} handoff: invalid arguments for {descriptor.procedure_id}",
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                )
+            validated[name] = value
+        return validated
+
+    def _validated_probability(
+        self,
+        value: float,
+        *,
+        error_detail: str,
+        trace_id: str,
+        request: WorkRequest,
+        classification: Classification,
+        created_at: datetime,
+        events: list[TraceEvent],
+    ) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+            self._fail_closed_selection(
+                error_detail,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        normalized = float(value)
+        if normalized < 0.0 or normalized > 1.0:
+            self._fail_closed_selection(
+                error_detail,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+        return normalized
+
+    def _selector_label(self) -> str:
+        if self._selector is None:
+            return "selector"
+        return f"{self._selector.name} [{self._selector.locality}]"
+
+    def _fail_closed_selection(
+        self,
+        detail: str,
+        *,
+        trace_id: str,
+        request: WorkRequest,
+        classification: Classification,
+        created_at: datetime,
+        events: list[TraceEvent],
+    ) -> Never:
+        events.append(TraceEvent("select", detail))
+        self._record_unsupported_trace(
+            trace_id=trace_id,
+            request=request,
+            classification=classification,
+            created_at=created_at,
+            events=events,
+        )
+        raise UnsupportedWork(request.prompt, trace_id)
 
     def _record_unsupported_trace(
         self,

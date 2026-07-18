@@ -4,6 +4,7 @@ import json
 
 from typer.testing import CliRunner
 
+from af.framework.types import PROMPT_MAX_LENGTH
 from af.interfaces.cli import create_cli
 
 runner = CliRunner()
@@ -68,6 +69,10 @@ def test_cli_reports_expected_errors_without_stdout(application) -> None:  # typ
 
     cases = [
         (["ask", "   "], "prompt must not be blank\n"),
+        (
+            ["ask", "a" * (PROMPT_MAX_LENGTH + 1)],
+            f"prompt must be at most {PROMPT_MAX_LENGTH} characters\n",
+        ),
         (["ask", "make tea"], "no route found for prompt: 'make tea'\n"),
         (["tasks", "show", "missing"], "task not found: missing\n"),
         (

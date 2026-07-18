@@ -7,6 +7,7 @@ from typing import Protocol
 from af.framework.types import (
     Classification,
     ExecutionOutcome,
+    ProcedureDescriptor,
     ProcedureResult,
     RouteMetrics,
     RunTrace,
@@ -33,6 +34,7 @@ class Procedure(Protocol):
     pure: bool
     replay_safe: bool
     metrics: RouteMetrics
+    selection_descriptor: ProcedureDescriptor
 
     def supports(self, classification: Classification) -> bool: ...
 
@@ -90,4 +92,8 @@ class Selector(Protocol):
     @property
     def locality(self) -> SelectorLocality: ...
 
-    def select(self, prompt: str, catalogue: tuple[str, ...]) -> SelectionDecision: ...
+    def select(
+        self,
+        prompt: str,
+        catalogue: tuple[ProcedureDescriptor, ...],
+    ) -> SelectionDecision: ...

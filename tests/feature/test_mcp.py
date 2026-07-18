@@ -3,6 +3,7 @@ from __future__ import annotations
 import anyio
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from af.framework.types import PROMPT_MAX_LENGTH
 from af.interfaces.mcp import create_mcp_server
 
 EXPECTED_TOOLS = {
@@ -90,6 +91,11 @@ def test_mcp_reports_domain_failures_as_tool_errors(application) -> None:  # typ
                     "af_create_task",
                     {"prompt": "make tea"},
                     "no route found for prompt: 'make tea'",
+                ),
+                (
+                    "af_ask",
+                    {"prompt": "a" * (PROMPT_MAX_LENGTH + 1)},
+                    f"prompt must be at most {PROMPT_MAX_LENGTH} characters",
                 ),
                 ("af_get_task", {"task_id": "missing"}, "task not found: missing"),
                 (
