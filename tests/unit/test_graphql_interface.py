@@ -25,7 +25,9 @@ from af.interfaces.graphql import (
     _parse_request_payload,
     _read_bounded_body,
     _run_graphql_operation,
+    _select_operation,
     _selection_depth,
+    _validate_get_operation,
     _validate_document_complexity,
     create_graphql_router,
 )
@@ -160,7 +162,10 @@ def test_graphql_complexity_helpers_cover_fragments_and_limits() -> None:
     assert _count_aliases(selections, fragments) == 2
     assert _count_root_fields(selections, fragments) == 3
     assert _selection_depth(selections, fragments, depth=1) == 2
-    assert _parse_query_document("{ hello }") == parse("{ hello }")
+    document_from_helper = _parse_query_document("{ hello }")
+    operation = _select_operation(document_from_helper, None)
+    assert operation.name is None
+    assert getattr(operation.operation, "value", operation.operation) == "query"
     _validate_document_complexity(document)
 
     alias_bomb = " ".join(f"a{i}: hello" for i in range(1000))
@@ -289,3 +294,21 @@ async def test_graphql_body_limits_and_error_formatting() -> None:
 
     expected = GraphQLError("prompt must not be blank", extensions={"code": "INVALIDPROMPT"})
     assert _format_error(expected) == expected.formatted
+
+
+def test_graphql_operation_selection_rejects_invalid_get_operation_shapes() -> None:
+    with pytest.raises(_GraphQLRequestError, match="operationName is required"):
+        _select_operation(parse("query First { hello } query Second { hello }"), None)
+
+    with pytest.raises(_GraphQLRequestError, match="unknown GraphQL operation"):
+        _select_operation(parse("query Known { hello }"), "Missing")
+
+    with pytest.raises(_GraphQLRequestError, match="define an operation"):
+        _select_operation(parse("fragment Example on Query { hello }"), None)
+
+    with pytest.raises(
+        _GraphQLRequestError, match="GET requests may only execute query operations"
+    ):
+        _validate_get_operation(
+            parse('mutation Create { createTask(input: {prompt: "x"}) { id } }'), None
+        )

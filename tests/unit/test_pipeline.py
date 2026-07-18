@@ -1439,6 +1439,31 @@ def test_agent_handle_classification_rejects_invalid_work_request_attributes_wit
     assert application.traces.list() == []
 
 
+def test_agent_handle_classification_rejects_hostile_work_request_without_tracing() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(InvalidWorkRequest) as captured:
+        application.agent.handle_classification(
+            cast(WorkRequest, HostileWorkRequest(prompt="typed prompt")),
+            Classification(
+                intent="text.character_count",
+                arguments={"text": "strawberry", "character": "r"},
+                confidence=1.0,
+                classifier="manual",
+            ),
+            expected_procedure_id="character-count",
+        )
+
+    rendered = "".join(traceback.format_exception(captured.value))
+    assert "SECRET" not in rendered
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert application.traces.list() == []
+
+
 @pytest.mark.parametrize(
     ("procedure_id", "descriptor", "message"),
     [

@@ -5,7 +5,7 @@ import re
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from af.bootstrap import create_application
+from af.bootstrap import AFApplication, create_application
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
@@ -28,7 +28,7 @@ def _graphql_client(controller: object) -> TestClient:
     return TestClient(app, base_url=f"http://{TEST_HOST}")
 
 
-def _http_client(application, *, scheme: str = "http") -> TestClient:  # type: ignore[no-untyped-def]
+def _http_client(application: AFApplication, *, scheme: str = "http") -> TestClient:
     return TestClient(create_http_app(application), base_url=f"{scheme}://{TEST_HOST}")
 
 
