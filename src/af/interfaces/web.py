@@ -15,6 +15,7 @@ PROMPT_MAX_LENGTH = 10_000
 
 
 def _validate_prompt(prompt: str) -> str | None:
+    """Return an HTML-friendly validation error message, or ``None`` when valid."""
     if not prompt.strip():
         return "prompt must not be blank"
     if len(prompt) > PROMPT_MAX_LENGTH:
