@@ -49,7 +49,8 @@ exec env -i \\
 def _copy_templates(root: Path) -> None:
     config_dir = root / "xdg" / "config" / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
-    for directory in ("agents", "plugins"):
+    for directory in ("agents", "lib", "plugins"):
+        shutil.rmtree(config_dir / directory, ignore_errors=True)
         shutil.copytree(TEMPLATE_ROOT / directory, config_dir / directory, dirs_exist_ok=True)
     shutil.copy2(TEMPLATE_ROOT / "package.json", config_dir / "package.json")
     template = (TEMPLATE_ROOT / "opencode.json.template").read_text(encoding="utf-8")
@@ -99,14 +100,18 @@ def install(
             auth_target.chmod(0o600)
 
     if not skip_python_install:
-        subprocess.run([uv_binary, "venv", str(root / "af-venv"), "--python", "3.12"], check=True)
+        af_python = root / "af-venv" / "bin" / "python"
+        if not af_python.exists():
+            subprocess.run(
+                [uv_binary, "venv", str(root / "af-venv"), "--python", "3.12"], check=True
+            )
         subprocess.run(
             [
                 uv_binary,
                 "pip",
                 "install",
                 "--python",
-                str(root / "af-venv" / "bin" / "python"),
+                str(af_python),
                 str(source_root),
             ],
             check=True,
@@ -146,7 +151,7 @@ def main() -> int:
         uv_binary=args.uv_binary,
         auth_source=args.auth_source.resolve() if args.auth_source else None,
         skip_python_install=args.skip_python_install,
-        launcher_link=args.launcher_link.resolve() if args.launcher_link else None,
+        launcher_link=args.launcher_link.expanduser().absolute() if args.launcher_link else None,
     )
     return 0
 

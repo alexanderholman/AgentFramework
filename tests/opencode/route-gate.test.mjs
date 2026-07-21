@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { createRouteGate } from "../../integrations/opencode-isolated/plugins/route-gate-core.js"
+import { createRouteGate } from "../../integrations/opencode-isolated/lib/route-gate-core.js"
 
 
 test("route tickets authorize exactly one matching delegation", () => {

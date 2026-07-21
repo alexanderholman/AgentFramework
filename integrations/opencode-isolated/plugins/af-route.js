@@ -1,6 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 
-import { createRouteGate } from "./route-gate-core.js"
+import { createRouteGate } from "../lib/route-gate-core.js"
 
 
 function messageText(parts) {
