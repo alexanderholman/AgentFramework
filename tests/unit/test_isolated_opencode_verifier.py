@@ -12,20 +12,20 @@ VERIFIER = REPO_ROOT / "scripts" / "verify_isolated_opencode.py"
 def test_isolated_opencode_verifier_accepts_clean_routed_instance(tmp_path: Path) -> None:
     root = tmp_path / "opencode-af"
     plugin = root / "xdg/config/opencode/plugins/af-route.js"
-    config = {
-        "default_agent": "dispatcher",
-        "agent": {
-            name: {}
-            for name in ("dispatcher", "architect", "builder", "reviewer", "tester", "general")
-        },
-        "plugin_origins": [{"spec": plugin.as_uri()}],
-    }
+    template = (REPO_ROOT / "integrations/opencode-isolated/opencode.json.template").read_text(
+        encoding="utf-8"
+    )
+    config = json.loads(template.replace("__AF_MCP__", str(root / "af-venv/bin/af-mcp")))
+    config["plugin_origins"] = [{"spec": plugin.as_uri()}]
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
     launcher = tmp_path / "opencode-af"
     launcher.write_text(
         f"#!{sys.executable}\n"
         "import json, sys\n"
+        "from pathlib import Path\n"
         f"root = {str(root)!r}\n"
-        f"config = json.loads({json.dumps(config)!r})\n"
+        f"config = json.loads(Path({str(config_path)!r}).read_text(encoding='utf-8'))\n"
         "args = sys.argv[1:]\n"
         "if args == ['--version']:\n"
         "    print('1.18.4')\n"
@@ -64,3 +64,26 @@ def test_isolated_opencode_verifier_accepts_clean_routed_instance(tmp_path: Path
 
     assert completed.returncode == 0, completed.stderr
     assert "isolated-opencode-check: ok" in completed.stdout
+
+    config["plugin_origins"] = [{"spec": (tmp_path / "external/plugins/af-route.js").as_uri()}]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    rejected = subprocess.run(
+        completed.args,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert rejected.returncode == 1
+    assert "exactly one AF route plugin" in rejected.stdout
+
+    config["plugin_origins"] = [{"spec": plugin.as_uri()}]
+    config["agent"]["reviewer"]["permission"]["edit"] = "allow"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    unsafe = subprocess.run(
+        completed.args,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert unsafe.returncode == 1
+    assert "unexpected permissions for reviewer" in unsafe.stdout

@@ -13,6 +13,70 @@ EXPECTED_CUSTOM_AGENTS = {"architect", "builder", "dispatcher", "general", "revi
 ALLOWED_AGENT_KEYS = EXPECTED_CUSTOM_AGENTS | {"build", "explore", "plan"}
 ALLOWED_LISTED_AGENTS = EXPECTED_CUSTOM_AGENTS | {"compaction", "summary", "title"}
 FORBIDDEN_MARKERS = ("mmpr", "power ranger", "pr-universe", "zordon", "/opt/pr/")
+READ_ONLY_PERMISSIONS = {
+    "*": "deny",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "question": "allow",
+    "task": "deny",
+    "skill": "deny",
+}
+EXPECTED_PERMISSIONS = {
+    "dispatcher": {
+        "*": "deny",
+        "af_route": "allow",
+        "question": "allow",
+        "task": {
+            "*": "deny",
+            "architect": "allow",
+            "builder": "allow",
+            "reviewer": "allow",
+            "tester": "allow",
+            "general": "allow",
+        },
+        "skill": "deny",
+    },
+    "architect": READ_ONLY_PERMISSIONS,
+    "general": READ_ONLY_PERMISSIONS,
+    "builder": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "bash": "deny",
+        "question": "allow",
+        "task": "deny",
+        "skill": "deny",
+    },
+    "reviewer": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "skill": "deny",
+    },
+    "tester": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "skill": "deny",
+    },
+}
 
 
 def _run(launcher: Path, *arguments: str) -> str:
@@ -50,11 +114,20 @@ def verify(root: Path, launcher: Path) -> None:
     config = json.loads(config_text)
     if config.get("default_agent") != "dispatcher":
         raise RuntimeError("dispatcher is not the default agent")
+    if config.get("share") != "disabled" or config.get("autoupdate") is not False:
+        raise RuntimeError("sharing and automatic updates must remain disabled")
     agents = set(config.get("agent", {}))
     if not agents >= EXPECTED_CUSTOM_AGENTS or not agents <= ALLOWED_AGENT_KEYS:
         raise RuntimeError(f"unexpected configured agents: {sorted(agents)}")
+    for name in ("build", "explore", "plan"):
+        if config["agent"].get(name, {}).get("disable") is not True:
+            raise RuntimeError(f"built-in agent is not disabled: {name}")
+    for name, expected in EXPECTED_PERMISSIONS.items():
+        if config["agent"].get(name, {}).get("permission") != expected:
+            raise RuntimeError(f"unexpected permissions for {name}")
     origins = config.get("plugin_origins", [])
-    if len(origins) != 1 or not str(origins[0].get("spec", "")).endswith("/plugins/af-route.js"):
+    expected_plugin = (root / "xdg/config/opencode/plugins/af-route.js").as_uri()
+    if len(origins) != 1 or origins[0].get("spec") != expected_plugin:
         raise RuntimeError("exactly one AF route plugin must be loaded")
 
     agent_text = _run(launcher, "agent", "list")
