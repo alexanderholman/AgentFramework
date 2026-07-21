@@ -92,7 +92,7 @@
         "grep": "allow",
         "list": "allow",
         "edit": "allow",
-        "bash": "allow",
+        "bash": "deny",
         "question": "allow",
         "task": "deny",
         "skill": "deny"
@@ -108,14 +108,14 @@
         "glob": "allow",
         "grep": "allow",
         "list": "allow",
-        "bash": "allow",
+        "bash": "deny",
         "edit": "deny",
         "task": "deny",
         "skill": "deny"
       }
     },
     "tester": {
-      "description": "Runs tests and verification after AF routes quality work.",
+      "description": "Inspects tests, evidence, and verification plans after AF routes quality work.",
       "mode": "subagent",
       "prompt": "{file:./agents/tester.md}",
       "permission": {
@@ -124,7 +124,7 @@
         "glob": "allow",
         "grep": "allow",
         "list": "allow",
-        "bash": "allow",
+        "bash": "deny",
         "edit": "deny",
         "task": "deny",
         "skill": "deny"

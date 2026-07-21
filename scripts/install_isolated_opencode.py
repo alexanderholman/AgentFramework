@@ -15,6 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_ROOT = REPO_ROOT / "integrations" / "opencode-isolated"
 
 
+def _reject_symlink(path: Path) -> None:
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise RuntimeError(f"managed path must not be a symlink: {current}")
+
+
 def _launcher(root: Path) -> str:
     quoted_root = shlex.quote(str(root))
     return f"""#!/usr/bin/env bash
@@ -41,6 +49,7 @@ exec env -i \\
   OPENCODE_DISABLE_CLAUDE_CODE=1 \\
   OPENCODE_DISABLE_AUTOUPDATE=1 \\
   OPENCODE_DISABLE_SHARE=1 \\
+  AF_DATABASE_URL="sqlite+pysqlite:///$ROOT/xdg/state/opencode/af.sqlite3" \\
   AF_ROUTER_CLI="$ROOT/af-venv/bin/af" \\
   "$ROOT/bin/opencode" "$@"
 """
@@ -48,10 +57,14 @@ exec env -i \\
 
 def _copy_templates(root: Path) -> None:
     config_dir = root / "xdg" / "config" / "opencode"
+    _reject_symlink(config_dir)
     config_dir.mkdir(parents=True, exist_ok=True)
+    config_dir.chmod(0o700)
     for directory in ("agents", "lib", "plugins"):
-        shutil.rmtree(config_dir / directory, ignore_errors=True)
-        shutil.copytree(TEMPLATE_ROOT / directory, config_dir / directory, dirs_exist_ok=True)
+        target = config_dir / directory
+        _reject_symlink(target)
+        shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(TEMPLATE_ROOT / directory, target, dirs_exist_ok=True)
     shutil.copy2(TEMPLATE_ROOT / "package.json", config_dir / "package.json")
     template = (TEMPLATE_ROOT / "opencode.json.template").read_text(encoding="utf-8")
     rendered = template.replace("__AF_MCP__", str(root / "af-venv" / "bin" / "af-mcp"))
@@ -78,6 +91,7 @@ def install(
     launcher_link: Path | None,
 ) -> None:
     _verify_binary(source_binary)
+    _reject_symlink(root)
     for directory in (
         root / "bin",
         root / "home",
@@ -86,21 +100,28 @@ def install(
         root / "xdg" / "cache" / "opencode",
         root / "xdg" / "state" / "opencode",
     ):
+        _reject_symlink(directory)
         directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o700)
+    root.chmod(0o700)
+    _reject_symlink(root / "bin" / "opencode")
     shutil.copy2(source_binary, root / "bin" / "opencode")
     _copy_templates(root)
     launcher = root / "bin" / "opencode-af"
+    _reject_symlink(launcher)
     launcher.write_text(_launcher(root), encoding="utf-8")
     launcher.chmod(0o755)
 
     if auth_source is not None:
         auth_target = root / "xdg" / "data" / "opencode" / "auth.json"
+        _reject_symlink(auth_target)
         if not auth_target.exists():
             shutil.copy2(auth_source, auth_target)
             auth_target.chmod(0o600)
 
     if not skip_python_install:
         af_python = root / "af-venv" / "bin" / "python"
+        _reject_symlink(root / "af-venv")
         if not af_python.exists():
             subprocess.run(
                 [uv_binary, "venv", str(root / "af-venv"), "--python", "3.12"], check=True
@@ -120,6 +141,10 @@ def install(
     if launcher_link is not None:
         if not launcher_link.parent.is_dir():
             raise RuntimeError(f"launcher parent does not exist: {launcher_link.parent}")
+        if launcher_link.exists() and not launcher_link.is_symlink():
+            raise RuntimeError(f"launcher link path is not a symlink: {launcher_link}")
+        if launcher_link.is_symlink() and launcher_link.resolve() != launcher:
+            raise RuntimeError(f"launcher link points to an unexpected target: {launcher_link}")
         launcher_link.unlink(missing_ok=True)
         launcher_link.symlink_to(launcher)
 
@@ -145,7 +170,7 @@ def main() -> int:
         print("Dry run only. Re-run with --execute to apply.")
         return 0
     install(
-        root=args.root.resolve(),
+        root=args.root.expanduser().absolute(),
         source_binary=args.source_binary.resolve(),
         source_root=args.source_root.resolve(),
         uv_binary=args.uv_binary,

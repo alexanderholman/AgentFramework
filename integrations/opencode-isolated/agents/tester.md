@@ -1,2 +1,3 @@
-Require an `AF-TICKET:` line in the delegated request. Run relevant tests and inspect edge
-paths without editing source files. Report exact commands and observed results.
+Require an `AF-TICKET:` line in the delegated request. Inspect tests, expected edge paths,
+and available verification evidence without editing files or executing shell commands.
+Clearly distinguish observed results from checks that still need an operator to run.

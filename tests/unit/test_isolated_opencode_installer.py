@@ -39,6 +39,8 @@ def test_isolated_opencode_installer_creates_sans_mmpr_layout(tmp_path: Path) ->
 
     assert completed.returncode == 0, completed.stderr
     assert (root / "bin/opencode").read_bytes() == source_binary.read_bytes()
+    assert root.stat().st_mode & 0o077 == 0
+    assert (root / "xdg/config/opencode").stat().st_mode & 0o077 == 0
     assert (root / "bin/opencode-af").stat().st_mode & 0o111
     config = json.loads((root / "xdg/config/opencode/opencode.json").read_text(encoding="utf-8"))
     assert config["default_agent"] == "dispatcher"
@@ -59,7 +61,11 @@ def test_isolated_opencode_installer_creates_sans_mmpr_layout(tmp_path: Path) ->
     assert "OPENCODE_DISABLE_PROJECT_CONFIG=1" in launcher
     assert "OPENCODE_DISABLE_DEFAULT_PLUGINS=1" in launcher
     assert "OPENCODE_DISABLE_EXTERNAL_SKILLS=1" in launcher
+    assert "AF_DATABASE_URL=" in launcher
     assert "OPENCODE_CONFIG_CONTENT" not in launcher
+    assert config["agent"]["builder"]["permission"]["bash"] == "deny"
+    assert config["agent"]["reviewer"]["permission"]["bash"] == "deny"
+    assert config["agent"]["tester"]["permission"]["bash"] == "deny"
     plugin_dir = root / "xdg/config/opencode/plugins"
     assert [path.name for path in plugin_dir.iterdir()] == ["af-route.js"]
     assert (root / "xdg/config/opencode/lib/route-gate-core.js").is_file()
@@ -137,3 +143,36 @@ def test_isolated_opencode_installer_reuses_existing_python_environment(tmp_path
     calls = uv_log.read_text(encoding="utf-8").splitlines()
     assert all(not call.startswith("venv ") for call in calls)
     assert calls == [f"pip install --python {python} {REPO_ROOT}"]
+
+
+def test_isolated_opencode_installer_rejects_managed_directory_symlinks(tmp_path: Path) -> None:
+    source_binary = tmp_path / "source-opencode"
+    source_binary.write_text("#!/bin/sh\necho 1.18.4\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+    root = tmp_path / "opencode-af"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "xdg").symlink_to(outside, target_is_directory=True)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--root",
+            str(root),
+            "--source-binary",
+            str(source_binary),
+            "--source-root",
+            str(REPO_ROOT),
+            "--skip-python-install",
+            "--execute",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "managed path must not be a symlink" in completed.stderr
+    assert list(outside.iterdir()) == []
