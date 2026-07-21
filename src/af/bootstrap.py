@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from af.application.agent_routing import AgentRoutingController, AgentRoutingService
 from af.application.tasks import TaskController, TaskService
 from af.config import Settings
+from af.domain.agent_routing import DeterministicAgentRouter
 from af.domain.classifiers import (
     CharacterCountClassifier,
     ClassifierChain,
@@ -101,6 +103,7 @@ class _FrameworkProvider(ServiceProvider):
         container.instance(DeterministicVerifier, verifier)
         container.instance(ReuseStore, reuse_store)
         container.instance(PipelineAgent, agent)
+        container.instance(DeterministicAgentRouter, DeterministicAgentRouter())
 
 
 class _ApplicationProvider(ServiceProvider):
@@ -118,6 +121,16 @@ class _ApplicationProvider(ServiceProvider):
             lambda current: TaskController(current.resolve(TaskService)),
             scope=Scope.TRANSIENT,
         )
+        container.bind(
+            AgentRoutingService,
+            lambda current: AgentRoutingService(current.resolve(DeterministicAgentRouter)),
+            scope=Scope.SINGLETON,
+        )
+        container.bind(
+            AgentRoutingController,
+            lambda current: AgentRoutingController(current.resolve(AgentRoutingService)),
+            scope=Scope.TRANSIENT,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +141,7 @@ class AFApplication:
     tasks: TaskController
     traces: TraceRepository
     verifier: DeterministicVerifier
+    agent_routes: AgentRoutingController
 
 
 def create_application(
@@ -176,6 +190,7 @@ def create_application(
         tasks=container.resolve(TaskController),
         traces=container.resolve_token(TraceRepository),
         verifier=container.resolve(DeterministicVerifier),
+        agent_routes=container.resolve(AgentRoutingController),
     )
 
 
