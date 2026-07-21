@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).parents[2]
 INSTALLER = REPO_ROOT / "scripts" / "install_isolated_opencode.py"
 
@@ -142,7 +144,7 @@ def test_isolated_opencode_installer_reuses_existing_python_environment(tmp_path
     assert completed.returncode == 0, completed.stderr
     calls = uv_log.read_text(encoding="utf-8").splitlines()
     assert all(not call.startswith("venv ") for call in calls)
-    assert calls == [f"pip install --python {python} {REPO_ROOT}"]
+    assert calls == [f"pip install --python {python.parents[1]} {REPO_ROOT}"]
 
 
 def test_isolated_opencode_installer_rejects_managed_directory_symlinks(tmp_path: Path) -> None:
@@ -176,3 +178,41 @@ def test_isolated_opencode_installer_rejects_managed_directory_symlinks(tmp_path
     assert completed.returncode != 0
     assert "managed path must not be a symlink" in completed.stderr
     assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("name", ["package.json", "opencode.json"])
+def test_isolated_opencode_installer_rejects_managed_file_symlinks(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    source_binary = tmp_path / "source-opencode"
+    source_binary.write_text("#!/bin/sh\necho 1.18.4\n", encoding="utf-8")
+    source_binary.chmod(0o755)
+    root = tmp_path / "opencode-af"
+    config_dir = root / "xdg/config/opencode"
+    config_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("preserve\n", encoding="utf-8")
+    (config_dir / name).symlink_to(outside)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(INSTALLER),
+            "--root",
+            str(root),
+            "--source-binary",
+            str(source_binary),
+            "--source-root",
+            str(REPO_ROOT),
+            "--skip-python-install",
+            "--execute",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "managed path must not be a symlink" in completed.stderr
+    assert outside.read_text(encoding="utf-8") == "preserve\n"

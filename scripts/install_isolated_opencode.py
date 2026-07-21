@@ -65,11 +65,15 @@ def _copy_templates(root: Path) -> None:
         _reject_symlink(target)
         shutil.rmtree(target, ignore_errors=True)
         shutil.copytree(TEMPLATE_ROOT / directory, target, dirs_exist_ok=True)
-    shutil.copy2(TEMPLATE_ROOT / "package.json", config_dir / "package.json")
+    package_target = config_dir / "package.json"
+    config_target = config_dir / "opencode.json"
+    _reject_symlink(package_target)
+    _reject_symlink(config_target)
+    shutil.copy2(TEMPLATE_ROOT / "package.json", package_target)
     template = (TEMPLATE_ROOT / "opencode.json.template").read_text(encoding="utf-8")
     rendered = template.replace("__AF_MCP__", str(root / "af-venv" / "bin" / "af-mcp"))
     json.loads(rendered)
-    (config_dir / "opencode.json").write_text(rendered + "\n", encoding="utf-8")
+    config_target.write_text(rendered + "\n", encoding="utf-8")
 
 
 def _verify_binary(source_binary: Path) -> None:
@@ -132,7 +136,7 @@ def install(
                 "pip",
                 "install",
                 "--python",
-                str(af_python),
+                str(root / "af-venv"),
                 str(source_root),
             ],
             check=True,
