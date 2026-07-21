@@ -113,6 +113,18 @@ run_uv_python() {
     uv run --project "$REPO_ROOT" --extra dev "$@"
 }
 
+check_append_only() {
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        run_uv_python python3 scripts/check_append_only.py --root .
+        return
+    fi
+
+    AF_APPEND_ONLY_BASE_REF= \
+        AF_APPEND_ONLY_HEAD_REF= \
+        AF_APPEND_ONLY_BASE_STRATEGY= \
+        run_uv_python python3 scripts/check_append_only.py --root .
+}
+
 if [ -f "agents.yaml" ]; then
     warn_if_agents_dir_missing
 fi
@@ -175,7 +187,7 @@ fi
 echo "=== SPEC-004: Append-Only Files ==="
 run_test "TEST-004-1" \
     "Verify append-only files are pure appends relative to the resolved base revision" \
-    run_uv_python python3 scripts/check_append_only.py --root .
+    check_append_only
 
 echo "=== SPEC-005: No Fabrication ==="
 echo "Note: TEST-005-1 (Citation verification) requires manual review"

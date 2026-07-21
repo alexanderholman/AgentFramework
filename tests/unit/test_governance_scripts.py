@@ -103,11 +103,18 @@ def test_validate_agents_does_not_eval_agent_filenames(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    environment = environ.copy()
+    environment.update(
+        AF_APPEND_ONLY_BASE_REF="1" * 40,
+        AF_APPEND_ONLY_HEAD_REF="2" * 40,
+        AF_APPEND_ONLY_BASE_STRATEGY="exact",
+    )
     completed = subprocess.run(
         ["bash", str(REPO_ROOT / "validate_agents.sh")],
         capture_output=True,
         check=False,
         cwd=tmp_path,
+        env=environment,
         text=True,
     )
 
