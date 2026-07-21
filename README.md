@@ -111,6 +111,9 @@ is denied by the current auto-execution policy. The repository skill in
 reimplementing AF logic.
 
 See [ChatGPT and MCP](docs/chatgpt-mcp.md) and [Architecture](docs/architecture.md).
+The approved future execution policy is documented in
+[Capability Ladder and Acceptance Scopes](docs/capability-ladder.md). The active runtime
+continues to deny direct generation until its scoped review and reuse gates are implemented.
 
 ## Development workflow
 
