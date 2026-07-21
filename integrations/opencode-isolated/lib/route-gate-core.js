@@ -123,6 +123,18 @@ export function createRouteGate(options = {}) {
 
   function guardTool(sessionID, tool, agent) {
     if (agent) guardAgent(sessionID, agent)
+    if (tool === "question") {
+      if (agent === "dispatcher") {
+        if (sessionStates.get(sessionID)?.status !== "handoff") {
+          throw new Error("AF route denied: dispatcher question requires an ambiguous handoff")
+        }
+        return
+      }
+      if (!authorizedChildren.has(sessionID)) {
+        throw new Error("AF route denied: question requires a validated route ticket")
+      }
+      return
+    }
     if (SENSITIVE_TOOLS.has(tool) && !authorizedChildren.has(sessionID)) {
       throw new Error(`AF route denied: ${tool} requires a validated route ticket`)
     }

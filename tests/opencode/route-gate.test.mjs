@@ -151,3 +151,24 @@ test("authorized child cannot switch to another agent", () => {
   assert.throws(() => gate.guardTool("child", "edit", "builder"), /agent does not match/)
   assert.doesNotThrow(() => gate.guardTool("child", "read", "general"))
 })
+
+
+test("question requires AF handoff or an authorized specialist", () => {
+  const gate = createRouteGate({ createTicket: () => "ticket-7", now: () => 1000 })
+  gate.begin("parent")
+  assert.throws(
+    () => gate.guardTool("parent", "question", "dispatcher"),
+    /question requires an ambiguous handoff/,
+  )
+  gate.issue("parent", {
+    status: "handoff",
+    agent: null,
+    candidates: ["architect", "builder"],
+  })
+  assert.doesNotThrow(() => gate.guardTool("parent", "question", "dispatcher"))
+
+  assert.throws(
+    () => gate.guardTool("direct", "question", "architect"),
+    /validated route ticket/,
+  )
+})
