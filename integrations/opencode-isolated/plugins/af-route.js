@@ -14,6 +14,7 @@ function messageText(parts) {
 export const AFRoutePlugin = async () => {
   const gate = createRouteGate()
   const seenCalls = new Set()
+  const sessionAgents = new Map()
   const cli = process.env.AF_ROUTER_CLI
   if (!cli) throw new Error("AF_ROUTER_CLI is required")
 
@@ -49,23 +50,43 @@ export const AFRoutePlugin = async () => {
 
     "chat.message": async (input, output) => {
       const text = messageText(output.parts)
-      if (!text.includes("AF-TICKET:")) return
       const agent = input.agent ?? output.message?.agent
-      gate.authorizeChild(input.sessionID, agent, text)
+      if (agent) {
+        gate.guardAgent(input.sessionID, agent)
+        sessionAgents.set(input.sessionID, agent)
+      }
+      if (text.includes("AF-TICKET:")) {
+        gate.authorizeChild(input.sessionID, agent, text)
+      } else if (agent === "dispatcher") {
+        gate.begin(input.sessionID)
+      }
     },
 
     "tool.execute.before": async (input, output) => {
       const key = `${input.sessionID}:${input.callID}`
       if (seenCalls.has(key)) return
       if (input.tool === "task") gate.beforeTask(input.sessionID, output.args)
-      gate.guardTool(input.sessionID, input.tool)
+      gate.guardTool(input.sessionID, input.tool, sessionAgents.get(input.sessionID))
       seenCalls.add(key)
+    },
+
+    "tool.execute.after": async (input, output) => {
+      if (input.tool === "task") gate.completeTask(input.sessionID, output.output)
+    },
+
+    "experimental.text.complete": async (input) => {
+      const agent = sessionAgents.get(input.sessionID)
+      if (agent === "dispatcher") gate.guardDispatcherText(input.sessionID)
+      else if (agent) gate.guardSpecialistText(input.sessionID)
     },
 
     event: async ({ event }) => {
       if (event.type !== "session.deleted") return
       const sessionID = event.properties?.info?.id ?? event.properties?.sessionID
-      if (sessionID) gate.revokeSession(sessionID)
+      if (sessionID) {
+        gate.revokeSession(sessionID)
+        sessionAgents.delete(sessionID)
+      }
     },
   }
 }
