@@ -114,7 +114,12 @@ run_uv_python() {
 }
 
 check_append_only() {
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ -e .git ] || [ -L .git ]; then
+        if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            echo "append-only-check: failed to inspect Git worktree"
+            return 1
+        fi
+
         run_uv_python python3 scripts/check_append_only.py --root .
         return
     fi

@@ -9,6 +9,7 @@ from os import environ
 from pathlib import Path
 from typing import cast
 
+import pytest
 import yaml
 
 SCRIPT = Path(__file__).parents[2] / "scripts" / "check_repeatable_script_refs.py"
@@ -120,6 +121,44 @@ def test_validate_agents_does_not_eval_agent_filenames(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     assert sentinel.exists() is False
+
+
+@pytest.mark.parametrize("git_marker", ["directory", "dangling-symlink"])
+def test_validate_agents_fails_closed_when_git_marker_cannot_be_inspected(
+    tmp_path: Path,
+    git_marker: str,
+) -> None:
+    if git_marker == "directory":
+        (tmp_path / ".git").mkdir()
+    else:
+        (tmp_path / ".git").symlink_to(tmp_path / "missing-git-dir")
+    (tmp_path / "agents.md").write_text("# Agents\n", encoding="utf-8")
+    (tmp_path / "specs.md").write_text("specs\n", encoding="utf-8")
+    (tmp_path / "decisions.md").write_text("decisions\n", encoding="utf-8")
+    (tmp_path / "agent_runs.md").write_text("runs\n", encoding="utf-8")
+    (tmp_path / "scripts").symlink_to(REPO_ROOT / "scripts", target_is_directory=True)
+    (tmp_path / "agents.yaml").write_text(
+        yaml.safe_dump({"allowed_tags": ["test"], "agents": []}, sort_keys=False),
+        encoding="utf-8",
+    )
+    environment = environ.copy()
+    environment.update(
+        AF_APPEND_ONLY_BASE_REF="1" * 40,
+        AF_APPEND_ONLY_HEAD_REF="2" * 40,
+        AF_APPEND_ONLY_BASE_STRATEGY="exact",
+    )
+
+    completed = subprocess.run(
+        ["bash", str(REPO_ROOT / "validate_agents.sh")],
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "append-only-check: failed to inspect Git worktree" in completed.stdout
 
 
 def _git(*args: str, cwd: Path) -> None:
