@@ -516,3 +516,80 @@ trusted registered catalogue; it never provides the user-facing answer.
 - SPEC-010 (AgentFramework Repository Identity)
 
 ---
+
+## [SPEC-012] Capability Ladder and Scoped Generative Execution
+**Date**: 2026-07-21
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+AF SHALL select the least costly available capability that satisfies declared requirements
+and the required quality threshold. Algorithms are functions; ladder levels distinguish
+simple functions from increasingly complex systems and compositions of functions.
+
+### Capability Ladder
+0. cached result or exact verified reuse
+1. simple deterministic function
+2. complex deterministic function system, including traditional algorithms and
+   deterministic DAGs
+3. specialist model
+4. adaptive agent workflow composed from registered capabilities
+5. large reasoning or generative model
+6. human clarification or external expertise
+
+### Requirements
+- MUST carry a typed user-acceptance scope on every execution request
+- MUST enforce the scope's maximum ladder level, review policy, and reuse policy before
+  capability selection and again before result release or promotion
+- MUST select minimum cost only among capabilities meeting required quality and all hard
+  requirements
+- MUST include latency, compute/energy, monetary cost, privacy exposure, and operational
+  risk in capability cost evidence
+- MUST include accuracy, availability, provenance, and verified execution history in
+  capability quality evidence
+- MUST treat cached results as reusable only when their capability fingerprint, inputs,
+  provenance, review evidence, expiry, and scope remain valid
+- MUST constrain planner output to a typed DAG of installed registered capabilities and
+  validate every node, edge, argument, requirement, and policy before execution
+- MUST require review before releasing a model-generated answer
+- MUST NOT equate review approval with cache permission; scope and system requirements may
+  require `no-store`
+- MUST keep the active runtime's direct generative route disabled until these controls and
+  their tests are implemented
+
+### Initial Acceptance Scopes
+- `child`: maximum level 2; deterministic procedural responses only; no generative model,
+  generative planner, or generated answer
+- `deterministic`: maximum level 2 unless the caller explicitly selects a more permissive
+  scope
+- `reviewed-generative`: levels 3 through 5 may be considered only when lower levels cannot
+  satisfy quality and requirements; generated answers require review before release
+- `operator-evaluation`: explicit model or hybrid evaluation without implicit production
+  escalation
+
+### Tests
+- **Test ID**: TEST-012-1
+  - **Description**: Enforce ladder ordering and quality constraints
+  - **Pass Criteria**: AF selects the lowest-cost qualifying capability and never climbs
+    when a lower level satisfies requirements and required quality
+  - **Fail Criteria**: AF selects by cost without quality or skips a valid lower level
+- **Test ID**: TEST-012-2
+  - **Description**: Enforce child scope
+  - **Pass Criteria**: Child requests execute only level 0 through 2 deterministic
+    procedures and reject all generative and planner paths
+  - **Fail Criteria**: Any child request invokes or returns generative AI output
+- **Test ID**: TEST-012-3
+  - **Description**: Enforce reviewed generative release
+  - **Pass Criteria**: Generated answers remain withheld until review evidence is valid
+  - **Fail Criteria**: Unreviewed generated text reaches the user
+- **Test ID**: TEST-012-4
+  - **Description**: Enforce scoped reuse
+  - **Pass Criteria**: `no-store`, expiry, provenance, fingerprint, and review requirements
+    prevent invalid cache promotion or reuse
+  - **Fail Criteria**: Review alone causes unconditional caching or stale reuse
+
+### Related Specs
+- SPEC-009 (Executable AF Python Runtime)
+- SPEC-011 (Human-First Constrained Selection Boundary)
+
+---

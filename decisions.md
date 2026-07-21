@@ -1356,3 +1356,54 @@ answers must come from installed deterministic procedures rather than direct gen
 - Preserved: historical append-only references to the superseded generative design
 
 ---
+
+## [DEC-025] Adopt the Capability Ladder and Scoped Reviewed Generation
+**Date**: 2026-07-21
+**Status**: Approved
+**Decision Maker**: Alexander Holman
+
+### Context
+The AF design discussion defines a capability ladder that climbs only as high as necessary.
+It also treats algorithms as functions and distinguishes simple functions from complex
+systems of functions. DEC-024 correctly removed an unconstrained direct generative-answer
+route from the active runtime, but a permanent absolute prohibition is stricter than the
+intended product policy. Generative answers are plausible, should be rare, require review,
+and may or may not be reusable depending on user acceptance scope and system requirements.
+Children must receive deterministic procedural responses and must never use generative AI.
+
+### Decision
+1. Adopt the ordered ladder in SPEC-012.
+2. Select the minimum-cost capability only after requirements and required quality are met.
+3. Require every request to carry a typed acceptance scope that constrains maximum ladder
+   level, release review, and caching/reuse.
+4. Hard-limit child scope to cached or deterministic function systems at levels 0 through 2.
+5. Permit generated answers only in an explicitly generative scope and only after review.
+6. Permit planners to propose typed DAGs of registered capabilities, never unvalidated code,
+   hidden capabilities, or direct policy bypasses.
+7. Treat cacheability as a separate decision from correctness review; support `no-store`,
+   expiry, provenance, and capability/model fingerprint requirements.
+8. Keep DEC-024's current runtime denial in force until the scoped policy, review gate, cache
+   gate, and complete regression tests are implemented.
+
+### Consequences
+**Positive:**
+- AF matches the intended capability-first architecture rather than becoming an AI router.
+- Simple deterministic work remains preferred while reviewed generation remains available
+  for rare cases that genuinely require it.
+- Child safety is enforceable as a hard execution policy rather than a prompt instruction.
+- Reuse remains valuable without assuming every reviewed output is safe to cache.
+
+**Negative:**
+- Generative execution remains unavailable until acceptance scopes and gates are complete.
+- Capability scoring now requires explicit quality, requirements, cost, and provenance data.
+- Review and cache policy introduce additional state and lifecycle transitions.
+
+### Related Specs
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+
+### Output References
+- Added: `docs/capability-ladder.md`
+- Updated: append-only `specs.md`, `decisions.md`
+
+---
