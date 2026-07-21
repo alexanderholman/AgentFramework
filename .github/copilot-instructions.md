@@ -49,7 +49,10 @@ compose all layers.
 5. Keep all interfaces behaviorally consistent. `hello` returns
    `Hello, world!`; `how many rs in strawberry` is classified and computed by
    the reusable character-count procedure and returns `3`. Never hard-code that
-   one answer or use an LLM for it.
+   one answer or use an LLM for it. Deterministic routes run before any selector,
+   and a selector may only propose an installed typed procedure. The reference app
+   ships no real selector adapter, and remote selector execution is denied by the
+   current auto-execution policy.
 6. Persisted `Task` CRUD must go through the shared application controller.
 7. Never fabricate test output, citations, or completed work. Report commands
    exactly as run.

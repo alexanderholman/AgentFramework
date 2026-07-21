@@ -1,0 +1,74 @@
+# filename: project_context_agent_framework.yaml
+
+project:
+  project_id: "agent-framework"
+  title: "AF Agent Framework"
+  intent: "Turn repeatable agent work into deterministic, tested, reusable Python procedures with optional constrained procedure selection."
+  status: "active"
+
+constraints:
+  flat_files_only: false
+  python_version: ">=3.12"
+  environments:
+    - "Python CLI"
+    - "FastAPI HTML, REST, and GraphQL application"
+    - "MCP clients over stdio or Streamable HTTP"
+    - "ChatGPT via Secure MCP Tunnel or a deployed authenticated HTTPS MCP endpoint and a repository skill"
+    - "GitHub and GitHub Copilot"
+  allowed_languages:
+    - "python"
+    - "html"
+    - "css"
+    - "markdown"
+    - "yaml"
+  append_only_files:
+    - "specs.md"
+    - "decisions.md"
+    - "agent_runs.md"
+  forbidden_tools: []
+
+goals:
+  - "Implement classify → route → execute → verify → record → reuse as an explicit kernel"
+  - "Prefer deterministic static and procedural routes before any optional selector proposal"
+  - "Expose one application layer through CLI, MVC HTML, REST, GraphQL, and MCP adapters"
+  - "Keep model, memory, search, planner, persistence, and transports replaceable behind contracts"
+  - "Preserve the original agent definitions, append-only governance, and script-first workflow"
+
+deliverables:
+  - "src/af Python package"
+  - "tests with unit, feature, integration, and MCP coverage"
+  - "af and af-mcp console entry points"
+  - "FastAPI HTML, REST, and GraphQL application"
+  - "SQLite and in-memory Task repositories"
+  - ".agents/skills/af-work repository skill"
+  - "agents.yaml, agents.md, specs.md, decisions.md, and agent_runs.md governance assets"
+
+current_state:
+  what_exists:
+    - "AF kernel, service container, deterministic classifiers, procedures, verifier, trace, and reuse gate"
+    - "Hello World and parameterized character-count routes"
+    - "Task CRUD shared by CLI, HTML, REST, GraphQL, and MCP"
+    - "In-memory and SQLAlchemy/SQLite persistence adapters"
+    - "Python quality gate and legacy agent validation"
+  what_is_missing:
+    - "Production authentication and deployment for remote ChatGPT MCP access"
+    - "A real local or remote selector provider adapter"
+    - "Schema migrations, production observability, and hardened multi-user authorization"
+  known_issues:
+    - "[ASSUMPTION] The MVP is single-process and synchronous at its application core."
+    - "[RISK] Streamable HTTP is local-only until authentication and deployment are designed."
+
+workflow:
+  execution_loop:
+    - "Classify"
+    - "Route"
+    - "Execute"
+    - "Verify"
+    - "Record"
+    - "Test"
+    - "Reuse"
+  quality_gates_to_apply:
+    - "python format and lint"
+    - "strict static typing"
+    - "unit, feature, integration, and protocol tests"
+    - "legacy agent-document validation"

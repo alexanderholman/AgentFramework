@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}AF Agent Framework{% endblock %}</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0 auto; max-width: 58rem; padding: 2rem; line-height: 1.5; }
+      nav { display: flex; gap: 1rem; margin-bottom: 2rem; }
+      form { display: grid; gap: .75rem; margin: 1rem 0; }
+      input, button { font: inherit; padding: .7rem; }
+      .answer { font-size: 2rem; font-weight: 700; }
+      .meta { opacity: .75; }
+      li { margin-bottom: .65rem; }
+    </style>
+  </head>
+  <body>
+    <nav><a href="/">AF</a><a href="/tasks">Tasks</a><a href="/docs">REST docs</a><a href="/graphql">GraphQL</a></nav>
+    {% block content %}{% endblock %}
+  </body>
+</html>
+

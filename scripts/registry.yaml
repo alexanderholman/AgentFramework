@@ -1,0 +1,232 @@
+schema_version: "1.0.0"
+
+scripts:
+  - id: "af-dev"
+    intent:
+      - "af-development"
+      - "python"
+      - "test"
+      - "lint"
+      - "typecheck"
+    capabilities:
+      - "dependency-installation"
+      - "python-quality-gate"
+      - "test-execution"
+      - "coverage-enforcement"
+    description: "Preview or run parameterized AF Python development checks"
+    command: "python3 scripts/af_dev.py --action '<action>' --execute"
+    parameters:
+      - "action"
+      - "execute"
+    outputs:
+      - "command-plan"
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "validate-registry"
+    intent:
+      - "validate"
+      - "registry"
+      - "schema"
+    capabilities:
+      - "registry-schema-check"
+      - "quality-gate"
+    description: "Validate scripts registry structure and required fields"
+    command: "python3 scripts/validate_registry.py --registry scripts/registry.yaml"
+    parameters: []
+    outputs:
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "check-dry-run-conventions"
+    intent:
+      - "validate"
+      - "dry-run"
+      - "execution-safety"
+    capabilities:
+      - "dry-run-policy-check"
+      - "execution-gating"
+    description: "Validate execute-intent scripts expose dry-run or execute gating"
+    command: "python3 scripts/check_dry_run_conventions.py --registry scripts/registry.yaml"
+    parameters: []
+    outputs:
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "forge-route"
+    intent:
+      - "forge"
+      - "route"
+      - "hci"
+      - "shortcut"
+    capabilities:
+      - "nl-routing"
+      - "command-shortcut"
+      - "forge-session"
+    description: "Shortcut wrapper around route-and-run for Forge session command routing"
+    command: "scripts/forge-route '<request>'"
+    parameters:
+      - "execute"
+      - "request"
+    outputs:
+      - "selected-script"
+      - "rendered-command"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "route-and-run"
+    intent:
+      - "route"
+      - "execute"
+      - "nl-command"
+      - "script-selection"
+    capabilities:
+      - "nl-routing"
+      - "parameterized-execution"
+      - "dry-run-gating"
+    description: "Resolve natural language requests to scripts and execute parameterized commands"
+    command: "python3 scripts/route_and_run.py --query '<request>' --execute"
+    parameters:
+      - "query"
+      - "intent"
+      - "script-id"
+      - "arg"
+      - "execute"
+    outputs:
+      - "selected-script"
+      - "rendered-command"
+      - "execution-result"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "resolve-script"
+    intent:
+      - "route"
+      - "intent-resolution"
+      - "script-selection"
+      - "parameterization"
+    capabilities:
+      - "intent-matching"
+      - "script-ranking"
+      - "parameter-hints"
+    description: "Resolve natural language intent to best matching registered scripts"
+    command: "python3 scripts/resolve.py --query '<request>' --top-k 3"
+    parameters:
+      - "query"
+      - "intent"
+      - "top-k"
+      - "json"
+    outputs:
+      - "ranked-script-matches"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "check-repeatable-script-refs"
+    intent:
+      - "validate"
+      - "repeatable-task-docs"
+      - "ci"
+    capabilities:
+      - "policy-enforcement"
+      - "documentation-scan"
+      - "repeatability-check"
+    description: "Fail if repeatable task documentation has no nearby script reference"
+    command: "python3 scripts/check_repeatable_script_refs.py --root ."
+    parameters: []
+    outputs:
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "check-append-only"
+    intent:
+      - "validate"
+      - "append-only"
+      - "governance"
+    capabilities:
+      - "append-only-history-check"
+      - "governance-validation"
+    description: "Verify append-only governance files are byte-prefix appends from the base revision"
+    command: "python3 scripts/check_append_only.py --root ."
+    parameters:
+      - "base-ref"
+    outputs:
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "validate-agents"
+    intent:
+      - "validate"
+      - "agent-definitions"
+      - "quality-gate"
+    capabilities:
+      - "agent-validation"
+      - "quality-gate"
+    description: "Validate AgentFramework required rules and metadata consistency"
+    command: "./validate_agents.sh"
+    parameters: []
+    outputs:
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "memlog-doctor"
+    intent:
+      - "continuity"
+      - "memory-health"
+      - "runtime-check"
+    capabilities:
+      - "memory-wiring"
+      - "health-check"
+    description: "Check AgentMemory wiring for OpenCode/AgentFramework"
+    command: "memlog doctor --root ~/opencode --strict"
+    parameters: []
+    outputs:
+      - "doctor-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+  - id: "memlog-validate"
+    intent:
+      - "continuity"
+      - "memory-graph"
+      - "runtime-check"
+    capabilities:
+      - "memory-validation"
+      - "continuity-graph"
+    description: "Validate AgentMemory artifacts and links"
+    command: "memlog validate --root ~/opencode --strict"
+    parameters: []
+    outputs:
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
+policy:
+  only_write_once: true
+  require_lookup_before_repeatable_action: true
+  require_script_creation_if_missing: true
+  require_parameterization: true
+  model_required_policy:
+    prefer_local_when_feasible: true
+    feasibility_gates:
+      - "data_available"
+      - "hardware_budget"
+      - "runtime_budget"
+      - "acceptance_metric_defined"
+    fallback: "deterministic_scripted_non_ml"

@@ -1,0 +1,9 @@
+# Default ownership for the private AgentFramework repository.
+* @alexanderholman
+
+# Framework boundaries and public interfaces require owner review.
+/src/af/framework/ @alexanderholman
+/src/af/interfaces/ @alexanderholman
+/.github/ @alexanderholman
+/specs.md @alexanderholman
+/decisions.md @alexanderholman

@@ -1,0 +1,6 @@
+interface:
+  display_name: "AF Way of Working"
+  short_description: "Run deterministic work through Agent Framework"
+  default_prompt: "Use $af-work to route and complete this request through AF."
+policy:
+  allow_implicit_invocation: true
