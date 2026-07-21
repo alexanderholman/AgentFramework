@@ -31,6 +31,7 @@ AF requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 uv sync --locked --extra dev
 uv run af hello
 uv run af ask "how many rs in strawberry"
+uv run af route-agent "Implement the endpoint"
 ```
 
 Expected output:
@@ -38,6 +39,7 @@ Expected output:
 ```text
 Hello, world!
 3
+{"prompt": "Implement the endpoint", "status": "routed", "agent": "builder", "reason": "specialist_match", "candidates": ["builder"]}
 ```
 
 Task CRUD is available from the same CLI:

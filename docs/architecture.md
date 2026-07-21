@@ -79,6 +79,13 @@ The initial registered capabilities are:
 Unknown work fails closed unless an embedding host injects a selector that proposes one of
 those registered procedures. The selector never supplies the final user answer.
 
+Agent-role recommendation is a separate read-only application boundary. It tokenizes a
+normalized request and matches whole-word signals for `architect`, `builder`, `reviewer`,
+and `tester`. A single specialist match is routed, no specialist match falls back to
+`general`, and multiple specialist matches return an explicit ambiguous handoff without
+selecting an agent. This boundary does not execute the selected agent or enter the procedure
+pipeline; embedding hosts remain responsible for enforcing the returned decision.
+
 ## Task application boundary
 
 `TaskController` is the shared MVC/application-facing controller. It delegates to
@@ -115,7 +122,7 @@ cache entries.
 | HTML MVC | `af.interfaces.web.create_web_router()` | Jinja Task pages and form actions |
 | REST | `af.interfaces.rest.create_rest_router()` | `/api/v1/hello` and `/api/v1/tasks` CRUD |
 | GraphQL | `af.interfaces.graphql.create_graphql_router()` | Task queries and mutations at `/graphql` |
-| MCP | `af.interfaces.mcp.create_mcp_server()` | Eight `af_*` tools and `af://manifest` |
+| MCP | `af.interfaces.mcp.create_mcp_server()` | Nine `af_*` tools and `af://manifest` |
 
 `af.interfaces.http.create_http_app()` combines HTML, REST, and GraphQL in one FastAPI
 application and places the shared `AFApplication` on `app.state.af`. MCP is currently a

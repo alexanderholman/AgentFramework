@@ -7,13 +7,14 @@ guidance for choosing them. The skill contains no copy of AF's business logic.
 ## MCP catalogue
 
 `af.interfaces.mcp.create_mcp_server()` registers these tools against the same
-`AFApplication.tasks` controller used by the other transports:
+`AFApplication` controllers used by the other transports:
 
 | Tool | Purpose | Effect |
 | --- | --- | --- |
 | `af_hello` | Execute the tested static Hello World route | Appends an execution trace |
 | `af_ask` | Classify and execute a supported prompt | Appends an execution trace |
 | `af_count_characters` | Count one character through the typed deterministic AF route | Appends an execution trace |
+| `af_route_agent` | Select one agent role or return an ambiguous handoff | Read-only |
 | `af_list_tasks` | List persisted Tasks | Read-only |
 | `af_get_task` | Read a Task by exact ID | Read-only |
 | `af_create_task` | Execute a prompt and persist its verified Task | Additive write |
@@ -24,6 +25,9 @@ The `af://manifest` resource describes AF's lifecycle plus the trusted registere
 tier vocabulary. Tool results are typed structured data and include the route, tier,
 verification state, reuse state, and trace ID where applicable. Only static and procedural
 tiers are advertised; AF exposes no direct model-generated-answer route.
+
+`af_route_agent` returns `status`, `agent`, `reason`, and ordered `candidates`. Hosts must
+not delegate when the status is `handoff` or invent an agent when `agent` is null.
 
 Executing `af_hello`, `af_ask`, or `af_count_characters` is computationally pure, but the
 AF pipeline appends a trace and may promote a regression-tested result into the in-process
