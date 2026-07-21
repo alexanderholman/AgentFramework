@@ -59,6 +59,11 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             assert tools["af_route_agent"].annotations is not None
             assert tools["af_route_agent"].annotations.readOnlyHint is True
             assert tools["af_route_agent"].annotations.idempotentHint is True
+            route_schema = json.dumps(tools["af_route_agent"].outputSchema)
+            for value in ("architect", "builder", "reviewer", "tester", "general"):
+                assert value in route_schema
+            for value in ("routed", "handoff", "ambiguous"):
+                assert value in route_schema
 
             routed = await session.call_tool("af_route_agent", {"prompt": "Implement the endpoint"})
             assert routed.isError is False

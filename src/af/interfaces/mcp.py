@@ -16,7 +16,12 @@ from pydantic import BaseModel
 from af import __version__
 from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
-from af.domain.agent_routing import AgentRole, AgentRouteResult
+from af.domain.agent_routing import (
+    AgentRole,
+    AgentRouteReason,
+    AgentRouteResult,
+    AgentRouteStatus,
+)
 from af.domain.tasks import Task
 from af.framework.errors import AFError, InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
@@ -79,20 +84,14 @@ class DeleteResult(BaseModel):
 
 class AgentRouteModel(BaseModel):
     prompt: str
-    status: str
-    agent: str | None
-    reason: str
-    candidates: list[str]
+    status: AgentRouteStatus
+    agent: AgentRole | None
+    reason: AgentRouteReason
+    candidates: list[AgentRole]
 
     @classmethod
     def from_route(cls, route: AgentRouteResult) -> AgentRouteModel:
-        return cls(
-            prompt=route.prompt,
-            status=route.status.value,
-            agent=route.agent.value if route.agent is not None else None,
-            reason=route.reason.value,
-            candidates=[candidate.value for candidate in route.candidates],
-        )
+        return cls.model_validate(route, from_attributes=True)
 
 
 def _annotations(
