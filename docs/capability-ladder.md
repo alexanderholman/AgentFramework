@@ -18,27 +18,39 @@ systems of functions:
 | 5 | Large reasoning or generative model | reviewed answer generation or complex reasoning |
 | 6 | Human or external expert | clarification, approval, specialist judgement |
 
-Cost minimisation is subordinate to quality and hard requirements. Cost evidence includes
-latency, compute and energy, money, privacy exposure, and operational risk. Quality evidence
-includes accuracy, availability, provenance, and verified execution history.
+Selection is lexicographic: choose the lowest capability level satisfying quality,
+requirements, availability, and effective scope; then minimize cost within that level. Cost
+evidence includes latency, compute and energy, money, privacy exposure, and operational
+risk. Quality evidence includes accuracy, availability, provenance, and verified execution
+history.
 
 ## Initial scopes
 
-- `child`: levels 0–2 only; deterministic procedural responses; no generative AI
-- `deterministic`: levels 0–2 unless explicitly changed
+- `child`: automated levels 0–2 only; deterministic procedural responses; no generative AI
+  or model-derived cache; same-audience child-eligible reuse only
+- `deterministic`: automated levels 0–2; deterministic provenance and reuse only
 - `reviewed-generative`: levels 3–5 only when lower levels are insufficient; generated
   answers are withheld pending review
-- `operator-evaluation`: explicit testing and benchmarking without silent production use
+- `operator-evaluation`: explicit levels 0–5 testing, no production release, and `no-store`
+  by default
+
+Effective scope is the intersection of caller preference and trusted identity, session,
+tenant, parental, and delegation policy. A caller or child context cannot self-select a more
+permissive scope. Every scope can return a non-automated level-6 human clarification or
+handoff without enabling a higher automated level.
 
 ## Planning and generation
 
 A model-backed planner may propose only a typed DAG of registered capabilities. The runtime
 validates nodes, edges, arguments, dependencies, requirements, scope, and policy before any
-execution. Generated answers are plausible but rare and never bypass review.
+execution. Model-derived taint propagates through planner arguments, deterministic wrappers,
+and all derivatives. Generated answers are plausible but rare and never bypass review.
 
 ## Reuse
 
 Review and caching are separate gates. A result may be correct but still `no-store` because
 it is personal, sensitive, short-lived, non-replay-safe, or forbidden by scope. Reuse
-requires valid provenance, fingerprints, review evidence, expiry, and independent
-verification.
+requires valid provenance, origin level, derivation taint, fingerprints, review evidence,
+expiry, audience/tenant eligibility, and independent verification. Review evidence binds to
+the exact output digest, derivation graph, effective scope, authorized reviewer, policy
+version, expiry, and revocation state.
