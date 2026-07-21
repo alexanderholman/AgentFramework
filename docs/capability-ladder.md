@@ -46,6 +46,12 @@ validates nodes, edges, arguments, dependencies, requirements, scope, and policy
 execution. Model-derived taint propagates through planner arguments, deterministic wrappers,
 and all derivatives. Generated answers are plausible but rare and never bypass review.
 
+Planner execution is pure, read-only, and no-risk by default. Side-effecting, risky,
+irreversible, externally visible, or confirmation-requiring nodes need independent
+pre-execution authorization bound to the exact immutable plan, arguments, predicted effects,
+scope, policy version, expiry, and authorizer. Any adaptive change invalidates that
+authorization and pauses before the changed effect.
+
 ## Reuse
 
 Review and caching are separate gates. A result may be correct but still `no-store` because

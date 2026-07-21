@@ -1459,3 +1459,47 @@ repository. Append-only history prevents rewriting that record.
 - Appended: `specs.md`, `decisions.md`
 
 ---
+
+## [DEC-027] Require Pre-Execution Authorization for Planner Side Effects
+**Date**: 2026-07-21
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon policy review
+
+### Context
+Review of scoped generation identified that answer review occurs too late to protect against
+an irreversible action already executed by a model-generated plan. The current selector
+correctly denies side-effecting, risky, and confirmation-requiring capabilities; future
+planner support must not weaken that boundary.
+
+### Decision
+1. Keep planner execution pure, read-only, and no-risk by default.
+2. Require independent authorization bound to the exact immutable plan and predicted effect
+   before any side-effecting or elevated-risk node executes.
+3. Invalidate authorization on every relevant plan or policy change.
+4. Require adaptive planners to pause and obtain fresh authorization before changed effects.
+5. Keep current runtime denials until SPEC-014 is implemented and tested.
+
+### Consequences
+**Positive:**
+- Final-answer review cannot be used to justify an earlier unreviewed side effect.
+- Planner adaptation cannot expand authorized effects silently.
+- Current fail-closed selector behavior remains the minimum safety baseline.
+
+**Negative:**
+- Side-effecting agent workflows require additional authorization state and pauses.
+- Some adaptive workflows cannot run unattended.
+
+### Related Decisions
+- DEC-024 (Remove Direct Generative Answers from the Active AF Runtime)
+- DEC-025 (Adopt the Capability Ladder and Scoped Reviewed Generation)
+- DEC-026 (Accept and Clarify Scoped Capability Selection)
+
+### Related Specs
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+- SPEC-014 (Planner Side-Effect Authorization)
+
+### Output References
+- Updated: `docs/capability-ladder.md`
+- Appended: `specs.md`, `decisions.md`
+
+---

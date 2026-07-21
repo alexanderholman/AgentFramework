@@ -668,3 +668,53 @@ which a result was derived.
 - SPEC-012 (Capability Ladder and Scoped Generative Execution)
 
 ---
+
+## [SPEC-014] Planner Side-Effect Authorization
+**Date**: 2026-07-21
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+Reviewing a final answer cannot undo a side effect already caused by a model-generated plan.
+Planner execution is therefore pure, read-only, and no-risk by default. Any side-effecting,
+elevated-risk, or confirmation-requiring node needs independent authorization before that
+node executes.
+
+### Requirements
+- MUST classify every planned node for purity, side effects, risk level, reversibility,
+  required authority, resource budget, and confirmation requirements before execution
+- MUST permit an unreviewed planner proposal to execute only pure, read-only, no-risk nodes
+  whose registered capability policy explicitly allows planner invocation
+- MUST require independent pre-execution authorization for every side-effecting,
+  elevated-risk, irreversible, externally visible, or confirmation-requiring node
+- MUST bind authorization to the immutable plan digest, exact node and arguments, predicted
+  effects, effective scope, authorizer identity and authority, policy version, expiry, and
+  revocation state
+- MUST invalidate authorization when a planner changes a node, argument, edge, effect,
+  capability version, scope, or execution order
+- MUST pause adaptive replanning before every newly introduced or changed side effect and
+  require fresh authorization
+- MUST preserve existing selector denial for side-effecting, risky, or
+  confirmation-requiring capabilities until this gate is implemented and tested
+
+### Tests
+- **Test ID**: TEST-014-1
+  - **Description**: Deny unreviewed planner side effects
+  - **Pass Criteria**: Unreviewed plans execute only pure read-only no-risk nodes
+  - **Fail Criteria**: A planner triggers any side effect before authorization
+- **Test ID**: TEST-014-2
+  - **Description**: Bind authorization to an immutable plan
+  - **Pass Criteria**: Any change to plan, node, arguments, effects, scope, capability
+    version, or policy invalidates authorization
+  - **Fail Criteria**: Modified or replayed authorization permits execution
+- **Test ID**: TEST-014-3
+  - **Description**: Reauthorize adaptive changes
+  - **Pass Criteria**: Adaptive replanning pauses before a changed or new side effect
+  - **Fail Criteria**: Previously authorized plans can introduce unreviewed effects
+
+### Related Specs
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+
+---
