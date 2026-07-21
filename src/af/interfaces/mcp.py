@@ -16,6 +16,12 @@ from pydantic import BaseModel
 from af import __version__
 from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
+from af.domain.agent_routing import (
+    AgentRole,
+    AgentRouteReason,
+    AgentRouteResult,
+    AgentRouteStatus,
+)
 from af.domain.tasks import Task
 from af.framework.errors import AFError, InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
@@ -76,6 +82,18 @@ class DeleteResult(BaseModel):
     deleted: bool
 
 
+class AgentRouteModel(BaseModel):
+    prompt: str
+    status: AgentRouteStatus
+    agent: AgentRole | None
+    reason: AgentRouteReason
+    candidates: list[AgentRole]
+
+    @classmethod
+    def from_route(cls, route: AgentRouteResult) -> AgentRouteModel:
+        return cls.model_validate(route, from_attributes=True)
+
+
 def _annotations(
     *,
     read_only: bool,
@@ -125,6 +143,7 @@ def _invoke_mcp_resource[T](callback: Callable[[], T]) -> T:
 def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]:
     resolved = application or create_application()
     controller = resolved.tasks
+    agent_routes = resolved.agent_routes
     registry = resolved.container.resolve(ProcedureRegistry)
     transport_security = _transport_security_for(resolved)
     server: FastMCP[None] = FastMCP(
@@ -170,6 +189,17 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
         return _invoke_mcp_tool(
             lambda: OutcomeModel.from_outcome(controller.count_characters(text, character))
         )
+
+    @server.tool(
+        name="af_route_agent",
+        description=(
+            "Deterministically select one installed agent role or return an ambiguous handoff."
+        ),
+        annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+        structured_output=True,
+    )
+    def af_route_agent(prompt: str) -> AgentRouteModel:
+        return _invoke_mcp_tool(lambda: AgentRouteModel.from_route(agent_routes.route(prompt)))
 
     @server.tool(
         name="af_list_tasks",
@@ -243,6 +273,7 @@ def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]
                     "tiers": sorted(
                         {descriptor.tier.name.lower() for descriptor in registry.catalogue()}
                     ),
+                    "agent_roles": sorted(role.value for role in AgentRole),
                 }
             )
         )

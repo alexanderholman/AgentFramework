@@ -1,0 +1,134 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/mimo-v2.5-free",
+  "small_model": "opencode/mimo-v2.5-free",
+  "default_agent": "dispatcher",
+  "subagent_depth": 1,
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "formatter": false,
+  "lsp": false,
+  "skills": {
+    "paths": [],
+    "urls": []
+  },
+  "mcp": {
+    "af": {
+      "type": "local",
+      "command": ["__AF_MCP__"],
+      "enabled": true,
+      "timeout": 30000
+    }
+  },
+  "permission": {
+    "skill": "deny"
+  },
+  "agent": {
+    "build": {"disable": true},
+    "plan": {"disable": true},
+    "general": {
+      "description": "Handles work with no specialist signal after AF routing.",
+      "mode": "subagent",
+      "prompt": "{file:./agents/general.md}",
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "question": "allow",
+        "task": "deny",
+        "skill": "deny"
+      }
+    },
+    "explore": {"disable": true},
+    "dispatcher": {
+      "description": "Primary dispatcher that must obtain and enforce an AF route before delegation.",
+      "mode": "primary",
+      "prompt": "{file:./agents/dispatcher.md}",
+      "permission": {
+        "*": "deny",
+        "af_route": "allow",
+        "question": "allow",
+        "task": {
+          "*": "deny",
+          "architect": "allow",
+          "builder": "allow",
+          "reviewer": "allow",
+          "tester": "allow",
+          "general": "allow"
+        },
+        "skill": "deny"
+      }
+    },
+    "architect": {
+      "description": "Plans architecture, requirements, designs, and specifications without editing.",
+      "mode": "subagent",
+      "prompt": "{file:./agents/architect.md}",
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "question": "allow",
+        "task": "deny",
+        "skill": "deny"
+      }
+    },
+    "builder": {
+      "description": "Implements and fixes code after AF routes implementation work.",
+      "mode": "subagent",
+      "prompt": "{file:./agents/builder.md}",
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "allow",
+        "bash": "deny",
+        "question": "allow",
+        "task": "deny",
+        "skill": "deny"
+      }
+    },
+    "reviewer": {
+      "description": "Reviews, audits, and critiques changes without editing them.",
+      "mode": "subagent",
+      "prompt": "{file:./agents/reviewer.md}",
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "skill": "deny"
+      }
+    },
+    "tester": {
+      "description": "Inspects tests, evidence, and verification plans after AF routes quality work.",
+      "mode": "subagent",
+      "prompt": "{file:./agents/tester.md}",
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "skill": "deny"
+      }
+    }
+  }
+}

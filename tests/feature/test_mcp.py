@@ -25,6 +25,7 @@ EXPECTED_TOOLS = {
     "af_create_task",
     "af_update_task",
     "af_delete_task",
+    "af_route_agent",
 }
 
 INITIALIZE_REQUEST = {
@@ -55,6 +56,31 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             assert tools["af_ask"].annotations.readOnlyHint is False
             assert tools["af_delete_task"].annotations is not None
             assert tools["af_delete_task"].annotations.destructiveHint is True
+            assert tools["af_route_agent"].annotations is not None
+            assert tools["af_route_agent"].annotations.readOnlyHint is True
+            assert tools["af_route_agent"].annotations.idempotentHint is True
+            route_schema = json.dumps(tools["af_route_agent"].outputSchema)
+            for value in ("architect", "builder", "reviewer", "tester", "general"):
+                assert value in route_schema
+            for value in ("routed", "handoff", "ambiguous"):
+                assert value in route_schema
+
+            routed = await session.call_tool("af_route_agent", {"prompt": "Implement the endpoint"})
+            assert routed.isError is False
+            assert routed.structuredContent == {
+                "prompt": "Implement the endpoint",
+                "status": "routed",
+                "agent": "builder",
+                "reason": "specialist_match",
+                "candidates": ["builder"],
+            }
+
+            ambiguous = await session.call_tool("af_route_agent", {"prompt": "Review the tests"})
+            assert ambiguous.isError is False
+            assert ambiguous.structuredContent is not None
+            assert ambiguous.structuredContent["status"] == "handoff"
+            assert ambiguous.structuredContent["agent"] is None
+            assert ambiguous.structuredContent["candidates"] == ["reviewer", "tester"]
 
             asked = await session.call_tool("af_ask", {"prompt": "how many rs in strawberry"})
             assert asked.isError is False
@@ -100,6 +126,13 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             assert manifest["routes"] == ["character-count", "hello"]
             assert manifest["tiers"] == ["procedural", "static"]
             assert "generative" not in manifest["tiers"]
+            assert manifest["agent_roles"] == [
+                "architect",
+                "builder",
+                "general",
+                "reviewer",
+                "tester",
+            ]
 
     anyio.run(scenario)
 
@@ -193,6 +226,7 @@ def test_mcp_reports_domain_failures_as_tool_errors(application) -> None:  # typ
                     "character must contain exactly one code point, got 'rr'",
                 ),
                 ("af_ask", {"prompt": "   "}, "prompt must not be blank"),
+                ("af_route_agent", {"prompt": "   "}, "prompt must not be blank"),
                 (
                     "af_create_task",
                     {"prompt": "make tea"},
