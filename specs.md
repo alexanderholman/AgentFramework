@@ -516,3 +516,205 @@ trusted registered catalogue; it never provides the user-facing answer.
 - SPEC-010 (AgentFramework Repository Identity)
 
 ---
+
+## [SPEC-012] Capability Ladder and Scoped Generative Execution
+**Date**: 2026-07-21
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+AF SHALL select the least costly available capability that satisfies declared requirements
+and the required quality threshold. Algorithms are functions; ladder levels distinguish
+simple functions from increasingly complex systems and compositions of functions.
+
+### Capability Ladder
+0. cached result or exact verified reuse
+1. simple deterministic function
+2. complex deterministic function system, including traditional algorithms and
+   deterministic DAGs
+3. specialist model
+4. adaptive agent workflow composed from registered capabilities
+5. large reasoning or generative model
+6. human clarification or external expertise
+
+### Requirements
+- MUST carry a typed user-acceptance scope on every execution request
+- MUST enforce the scope's maximum ladder level, review policy, and reuse policy before
+  capability selection and again before result release or promotion
+- MUST select minimum cost only among capabilities meeting required quality and all hard
+  requirements
+- MUST include latency, compute/energy, monetary cost, privacy exposure, and operational
+  risk in capability cost evidence
+- MUST include accuracy, availability, provenance, and verified execution history in
+  capability quality evidence
+- MUST treat cached results as reusable only when their capability fingerprint, inputs,
+  provenance, review evidence, expiry, and scope remain valid
+- MUST constrain planner output to a typed DAG of installed registered capabilities and
+  validate every node, edge, argument, requirement, and policy before execution
+- MUST require review before releasing a model-generated answer
+- MUST NOT equate review approval with cache permission; scope and system requirements may
+  require `no-store`
+- MUST keep the active runtime's direct generative route disabled until these controls and
+  their tests are implemented
+
+### Initial Acceptance Scopes
+- `child`: maximum level 2; deterministic procedural responses only; no generative model,
+  generative planner, or generated answer
+- `deterministic`: maximum level 2 unless the caller explicitly selects a more permissive
+  scope
+- `reviewed-generative`: levels 3 through 5 may be considered only when lower levels cannot
+  satisfy quality and requirements; generated answers require review before release
+- `operator-evaluation`: explicit model or hybrid evaluation without implicit production
+  escalation
+
+### Tests
+- **Test ID**: TEST-012-1
+  - **Description**: Enforce ladder ordering and quality constraints
+  - **Pass Criteria**: AF selects the lowest-cost qualifying capability and never climbs
+    when a lower level satisfies requirements and required quality
+  - **Fail Criteria**: AF selects by cost without quality or skips a valid lower level
+- **Test ID**: TEST-012-2
+  - **Description**: Enforce child scope
+  - **Pass Criteria**: Child requests execute only level 0 through 2 deterministic
+    procedures and reject all generative and planner paths
+  - **Fail Criteria**: Any child request invokes or returns generative AI output
+- **Test ID**: TEST-012-3
+  - **Description**: Enforce reviewed generative release
+  - **Pass Criteria**: Generated answers remain withheld until review evidence is valid
+  - **Fail Criteria**: Unreviewed generated text reaches the user
+- **Test ID**: TEST-012-4
+  - **Description**: Enforce scoped reuse
+  - **Pass Criteria**: `no-store`, expiry, provenance, fingerprint, and review requirements
+    prevent invalid cache promotion or reuse
+  - **Fail Criteria**: Review alone causes unconditional caching or stale reuse
+
+### Related Specs
+- SPEC-009 (Executable AF Python Runtime)
+- SPEC-011 (Human-First Constrained Selection Boundary)
+
+---
+
+## [SPEC-013] Acceptance Authority, Derivation Taint, and Ladder Selection
+**Date**: 2026-07-21
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+This specification clarifies SPEC-012. Capability level is the primary ordering criterion;
+cost is optimized only within the lowest level that satisfies quality, requirements, and
+effective acceptance policy. Acceptance scope is trusted policy, not caller-controlled
+metadata. Caching never lowers the authority requirements of the capability or content from
+which a result was derived.
+
+### Requirements
+- MUST select capabilities lexicographically by `(lowest qualifying level, cost)` after
+  applying quality, requirements, availability, and effective-scope constraints
+- MUST derive effective acceptance scope as the intersection of the caller's requested
+  scope and trusted server-side identity, session, tenant, parental, and delegation policy
+- MUST NOT permit a caller, child context, delegated request, planner, or cached artifact to
+  widen its effective scope
+- MUST permit level-6 human clarification or handoff from every scope as a non-automated
+  safety outcome, without treating level 6 as permission for automated output
+- MUST retain originating capability level, model-derived taint, audience/tenant boundary,
+  policy version, and child eligibility on every cached or composed result
+- MUST NOT reclassify a level-3 through level-5 derived artifact as unrestricted level-0
+  content merely because it was cached
+- MUST propagate model-derived taint through planner arguments, DAG nodes, deterministic
+  wrappers, transformations, summaries, and final responses
+- MUST review every user-visible derivative of model-generated content unless a stricter
+  scope rejects it outright
+- MUST bind review evidence to the exact output digest, derivation graph, effective scope,
+  authorized reviewer identity and independence class, policy version, timestamp, expiry,
+  and revocation state
+- MUST reject changed, expired, revoked, cross-scope, cross-tenant, or insufficiently
+  independent review evidence
+
+### Scope Gate Details
+- `child`: automated levels 0 through 2 only; origin and derivation must also be levels 0
+  through 2; no model-derived cached artifact; human handoff remains available; reuse is
+  limited to child-eligible deterministic artifacts within the same authorized audience
+- `deterministic`: automated levels 0 through 2 only; no model-derived cached artifact;
+  human handoff remains available; reuse requires deterministic provenance and scope match
+- `reviewed-generative`: automated levels up to 5 after lower-level insufficiency is proven;
+  user-visible model derivatives require bound review evidence; default reuse is `no-store`
+  unless an explicit policy permits promotion
+- `operator-evaluation`: automated levels up to 5 for explicit testing; no production
+  release, no cross-user reuse, and `no-store` by default; human handoff remains available
+
+### Tests
+- **Test ID**: TEST-013-1
+  - **Description**: Prevent scope escalation
+  - **Pass Criteria**: Effective scope never exceeds trusted authority and delegation can
+    only preserve or narrow policy
+  - **Fail Criteria**: Caller input, child context, planner, or delegation widens scope
+- **Test ID**: TEST-013-2
+  - **Description**: Prevent cache laundering
+  - **Pass Criteria**: Cached results retain origin level and derivation taint and remain
+    unavailable to ineligible child, tenant, or audience contexts
+  - **Fail Criteria**: Caching converts model-derived content into unrestricted level 0
+- **Test ID**: TEST-013-3
+  - **Description**: Enforce derivative review
+  - **Pass Criteria**: Planner arguments and deterministic wrappers preserve model taint and
+    every user-visible derivative requires valid digest-bound review evidence
+  - **Fail Criteria**: A wrapper or planner path bypasses review
+- **Test ID**: TEST-013-4
+  - **Description**: Preserve human-first handoff
+  - **Pass Criteria**: Every scope can return a non-automated human clarification or handoff
+    without enabling a higher automated level
+  - **Fail Criteria**: A scope ceiling blocks safe handoff or handoff enables automation
+
+### Related Specs
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+
+---
+
+## [SPEC-014] Planner Side-Effect Authorization
+**Date**: 2026-07-21
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+Reviewing a final answer cannot undo a side effect already caused by a model-generated plan.
+Planner execution is therefore pure, read-only, and no-risk by default. Any side-effecting,
+elevated-risk, or confirmation-requiring node needs independent authorization before that
+node executes.
+
+### Requirements
+- MUST classify every planned node for purity, side effects, risk level, reversibility,
+  required authority, resource budget, and confirmation requirements before execution
+- MUST permit an unreviewed planner proposal to execute only pure, read-only, no-risk nodes
+  whose registered capability policy explicitly allows planner invocation
+- MUST require independent pre-execution authorization for every side-effecting,
+  elevated-risk, irreversible, externally visible, or confirmation-requiring node
+- MUST bind authorization to the immutable plan digest, exact node and arguments, predicted
+  effects, effective scope, authorizer identity and authority, policy version, expiry, and
+  revocation state
+- MUST invalidate authorization when a planner changes a node, argument, edge, effect,
+  capability version, scope, or execution order
+- MUST pause adaptive replanning before every newly introduced or changed side effect and
+  require fresh authorization
+- MUST preserve existing selector denial for side-effecting, risky, or
+  confirmation-requiring capabilities until this gate is implemented and tested
+
+### Tests
+- **Test ID**: TEST-014-1
+  - **Description**: Deny unreviewed planner side effects
+  - **Pass Criteria**: Unreviewed plans execute only pure read-only no-risk nodes
+  - **Fail Criteria**: A planner triggers any side effect before authorization
+- **Test ID**: TEST-014-2
+  - **Description**: Bind authorization to an immutable plan
+  - **Pass Criteria**: Any change to plan, node, arguments, effects, scope, capability
+    version, or policy invalidates authorization
+  - **Fail Criteria**: Modified or replayed authorization permits execution
+- **Test ID**: TEST-014-3
+  - **Description**: Reauthorize adaptive changes
+  - **Pass Criteria**: Adaptive replanning pauses before a changed or new side effect
+  - **Fail Criteria**: Previously authorized plans can introduce unreviewed effects
+
+### Related Specs
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+
+---

@@ -1356,3 +1356,150 @@ answers must come from installed deterministic procedures rather than direct gen
 - Preserved: historical append-only references to the superseded generative design
 
 ---
+
+## [DEC-025] Adopt the Capability Ladder and Scoped Reviewed Generation
+**Date**: 2026-07-21
+**Status**: Approved
+**Decision Maker**: Alexander Holman
+
+### Context
+The AF design discussion defines a capability ladder that climbs only as high as necessary.
+It also treats algorithms as functions and distinguishes simple functions from complex
+systems of functions. DEC-024 correctly removed an unconstrained direct generative-answer
+route from the active runtime, but a permanent absolute prohibition is stricter than the
+intended product policy. Generative answers are plausible, should be rare, require review,
+and may or may not be reusable depending on user acceptance scope and system requirements.
+Children must receive deterministic procedural responses and must never use generative AI.
+
+### Decision
+1. Adopt the ordered ladder in SPEC-012.
+2. Select the minimum-cost capability only after requirements and required quality are met.
+3. Require every request to carry a typed acceptance scope that constrains maximum ladder
+   level, release review, and caching/reuse.
+4. Hard-limit child scope to cached or deterministic function systems at levels 0 through 2.
+5. Permit generated answers only in an explicitly generative scope and only after review.
+6. Permit planners to propose typed DAGs of registered capabilities, never unvalidated code,
+   hidden capabilities, or direct policy bypasses.
+7. Treat cacheability as a separate decision from correctness review; support `no-store`,
+   expiry, provenance, and capability/model fingerprint requirements.
+8. Keep DEC-024's current runtime denial in force until the scoped policy, review gate, cache
+   gate, and complete regression tests are implemented.
+
+### Consequences
+**Positive:**
+- AF matches the intended capability-first architecture rather than becoming an AI router.
+- Simple deterministic work remains preferred while reviewed generation remains available
+  for rare cases that genuinely require it.
+- Child safety is enforceable as a hard execution policy rather than a prompt instruction.
+- Reuse remains valuable without assuming every reviewed output is safe to cache.
+
+**Negative:**
+- Generative execution remains unavailable until acceptance scopes and gates are complete.
+- Capability scoring now requires explicit quality, requirements, cost, and provenance data.
+- Review and cache policy introduce additional state and lifecycle transitions.
+
+### Related Specs
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+
+### Output References
+- Added: `docs/capability-ladder.md`
+- Updated: append-only `specs.md`, `decisions.md`
+
+---
+
+## [DEC-026] Accept and Clarify Scoped Capability Selection
+**Date**: 2026-07-21
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon policy review
+
+### Context
+Review of DEC-025 identified ambiguity between cross-level cost minimization and climbing
+only as high as necessary, incomplete scope authority and reuse definitions, an unreachable
+human handoff under automated ceilings, and possible review bypass through caches or planner
+arguments. DEC-025 also used `Approved`, which is not a recognized decision status in this
+repository. Append-only history prevents rewriting that record.
+
+### Decision
+1. Treat this accepted record as the status correction and enforcement clarification for
+   DEC-025; preserve DEC-025 as historical context.
+2. Order selection first by the lowest qualifying ladder level, then by cost among
+   capabilities at that level.
+3. Compute effective scope from trusted authority intersected with caller preference;
+   callers and delegated contexts may never widen authority.
+4. Treat human clarification and handoff as available from every scope outside automated
+   capability ceilings.
+5. Preserve origin level and model-derived taint through caching, planning, composition,
+   deterministic wrappers, and final output.
+6. Require exact digest- and scope-bound review evidence for every user-visible model
+   derivative.
+7. Apply the complete scope gates and tests in SPEC-013 before enabling generation.
+
+### Consequences
+**Positive:**
+- Cost optimization cannot skip a simpler capability that already satisfies quality.
+- Child and deterministic policies cannot be bypassed through request metadata or caches.
+- Planner-generated arguments cannot launder model text through deterministic procedures.
+- Human-first handoff remains universally reachable.
+
+**Negative:**
+- Cache metadata and review evidence require richer provenance and policy state.
+- Existing future generative designs must implement derivation taint before activation.
+
+### Related Decisions
+- DEC-024 (Remove Direct Generative Answers from the Active AF Runtime)
+- DEC-025 (Adopt the Capability Ladder and Scoped Reviewed Generation)
+
+### Related Specs
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+
+### Output References
+- Updated: `docs/capability-ladder.md`
+- Appended: `specs.md`, `decisions.md`
+
+---
+
+## [DEC-027] Require Pre-Execution Authorization for Planner Side Effects
+**Date**: 2026-07-21
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon policy review
+
+### Context
+Review of scoped generation identified that answer review occurs too late to protect against
+an irreversible action already executed by a model-generated plan. The current selector
+correctly denies side-effecting, risky, and confirmation-requiring capabilities; future
+planner support must not weaken that boundary.
+
+### Decision
+1. Keep planner execution pure, read-only, and no-risk by default.
+2. Require independent authorization bound to the exact immutable plan and predicted effect
+   before any side-effecting or elevated-risk node executes.
+3. Invalidate authorization on every relevant plan or policy change.
+4. Require adaptive planners to pause and obtain fresh authorization before changed effects.
+5. Keep current runtime denials until SPEC-014 is implemented and tested.
+
+### Consequences
+**Positive:**
+- Final-answer review cannot be used to justify an earlier unreviewed side effect.
+- Planner adaptation cannot expand authorized effects silently.
+- Current fail-closed selector behavior remains the minimum safety baseline.
+
+**Negative:**
+- Side-effecting agent workflows require additional authorization state and pauses.
+- Some adaptive workflows cannot run unattended.
+
+### Related Decisions
+- DEC-024 (Remove Direct Generative Answers from the Active AF Runtime)
+- DEC-025 (Adopt the Capability Ladder and Scoped Reviewed Generation)
+- DEC-026 (Accept and Clarify Scoped Capability Selection)
+
+### Related Specs
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+- SPEC-014 (Planner Side-Effect Authorization)
+
+### Output References
+- Updated: `docs/capability-ladder.md`
+- Appended: `specs.md`, `decisions.md`
+
+---
