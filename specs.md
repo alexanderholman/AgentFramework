@@ -593,3 +593,78 @@ simple functions from increasingly complex systems and compositions of functions
 - SPEC-011 (Human-First Constrained Selection Boundary)
 
 ---
+
+## [SPEC-013] Acceptance Authority, Derivation Taint, and Ladder Selection
+**Date**: 2026-07-21
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+This specification clarifies SPEC-012. Capability level is the primary ordering criterion;
+cost is optimized only within the lowest level that satisfies quality, requirements, and
+effective acceptance policy. Acceptance scope is trusted policy, not caller-controlled
+metadata. Caching never lowers the authority requirements of the capability or content from
+which a result was derived.
+
+### Requirements
+- MUST select capabilities lexicographically by `(lowest qualifying level, cost)` after
+  applying quality, requirements, availability, and effective-scope constraints
+- MUST derive effective acceptance scope as the intersection of the caller's requested
+  scope and trusted server-side identity, session, tenant, parental, and delegation policy
+- MUST NOT permit a caller, child context, delegated request, planner, or cached artifact to
+  widen its effective scope
+- MUST permit level-6 human clarification or handoff from every scope as a non-automated
+  safety outcome, without treating level 6 as permission for automated output
+- MUST retain originating capability level, model-derived taint, audience/tenant boundary,
+  policy version, and child eligibility on every cached or composed result
+- MUST NOT reclassify a level-3 through level-5 derived artifact as unrestricted level-0
+  content merely because it was cached
+- MUST propagate model-derived taint through planner arguments, DAG nodes, deterministic
+  wrappers, transformations, summaries, and final responses
+- MUST review every user-visible derivative of model-generated content unless a stricter
+  scope rejects it outright
+- MUST bind review evidence to the exact output digest, derivation graph, effective scope,
+  authorized reviewer identity and independence class, policy version, timestamp, expiry,
+  and revocation state
+- MUST reject changed, expired, revoked, cross-scope, cross-tenant, or insufficiently
+  independent review evidence
+
+### Scope Gate Details
+- `child`: automated levels 0 through 2 only; origin and derivation must also be levels 0
+  through 2; no model-derived cached artifact; human handoff remains available; reuse is
+  limited to child-eligible deterministic artifacts within the same authorized audience
+- `deterministic`: automated levels 0 through 2 only; no model-derived cached artifact;
+  human handoff remains available; reuse requires deterministic provenance and scope match
+- `reviewed-generative`: automated levels up to 5 after lower-level insufficiency is proven;
+  user-visible model derivatives require bound review evidence; default reuse is `no-store`
+  unless an explicit policy permits promotion
+- `operator-evaluation`: automated levels up to 5 for explicit testing; no production
+  release, no cross-user reuse, and `no-store` by default; human handoff remains available
+
+### Tests
+- **Test ID**: TEST-013-1
+  - **Description**: Prevent scope escalation
+  - **Pass Criteria**: Effective scope never exceeds trusted authority and delegation can
+    only preserve or narrow policy
+  - **Fail Criteria**: Caller input, child context, planner, or delegation widens scope
+- **Test ID**: TEST-013-2
+  - **Description**: Prevent cache laundering
+  - **Pass Criteria**: Cached results retain origin level and derivation taint and remain
+    unavailable to ineligible child, tenant, or audience contexts
+  - **Fail Criteria**: Caching converts model-derived content into unrestricted level 0
+- **Test ID**: TEST-013-3
+  - **Description**: Enforce derivative review
+  - **Pass Criteria**: Planner arguments and deterministic wrappers preserve model taint and
+    every user-visible derivative requires valid digest-bound review evidence
+  - **Fail Criteria**: A wrapper or planner path bypasses review
+- **Test ID**: TEST-013-4
+  - **Description**: Preserve human-first handoff
+  - **Pass Criteria**: Every scope can return a non-automated human clarification or handoff
+    without enabling a higher automated level
+  - **Fail Criteria**: A scope ceiling blocks safe handoff or handoff enables automation
+
+### Related Specs
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+
+---

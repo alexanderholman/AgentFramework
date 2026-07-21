@@ -1407,3 +1407,55 @@ Children must receive deterministic procedural responses and must never use gene
 - Updated: append-only `specs.md`, `decisions.md`
 
 ---
+
+## [DEC-026] Accept and Clarify Scoped Capability Selection
+**Date**: 2026-07-21
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon policy review
+
+### Context
+Review of DEC-025 identified ambiguity between cross-level cost minimization and climbing
+only as high as necessary, incomplete scope authority and reuse definitions, an unreachable
+human handoff under automated ceilings, and possible review bypass through caches or planner
+arguments. DEC-025 also used `Approved`, which is not a recognized decision status in this
+repository. Append-only history prevents rewriting that record.
+
+### Decision
+1. Treat this accepted record as the status correction and enforcement clarification for
+   DEC-025; preserve DEC-025 as historical context.
+2. Order selection first by the lowest qualifying ladder level, then by cost among
+   capabilities at that level.
+3. Compute effective scope from trusted authority intersected with caller preference;
+   callers and delegated contexts may never widen authority.
+4. Treat human clarification and handoff as available from every scope outside automated
+   capability ceilings.
+5. Preserve origin level and model-derived taint through caching, planning, composition,
+   deterministic wrappers, and final output.
+6. Require exact digest- and scope-bound review evidence for every user-visible model
+   derivative.
+7. Apply the complete scope gates and tests in SPEC-013 before enabling generation.
+
+### Consequences
+**Positive:**
+- Cost optimization cannot skip a simpler capability that already satisfies quality.
+- Child and deterministic policies cannot be bypassed through request metadata or caches.
+- Planner-generated arguments cannot launder model text through deterministic procedures.
+- Human-first handoff remains universally reachable.
+
+**Negative:**
+- Cache metadata and review evidence require richer provenance and policy state.
+- Existing future generative designs must implement derivation taint before activation.
+
+### Related Decisions
+- DEC-024 (Remove Direct Generative Answers from the Active AF Runtime)
+- DEC-025 (Adopt the Capability Ladder and Scoped Reviewed Generation)
+
+### Related Specs
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+
+### Output References
+- Updated: `docs/capability-ladder.md`
+- Appended: `specs.md`, `decisions.md`
+
+---
