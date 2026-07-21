@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from af.domain.agent_routing import AgentRouteResult
 from af.domain.tasks import Task
 from af.framework.types import ExecutionOutcome
 
@@ -38,4 +39,14 @@ def outcome_to_dict(outcome: ExecutionOutcome) -> dict[str, object]:
         "verified": outcome.verified,
         "reused": outcome.reused,
         "trace_id": outcome.trace_id,
+    }
+
+
+def agent_route_to_dict(route: AgentRouteResult) -> dict[str, object]:
+    return {
+        "prompt": route.prompt,
+        "status": route.status.value,
+        "agent": route.agent.value if route.agent is not None else None,
+        "reason": route.reason.value,
+        "candidates": [candidate.value for candidate in route.candidates],
     }

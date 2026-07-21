@@ -24,6 +24,30 @@ def test_cli_ask_strawberry(application) -> None:  # type: ignore[no-untyped-def
     assert result.stdout == "3\n"
 
 
+def test_cli_route_agent_returns_structured_decision(application) -> None:  # type: ignore[no-untyped-def]
+    cli = create_cli(application)
+
+    routed = runner.invoke(cli, ["route-agent", "Implement the endpoint"])
+    ambiguous = runner.invoke(cli, ["route-agent", "Design and implement the endpoint"])
+
+    assert routed.exit_code == 0
+    assert json.loads(routed.stdout) == {
+        "prompt": "Implement the endpoint",
+        "status": "routed",
+        "agent": "builder",
+        "reason": "specialist_match",
+        "candidates": ["builder"],
+    }
+    assert ambiguous.exit_code == 0
+    assert json.loads(ambiguous.stdout) == {
+        "prompt": "Design and implement the endpoint",
+        "status": "handoff",
+        "agent": None,
+        "reason": "ambiguous",
+        "candidates": ["architect", "builder"],
+    }
+
+
 def test_cli_task_crud(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
     created_result = runner.invoke(cli, ["tasks", "create", "how many rs in strawberry"])

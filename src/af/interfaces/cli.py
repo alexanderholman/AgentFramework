@@ -9,7 +9,7 @@ import typer
 
 from af.bootstrap import AFApplication, create_application
 from af.framework.errors import AFError
-from af.interfaces.presenters import delete_to_dict, task_to_dict
+from af.interfaces.presenters import agent_route_to_dict, delete_to_dict, task_to_dict
 
 
 def create_cli(application: AFApplication | None = None) -> typer.Typer:
@@ -40,6 +40,16 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
         """Classify and execute a request without persisting a Task."""
         try:
             typer.echo(current().tasks.execute(prompt).output)
+        except AFError as error:
+            fail(error)
+
+    @cli.command("route-agent")
+    def route_agent(
+        prompt: Annotated[str, typer.Argument(help="Work request to route to an agent role")],
+    ) -> None:
+        """Return AF's deterministic agent-role routing decision as JSON."""
+        try:
+            typer.echo(json.dumps(agent_route_to_dict(current().agent_routes.route(prompt))))
         except AFError as error:
             fail(error)
 
