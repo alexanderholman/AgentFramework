@@ -1643,3 +1643,85 @@ weaken transactions, ordering, durability, search, or policy enforcement.
 - Tracks: GitHub epic #35 and issue #7
 
 ---
+
+## [DEC-030] Establish a Bounded Private Production-MVP Profile
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon production-readiness review
+
+### Context
+The v0.1 roadmap correctly describes the long-term human-first AF platform, including
+providers, science and locale packs, peer execution, resources, broad drivers, and release
+certification. The current implementation is a much narrower deterministic vertical slice.
+Using the complete roadmap as one undifferentiated production gate obscures both the controls
+needed to operate that slice and the work that remains absent.
+
+The repository also lacked a package-from-sdist check, a machine-readable release view, and a
+clear distinction between source quality, artifact validity, deployment evidence, and final
+production approval.
+
+### Decision
+1. Define the first production candidate as one private Linux node, one trusted operator and
+   tenant, one process per SQLite database, deterministic routes only, and loopback/stdio
+   access.
+2. Keep public/LAN exposure, multi-tenancy, model selection, cross-driver certification,
+   peer execution, and public publication outside this profile.
+3. Store versioned requirements and current state in `release/production-mvp.yaml` and provide
+   a strict read-only validator, deterministic report, and fail-closed readiness check.
+4. Report the repository as not ready until every blocking gate is `met`; do not add waivers
+   that can turn a mandatory unknown into a pass.
+5. Add a temporary wheel-from-sdist build, inspection, install, and deterministic smoke to the
+   authoritative development gate without treating it as clean-host or deployment proof.
+6. Require final evidence to be bound to the exact commit, artifact, profile, configuration,
+   platform, tool versions, time, expiry, and deployment subject.
+7. Keep issue #9's container/lifecycle implementation and the broader #3/#34 programs in
+   separate focused work; this decision defines admission, not those implementations.
+8. Change from `0.1.0a0` to `0.1.0` only in a final release-candidate change after all gates
+   pass and a maintainer accepts residual risk.
+
+### Alternatives Considered
+- **Treat all of roadmap #3 as the first production deployment:** rejected because unrelated
+  provider, P2P, locale, and science scope prevents a useful bounded security and operations
+  profile for the existing runtime.
+- **Declare the current private loopback application an MVP immediately:** rejected because
+  repository privacy and loopback do not prove authentication boundaries, migrations,
+  backup/restore, health, shutdown, capacity, accessibility, rollback, or release evidence.
+- **Use a prose checklist only:** rejected because status and blocker drift would remain hard
+  to detect and automate.
+- **Make the ordinary CI gate fail until production-ready:** rejected because known product
+  blockers should remain visible without preventing incremental source changes. CI validates
+  the manifest and package; the separate readiness check blocks release.
+
+### Consequences
+**Positive:**
+- AF has one reviewable definition of its first supported deployment and its non-goals.
+- The current status remains honest while progress is machine-readable.
+- Package defects and source-checkout shadowing become release-gate failures.
+- Future work can close focused gates without conflating them with broad platform completion.
+- Deployment and review evidence must identify the exact subject it certifies.
+
+**Negative:**
+- The manifest and evidence references require maintenance as controls change.
+- Passing the source gate still does not mean AF can be deployed; operators must understand
+  the separate readiness result.
+- Clean-host, authentication, durability, operations, accessibility, and rollback work remain
+  blocking follow-ups.
+- The package smoke adds time and build-backend access to the normal CI job.
+
+### Related Decisions
+- DEC-022 (Adopt the AF Python Vertical Slice and MCP-First ChatGPT Boundary)
+- DEC-028 (Adopt an Async-Capable Application and Provider Lifecycle)
+- DEC-029 (Use Providers, Managers, Named Drivers, and Honest Delivery Semantics)
+
+### Related Specs
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+
+### Output References
+- Added: `docs/production-mvp.md`, `release/production-mvp.yaml`
+- Added: `scripts/release_gates.py`, `tests/unit/test_release_gates.py`
+- Updated: `scripts/af_dev.py`, `scripts/registry.yaml`, packaging and active guidance
+- Tracks: GitHub roadmap #3 and release-certification issue #34
+
+---

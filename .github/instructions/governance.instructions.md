@@ -1,5 +1,5 @@
 ---
-applyTo: "specs.md,decisions.md,agent_runs.md,agents/**/*.md,agents/*.md,agents.yaml,agents.md,project_context*.yaml,repo.yaml,scripts/**/*,workflows/**/*,tasks/**/*,traits/**/*,skills/**/*"
+applyTo: "specs.md,decisions.md,agent_runs.md,agents/**/*.md,agents/*.md,agents.yaml,agents.md,project_context*.yaml,repo.yaml,release/**/*,scripts/**/*,workflows/**/*,tasks/**/*,traits/**/*,skills/**/*"
 ---
 
 # AgentFramework governance requirements

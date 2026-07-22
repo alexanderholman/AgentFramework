@@ -871,3 +871,82 @@ capability, data, and delivery contracts.
 - SPEC-014 (Planner Side-Effect Authorization)
 
 ---
+
+## [SPEC-016] Private Single-Node Production-MVP Release Contract
+**Date**: 2026-07-22
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+AF SHALL define a bounded first production profile independently of the wider v0.1 platform
+roadmap. The profile is one private Linux node, one trusted operator/tenant, one process per
+SQLite database, deterministic routes only, and loopback or stdio access. Release admission
+is fail-closed and based on versioned requirements plus current subject-bound evidence.
+
+### Requirements
+- MUST keep the profile, supported surfaces, exclusions, gate state, evidence references,
+  and next actions in a strict versioned machine-readable manifest
+- MUST reject duplicate keys and gate IDs, aliases, unknown fields, path traversal, symlinked
+  evidence, unregistered script references, unsupported states, and a `met` gate without
+  evidence
+- MUST treat manifest data as declarative and MUST NOT execute a command supplied by YAML
+- MUST report a valid but blocked manifest with exit `0`, readiness-enforcement failure with
+  exit `1`, and malformed input/internal validation failure with exit `2`
+- MUST report package build, inspection, installation, or smoke failure with exit `1` and
+  invalid package-action usage or inaccessible inputs with exit `2`
+- MUST calculate readiness only when every blocking gate is `met`; mandatory gates cannot be
+  silently waived or treated as not applicable
+- MUST preserve an explicit `not ready` status while any security, durability, recovery,
+  operations, accessibility, artifact, or release gate remains unmet or pending
+- MUST build the wheel from the source distribution in temporary paths and verify project and
+  runtime versions, Python requirement, console entry points, typing marker, templates, and
+  absence of repository/runtime state
+- MUST install the wheel outside the checkout without dependencies and smoke deterministic
+  routes using the already locked development environment
+- MUST keep final clean-host installation, production deployment, release signing,
+  publication, migration, backup/restore, rollback, and maintainer approval as separate
+  blocking evidence rather than inferring them from a package build
+- MUST bind final release evidence to the full source SHA, artifact and profile digests,
+  effective configuration, platform/tool identities, observation time, expiry, and subject
+- MUST keep public/LAN exposure, multiple tenants, multiple SQLite writers, selector/model
+  execution, cross-driver certification, peer execution, and public package publication
+  outside this profile
+- MUST NOT close roadmap issue #3 or release-certification issue #34 merely because the
+  production-profile contract and checker exist
+
+### Tests
+- **Test ID**: TEST-016-1
+  - **Description**: Validate strict manifest parsing and evidence references
+  - **Pass Criteria**: Valid data is accepted while duplicates, aliases, unknown fields,
+    invalid state transitions, escapes, symlinks, and missing references fail with exit `2`
+  - **Fail Criteria**: Ambiguous or unsafe manifest content is accepted
+- **Test ID**: TEST-016-2
+  - **Description**: Validate deterministic readiness reporting
+  - **Pass Criteria**: Text/JSON reports contain stable counts and sorted blocker IDs; report
+    exits `0`, blocked check exits `1`, and ready check exits `0`
+  - **Fail Criteria**: A blocked profile reports ready or exit semantics vary by ordering
+- **Test ID**: TEST-016-3
+  - **Description**: Validate wheel-from-sdist identity and contents
+  - **Pass Criteria**: One source distribution and pure-Python wheel agree with checkout
+    metadata and include entry points, typing, templates, and no forbidden state
+  - **Fail Criteria**: Direct-checkout-only builds, version drift, missing runtime files, or
+    repository/runtime state pass inspection
+- **Test ID**: TEST-016-4
+  - **Description**: Validate installed-wheel smoke isolation
+  - **Pass Criteria**: AF imports from a temporary installation outside the checkout and both
+    deterministic examples pass using an in-memory database
+  - **Fail Criteria**: Smoke imports the checkout, writes repository state, or skips either
+    route
+- **Test ID**: TEST-016-5
+  - **Description**: Preserve honest production status
+  - **Pass Criteria**: The repository manifest validates but remains blocked until every
+    release gate has current evidence
+  - **Fail Criteria**: Adding the checker or package smoke alone declares production ready
+
+### Related Specs
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+
+---
