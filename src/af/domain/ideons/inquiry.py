@@ -45,7 +45,9 @@ class InquiryEngine:
             if forms.forms[index].form_type == "word-form"
         )
 
-        # Derive predicate presence from viable candidates before evaluating WHO.
+        # Compute predicate presence upfront: it drives both IS and WHO evaluation.
+        # WHO is material-open only when a predicate requires an agent; IS is open
+        # when no predicate is found.  Computing this once avoids two passes.
         has_predicate = any(
             candidate.entry.semantic_type in {"action", "state", "relation"}
             for candidate_set in word_candidate_sets

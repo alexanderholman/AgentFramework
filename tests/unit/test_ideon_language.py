@@ -121,8 +121,9 @@ def test_bank_candidates_remain_open_until_context_materially_selects_a_set() ->
 
 
 def test_all_eleven_questions_are_represented_and_open_ideon_asks() -> None:
-    """All eleven questions appear in InquiryState; deterministic rules cover WHO, WHAT,
-    WHERE, IS; WHY/HOW/COULD/WOULD/WHEN/WHERN remain NOT_APPLICABLE until implemented."""
+    """All eleven questions appear in InquiryState.  Seven have deterministic behaviour
+    in this slice: WHO, WHAT, WHERE, WHEN, WHERN, IS, SHOULD.  WHY, HOW, COULD, and
+    WOULD are structurally represented but default to NOT_APPLICABLE until implemented."""
     forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
     candidates = reference_dictionary().candidates(forms, ContextGraph())
     inquiry = InquiryEngine().query(forms, candidates, ContextGraph())

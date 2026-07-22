@@ -13,11 +13,14 @@ from enum import StrEnum
 
 
 class Tense(StrEnum):
-    """Temporal perspective relative to a declared reference Whern.
+    """Temporal perspective of an event relative to a declared reference Whern.
 
-    ``WAS`` and ``IS`` record attested states; ``PROJECTED`` represents a future or
-    projected state.  All three qualify propositions and relations in context rather
-    than serving as an isolated inquiry attention.
+    A *reference Whern* is the observer's temporal standpoint (typically the
+    utterance moment).  ``render_tense`` compares an event's anchor against it
+    to yield one of these three values.  ``WAS`` and ``IS`` record attested
+    states; ``PROJECTED`` represents a future or projected state.  All three
+    qualify propositions and relations in context rather than serving as an
+    isolated inquiry attention.
     """
 
     WAS = "was"
