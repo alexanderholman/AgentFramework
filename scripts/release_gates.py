@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import configparser
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -26,12 +29,32 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
-from yaml.tokens import AliasToken, AnchorToken
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
+from yaml.tokens import (
+    AliasToken,
+    AnchorToken,
+    BlockEndToken,
+    BlockMappingStartToken,
+    BlockSequenceStartToken,
+    FlowMappingEndToken,
+    FlowMappingStartToken,
+    FlowSequenceEndToken,
+    FlowSequenceStartToken,
+    ScalarToken,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path("release/production-mvp.yaml")
 MAX_MANIFEST_BYTES = 256 * 1024
+MAX_YAML_TOKENS = 20_000
+MAX_YAML_DEPTH = 64
+MAX_YAML_SCALAR_LENGTH = 16_384
+MAX_ARCHIVE_MEMBERS = 5_000
+MAX_ARCHIVE_FILE_BYTES = 16 * 1024 * 1024
+MAX_ARCHIVE_EXPANDED_BYTES = 128 * 1024 * 1024
 SCHEMA_VERSION = "1.0.0"
+EXPECTED_POLICY_SHA256 = "6a25c0a6a798b04121450bfbaec9d033a4c4a046bcb71c1ef3220ee81a34c9c7"
 
 ROOT_FIELDS = frozenset({"schema_version", "profile", "gates"})
 PROFILE_FIELDS = frozenset(
@@ -113,6 +136,9 @@ sys.path.insert(0, str(target))
 import af
 from af.bootstrap import create_application
 from af.config import Settings
+from af.interfaces.cli import create_cli
+from af.interfaces.mcp import main as mcp_main
+from typer.testing import CliRunner
 
 module_path = Path(af.__file__).resolve()
 if target not in module_path.parents:
@@ -121,15 +147,28 @@ if not files("af").joinpath("views/templates/base.html").is_file():
     raise SystemExit("installed wheel has no base HTML template")
 
 application = create_application(settings=Settings(database_url="sqlite:///:memory:"))
-if application.tasks.execute("hello").output != "Hello, world!":
+runner = CliRunner()
+hello = runner.invoke(create_cli(application), ["hello"])
+counted = runner.invoke(create_cli(application), ["ask", "how many rs in strawberry"])
+if hello.exit_code != 0 or hello.stdout.strip() != "Hello, world!":
     raise SystemExit("installed wheel failed the hello smoke")
-if application.tasks.execute("how many rs in strawberry").output != "3":
+if counted.exit_code != 0 or counted.stdout.strip() != "3":
     raise SystemExit("installed wheel failed the character-count smoke")
+if not callable(mcp_main):
+    raise SystemExit("installed wheel MCP entry-point target is not callable")
 """.strip()
 
 
 class ManifestError(ValueError):
     """Raised when release-gate data is malformed or unsafe."""
+
+
+class InputError(ManifestError):
+    """Raised for invalid or inaccessible operator inputs."""
+
+
+class ArtifactError(ManifestError):
+    """Raised when a package artifact fails release validation."""
 
 
 class StrictSafeLoader(yaml.SafeLoader):
@@ -174,6 +213,7 @@ class Manifest:
 
     schema_version: str
     profile_id: str
+    policy_sha256: str
     gates: tuple[Gate, ...]
 
     def report(self) -> dict[str, Any]:
@@ -185,9 +225,11 @@ class Manifest:
         return {
             "blocking_gates": blocking_count,
             "blockers": blockers,
+            "certifies_production": False,
             "counts": {state: counts.get(state, 0) for state in sorted(STATES)},
+            "policy_sha256": self.policy_sha256,
             "profile": self.profile_id,
-            "ready": blocking_count > 0 and not blockers,
+            "requirements_complete": blocking_count > 0 and not blockers,
             "schema_version": self.schema_version,
         }
 
@@ -201,6 +243,17 @@ class ArtifactSummary:
     wheel_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectIdentity:
+    """Normalized publishable project metadata used across source and wheel checks."""
+
+    name: str
+    version: str
+    requires_python: str
+    dependencies: tuple[tuple[object, ...], ...]
+    scripts: tuple[tuple[str, str], ...]
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -209,38 +262,88 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _project_identity(root: Path) -> tuple[str, str, str]:
-    try:
-        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise ManifestError("pyproject.toml is unreadable or invalid") from exc
-    project = pyproject.get("project")
+def _normalize_requirements(values: object, location: str) -> tuple[tuple[object, ...], ...]:
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ArtifactError(f"{location} must be a list of requirement strings")
+    normalized: list[tuple[object, ...]] = []
+    for value in values:
+        try:
+            requirement = Requirement(value)
+        except InvalidRequirement as exc:
+            raise ArtifactError(f"{location} contains an invalid requirement") from exc
+        normalized.append(
+            (
+                canonicalize_name(requirement.name),
+                tuple(
+                    sorted(
+                        (specifier.operator, specifier.version)
+                        for specifier in requirement.specifier
+                    )
+                ),
+                tuple(sorted(requirement.extras)),
+                str(requirement.marker or ""),
+                requirement.url or "",
+            )
+        )
+    return tuple(sorted(normalized))
+
+
+def _identity_from_project_table(project: object, location: str) -> ProjectIdentity:
     if not isinstance(project, dict):
-        raise ManifestError("pyproject.toml has no project table")
+        raise ArtifactError(f"{location} has no project table")
     name = project.get("name")
     version = project.get("version")
     requires_python = project.get("requires-python")
     if not all(isinstance(value, str) and value for value in (name, version, requires_python)):
-        raise ManifestError("project name, version, and requires-python must be strings")
+        raise ArtifactError(
+            f"{location} project name, version, and requires-python must be strings"
+        )
+    scripts = project.get("scripts")
+    if (
+        not isinstance(scripts, dict)
+        or not scripts
+        or not all(
+            isinstance(key, str) and key and isinstance(value, str) and value
+            for key, value in scripts.items()
+        )
+    ):
+        raise ArtifactError(f"{location} project scripts must be a non-empty mapping")
+    return ProjectIdentity(
+        name=name,
+        version=version,
+        requires_python=requires_python,
+        dependencies=_normalize_requirements(
+            project.get("dependencies"), f"{location} dependencies"
+        ),
+        scripts=tuple(sorted(scripts.items())),
+    )
+
+
+def _project_identity(root: Path) -> ProjectIdentity:
+    try:
+        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ArtifactError("pyproject.toml is unreadable or invalid") from exc
+    identity = _identity_from_project_table(pyproject.get("project"), "pyproject.toml")
 
     try:
         init_text = (root / "src/af/__init__.py").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        raise ManifestError("src/af/__init__.py is unreadable") from exc
+        raise ArtifactError("src/af/__init__.py is unreadable") from exc
     match = VERSION_PATTERN.search(init_text)
     if match is None:
-        raise ManifestError("src/af/__init__.py has no literal __version__")
-    if match.group(1) != version:
-        raise ManifestError("pyproject and runtime versions do not match")
-    return name, version, requires_python
+        raise ArtifactError("src/af/__init__.py has no literal __version__")
+    if match.group(1) != identity.version:
+        raise ArtifactError("pyproject and runtime versions do not match")
+    return identity
 
 
 def _validate_archive_name(name: str, archive: str) -> PurePosixPath:
     if not name or "\\" in name:
-        raise ManifestError(f"{archive} contains an unsafe path")
+        raise ArtifactError(f"{archive} contains an unsafe path")
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts:
-        raise ManifestError(f"{archive} contains an unsafe path: {name}")
+        raise ArtifactError(f"{archive} contains an unsafe path: {name}")
     return path
 
 
@@ -254,77 +357,147 @@ def _forbidden_archive_path(name: str, *, wheel: bool) -> bool:
     )
 
 
-def _inspect_wheel(
-    root: Path,
-    wheel: Path,
-    *,
-    project_name: str,
-    version: str,
-    requires_python: str,
-) -> None:
-    if wheel.is_symlink() or not wheel.is_file() or not wheel.name.endswith("-py3-none-any.whl"):
-        raise ManifestError("wheel must be one regular py3-none-any artifact")
+def _source_files(root: Path) -> dict[str, Path]:
+    source_root = root / "src/af"
+    return {
+        path.relative_to(source_root).as_posix(): path
+        for path in source_root.rglob("*")
+        if path.is_file()
+        and not path.is_symlink()
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    }
+
+
+def _read_zip_member(archive: zipfile.ZipFile, name: str) -> bytes:
+    info = archive.getinfo(name)
+    if info.file_size > MAX_ARCHIVE_FILE_BYTES:
+        raise ArtifactError(f"wheel member exceeds the size limit: {name}")
+    return archive.read(info)
+
+
+def _validate_wheel_record(contents: Mapping[str, bytes], record_name: str) -> None:
+    if record_name not in contents:
+        raise ArtifactError("wheel is missing a valid RECORD")
+    try:
+        rows = list(csv.reader(io.StringIO(contents[record_name].decode("utf-8"))))
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise ArtifactError("wheel is missing a valid RECORD") from exc
+    recorded: set[str] = set()
+    for row in rows:
+        if len(row) != 3 or row[0] in recorded:
+            raise ArtifactError("wheel is missing a valid RECORD")
+        name, encoded_hash, encoded_size = row
+        recorded.add(name)
+        if name == record_name:
+            if encoded_hash or encoded_size:
+                raise ArtifactError("wheel RECORD must not hash itself")
+            continue
+        content = contents.get(name)
+        if content is None or not encoded_hash.startswith("sha256="):
+            raise ArtifactError("wheel is missing a valid RECORD")
+        digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode()
+        if encoded_hash != f"sha256={digest}" or encoded_size != str(len(content)):
+            raise ArtifactError(f"wheel RECORD hash or size mismatch: {name}")
+    if recorded != set(contents):
+        raise ArtifactError("wheel RECORD does not cover every archive member")
+
+
+def _inspect_wheel(root: Path, wheel: Path, *, identity: ProjectIdentity) -> None:
+    expected_filename = (
+        f"{canonicalize_name(identity.name).replace('-', '_')}-{identity.version}-py3-none-any.whl"
+    )
+    if wheel.is_symlink() or not wheel.is_file() or wheel.name != expected_filename:
+        raise ArtifactError("wheel filename or platform tag does not match project metadata")
     try:
         with zipfile.ZipFile(wheel) as archive:
-            names: set[str] = set()
-            for item in archive.infolist():
+            items = archive.infolist()
+            if len(items) > MAX_ARCHIVE_MEMBERS:
+                raise ArtifactError("wheel contains too many members")
+            if sum(item.file_size for item in items) > MAX_ARCHIVE_EXPANDED_BYTES:
+                raise ArtifactError("wheel exceeds the expanded-size limit")
+            contents: dict[str, bytes] = {}
+            for item in items:
                 path = _validate_archive_name(item.filename, "wheel")
                 mode = (item.external_attr >> 16) & 0xFFFF
                 if stat.S_ISLNK(mode) or stat.S_ISCHR(mode) or stat.S_ISBLK(mode):
-                    raise ManifestError(f"wheel contains unsupported member: {item.filename}")
+                    raise ArtifactError(f"wheel contains unsupported member: {item.filename}")
                 if item.is_dir():
                     continue
                 normalized = path.as_posix()
-                if normalized in names:
-                    raise ManifestError(f"wheel contains duplicate member: {normalized}")
+                if normalized in contents:
+                    raise ArtifactError(f"wheel contains duplicate member: {normalized}")
                 if _forbidden_archive_path(normalized, wheel=True):
-                    raise ManifestError(f"wheel contains forbidden path: {normalized}")
-                names.add(normalized)
+                    raise ArtifactError(f"wheel contains forbidden path: {normalized}")
+                contents[normalized] = _read_zip_member(archive, normalized)
 
-            source_templates = root / "src/af/views/templates"
-            template_names = {
-                f"af/views/templates/{path.relative_to(source_templates).as_posix()}"
-                for path in source_templates.rglob("*.html")
-                if path.is_file() and not path.is_symlink()
-            }
-            required = {"af/__init__.py", "af/py.typed", *template_names}
-            for required_name in sorted(required - names):
-                raise ManifestError(f"wheel is missing required file: {required_name}")
-
-            metadata_names = sorted(name for name in names if name.endswith(".dist-info/METADATA"))
-            entry_point_names = sorted(
-                name for name in names if name.endswith(".dist-info/entry_points.txt")
+            distribution = (
+                f"{canonicalize_name(identity.name).replace('-', '_')}-{identity.version}.dist-info"
             )
-            if len(metadata_names) != 1 or len(entry_point_names) != 1:
-                raise ManifestError("wheel must contain one metadata and entry-points file")
-            metadata = Parser().parsestr(archive.read(metadata_names[0]).decode("utf-8"))
-            if metadata.get("Name") != project_name:
-                raise ManifestError("wheel project name does not match pyproject.toml")
-            if metadata.get("Version") != version:
-                raise ManifestError("wheel version does not match pyproject.toml")
-            if metadata.get("Requires-Python") != requires_python:
-                raise ManifestError("wheel Python requirement does not match pyproject.toml")
+            generated = {
+                f"{distribution}/METADATA",
+                f"{distribution}/WHEEL",
+                f"{distribution}/entry_points.txt",
+                f"{distribution}/RECORD",
+                f"{distribution}/licenses/LICENSE",
+            }
+            source_files = _source_files(root)
+            expected_package = {f"af/{name}" for name in source_files}
+            expected = expected_package | generated
+            unexpected = sorted(set(contents) - expected)
+            if unexpected:
+                raise ArtifactError(f"wheel contains unexpected path: {unexpected[0]}")
+            for required_name in sorted(expected - set(contents)):
+                if required_name.endswith("/RECORD"):
+                    raise ArtifactError("wheel is missing a valid RECORD")
+                raise ArtifactError(f"wheel is missing required file: {required_name}")
+            for relative, source_path in source_files.items():
+                if contents[f"af/{relative}"] != source_path.read_bytes():
+                    raise ArtifactError(f"wheel source differs from the checkout: af/{relative}")
+
+            metadata_name = f"{distribution}/METADATA"
+            metadata = Parser().parsestr(contents[metadata_name].decode("utf-8"))
+            if metadata.get("Name") != identity.name:
+                raise ArtifactError("wheel project name does not match pyproject.toml")
+            if metadata.get("Version") != identity.version:
+                raise ArtifactError("wheel version does not match pyproject.toml")
+            if metadata.get("Requires-Python") != identity.requires_python:
+                raise ArtifactError("wheel Python requirement does not match pyproject.toml")
+            if (
+                _normalize_requirements(metadata.get_all("Requires-Dist", []), "wheel dependencies")
+                != identity.dependencies
+            ):
+                raise ArtifactError("wheel dependencies do not match pyproject.toml")
 
             entry_points = configparser.ConfigParser(interpolation=None)
             entry_points.optionxform = str
-            entry_points.read_string(archive.read(entry_point_names[0]).decode("utf-8"))
-            expected_entries = {
-                "af": "af.interfaces.cli:app",
-                "af-mcp": "af.interfaces.mcp:main",
-            }
+            entry_points.read_string(contents[f"{distribution}/entry_points.txt"].decode("utf-8"))
             if "console_scripts" not in entry_points:
-                raise ManifestError("wheel is missing console entry points")
-            actual_entries = dict(entry_points["console_scripts"])
-            if actual_entries != expected_entries:
-                raise ManifestError("wheel console entry points do not match pyproject.toml")
-    except (OSError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
-        raise ManifestError("wheel is unreadable or invalid") from exc
+                raise ArtifactError("wheel is missing console entry points")
+            if tuple(sorted(entry_points["console_scripts"].items())) != identity.scripts:
+                raise ArtifactError("wheel console entry points do not match pyproject.toml")
+            for _, target in identity.scripts:
+                module_name = target.partition(":")[0]
+                module_path = f"{module_name.replace('.', '/')}.py"
+                package_path = f"{module_name.replace('.', '/')}/__init__.py"
+                if module_path not in contents and package_path not in contents:
+                    raise ArtifactError(f"wheel is missing entry-point target: {module_name}")
+
+            wheel_metadata = Parser().parsestr(contents[f"{distribution}/WHEEL"].decode("utf-8"))
+            if wheel_metadata.get("Root-Is-Purelib", "").lower() != "true":
+                raise ArtifactError("wheel is not marked as pure Python")
+            if wheel_metadata.get_all("Tag", []) != ["py3-none-any"]:
+                raise ArtifactError("wheel platform tag is not py3-none-any")
+            _validate_wheel_record(contents, f"{distribution}/RECORD")
+    except (configparser.Error, OSError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+        raise ArtifactError("wheel is unreadable or invalid") from exc
 
 
-def _inspect_sdist(root: Path, sdist: Path, *, version: str) -> None:
-    if sdist.is_symlink() or not sdist.is_file() or not sdist.name.endswith(".tar.gz"):
-        raise ManifestError("sdist must be one regular tar.gz artifact")
-    required = {
+def _inspect_sdist(root: Path, sdist: Path, *, identity: ProjectIdentity) -> None:
+    distribution = f"{canonicalize_name(identity.name).replace('-', '_')}-{identity.version}"
+    if sdist.is_symlink() or not sdist.is_file() or sdist.name != f"{distribution}.tar.gz":
+        raise ArtifactError("sdist filename does not match project metadata")
+    required_files = {
         "LICENSE",
         "README.md",
         "docs/production-mvp.md",
@@ -336,77 +509,76 @@ def _inspect_sdist(root: Path, sdist: Path, *, version: str) -> None:
     try:
         with tarfile.open(sdist, "r:gz") as archive:
             members = archive.getmembers()
+            if len(members) > MAX_ARCHIVE_MEMBERS:
+                raise ArtifactError("sdist contains too many members")
+            expanded_size = sum(member.size for member in members if member.isfile())
+            if expanded_size > MAX_ARCHIVE_EXPANDED_BYTES:
+                raise ArtifactError("sdist exceeds the expanded-size limit")
             roots: set[str] = set()
-            relative_names: set[str] = set()
+            files: dict[str, tarfile.TarInfo] = {}
             for member in members:
                 path = _validate_archive_name(member.name, "sdist")
                 if member.issym() or member.islnk() or member.isdev():
-                    raise ManifestError(f"sdist contains unsupported member: {member.name}")
+                    raise ArtifactError(f"sdist contains unsupported member: {member.name}")
                 if not path.parts:
                     continue
                 roots.add(path.parts[0])
                 if len(path.parts) > 1 and member.isfile():
                     relative = PurePosixPath(*path.parts[1:]).as_posix()
-                    if relative in relative_names:
-                        raise ManifestError(f"sdist contains duplicate member: {relative}")
+                    if member.size > MAX_ARCHIVE_FILE_BYTES:
+                        raise ArtifactError(f"sdist member exceeds the size limit: {relative}")
+                    if relative in files:
+                        raise ArtifactError(f"sdist contains duplicate member: {relative}")
                     if _forbidden_archive_path(relative, wheel=False):
-                        raise ManifestError(f"sdist contains forbidden path: {relative}")
-                    relative_names.add(relative)
-            if len(roots) != 1:
-                raise ManifestError("sdist must contain one top-level project directory")
-            for required_name in sorted(required - relative_names):
-                raise ManifestError(f"sdist is missing required file: {required_name}")
+                        raise ArtifactError(f"sdist contains forbidden path: {relative}")
+                    files[relative] = member
+            if roots != {distribution}:
+                raise ArtifactError("sdist top-level directory does not match project metadata")
 
-            root_name = next(iter(roots))
-            pyproject_member = archive.extractfile(f"{root_name}/pyproject.toml")
-            init_member = archive.extractfile(f"{root_name}/src/af/__init__.py")
-            if pyproject_member is None or init_member is None:
-                raise ManifestError("sdist identity files are unreadable")
-            archived_project = tomllib.loads(pyproject_member.read().decode("utf-8"))
-            archived_project_table = archived_project.get("project")
-            if not isinstance(archived_project_table, dict):
-                raise ManifestError("sdist pyproject has no project table")
-            if archived_project_table.get("version") != version:
-                raise ManifestError("sdist version does not match the checkout")
-            init_match = VERSION_PATTERN.search(init_member.read().decode("utf-8"))
-            if init_match is None or init_match.group(1) != version:
-                raise ManifestError("sdist runtime version does not match the checkout")
+            source_files = _source_files(root)
+            required = required_files | {f"src/af/{name}" for name in source_files}
+            for required_name in sorted(required - set(files)):
+                raise ArtifactError(f"sdist is missing required file: {required_name}")
+
+            def read_member(name: str) -> bytes:
+                handle = archive.extractfile(files[name])
+                if handle is None:
+                    raise ArtifactError(f"sdist member is unreadable: {name}")
+                return handle.read()
+
+            archived_project = tomllib.loads(read_member("pyproject.toml").decode("utf-8"))
+            if (
+                _identity_from_project_table(
+                    archived_project.get("project"), "sdist pyproject.toml"
+                )
+                != identity
+            ):
+                raise ArtifactError("sdist project metadata does not match the checkout")
+            for relative, source_path in source_files.items():
+                archive_name = f"src/af/{relative}"
+                if read_member(archive_name) != source_path.read_bytes():
+                    raise ArtifactError(f"sdist source differs from the checkout: {archive_name}")
+            for relative in required_files - {"src/af/__init__.py"}:
+                if read_member(relative) != (root / relative).read_bytes():
+                    raise ArtifactError(f"sdist release file differs from the checkout: {relative}")
     except (OSError, UnicodeDecodeError, tarfile.TarError, tomllib.TOMLDecodeError) as exc:
-        raise ManifestError("sdist is unreadable or invalid") from exc
+        raise ArtifactError("sdist is unreadable or invalid") from exc
 
 
 def inspect_distribution(root: Path, sdist: Path, wheel: Path) -> ArtifactSummary:
     """Validate source/wheel identity, safe contents, and required runtime files."""
-    root = root.resolve(strict=True)
-    project_name, version, requires_python = _project_identity(root)
-    _inspect_sdist(root, sdist, version=version)
-    _inspect_wheel(
-        root,
-        wheel,
-        project_name=project_name,
-        version=version,
-        requires_python=requires_python,
-    )
+    try:
+        root = root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise InputError("repository root is inaccessible") from exc
+    identity = _project_identity(root)
+    _inspect_sdist(root, sdist, identity=identity)
+    _inspect_wheel(root, wheel, identity=identity)
     return ArtifactSummary(
-        version=version,
+        version=identity.version,
         sdist_sha256=_sha256(sdist),
         wheel_sha256=_sha256(wheel),
     )
-
-
-def inspect_artifact_directory(root: Path, artifacts_dir: Path) -> ArtifactSummary:
-    """Select and validate exactly one sdist and one wheel from a directory."""
-    try:
-        resolved = artifacts_dir.resolve(strict=True)
-    except OSError as exc:
-        raise ManifestError("artifacts directory is not readable") from exc
-    if artifacts_dir.is_symlink() or not resolved.is_dir():
-        raise ManifestError("artifacts directory is not readable")
-    sdists = sorted(resolved.glob("*.tar.gz"))
-    wheels = sorted(resolved.glob("*.whl"))
-    if len(sdists) != 1 or len(wheels) != 1:
-        raise ManifestError("artifacts directory must contain one sdist and one wheel")
-    return inspect_distribution(root, sdists[0], wheels[0])
 
 
 def _run_release_command(
@@ -428,34 +600,80 @@ def _run_release_command(
             timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ManifestError(f"package {stage} could not complete") from exc
+        raise ArtifactError(f"package {stage} could not complete") from exc
     if completed.returncode:
-        raise ManifestError(f"package {stage} failed")
+        raise ArtifactError(f"package {stage} failed with exit {completed.returncode}")
+
+
+def _ensure_clean_checkout(root: Path, environment: Mapping[str, str]) -> None:
+    try:
+        completed = subprocess.run(
+            ("git", "status", "--porcelain", "--untracked-files=all"),
+            capture_output=True,
+            check=False,
+            cwd=root,
+            env=dict(environment),
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise InputError("git is unavailable for the clean-checkout proof") from exc
+    if completed.returncode:
+        raise InputError("git could not verify the release checkout")
+    if completed.stdout:
+        raise ArtifactError("package build requires a clean tracked and untracked checkout")
+
+
+def _release_environment(temporary_root: Path) -> dict[str, str]:
+    environment: dict[str, str] = {}
+    for name in ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE"):
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    home = temporary_root / "home"
+    cache = temporary_root / "uv-cache"
+    home.mkdir()
+    cache.mkdir()
+    environment.update(
+        {
+            "HOME": str(home),
+            "TMPDIR": str(temporary_root),
+            "UV_CACHE_DIR": str(cache),
+            "UV_NO_PROGRESS": "1",
+            "UV_PYTHON": f"{sys.version_info.major}.{sys.version_info.minor}",
+        }
+    )
+    return environment
 
 
 def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> ArtifactSummary:
     """Build wheel-from-sdist, install it temporarily, and run deterministic smoke checks."""
-    root = root.resolve(strict=True)
+    try:
+        root = root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise InputError("repository root is inaccessible") from exc
     uv_executable = shutil.which(uv_command)
     if uv_executable is None:
-        raise ManifestError("uv executable is unavailable")
-    uv_executable = str(Path(uv_executable).resolve(strict=True))
+        raise InputError("uv executable is unavailable")
+    try:
+        uv_executable = str(Path(uv_executable).resolve(strict=True))
+    except (OSError, RuntimeError) as exc:
+        raise InputError("uv executable is inaccessible") from exc
     with tempfile.TemporaryDirectory(prefix="af-release-") as temporary:
         temporary_root = Path(temporary)
         artifacts = temporary_root / "artifacts"
         target = temporary_root / "installed"
-        cache = temporary_root / "uv-cache"
         artifacts.mkdir()
         target.mkdir()
-        environment = os.environ.copy()
-        environment["UV_CACHE_DIR"] = str(cache)
-        environment["UV_PYTHON"] = f"{sys.version_info.major}.{sys.version_info.minor}"
-        environment.pop("PYTHONPATH", None)
+        environment = _release_environment(temporary_root)
+        _ensure_clean_checkout(root, environment)
 
         common = (
             uv_executable,
             "build",
+            "--offline",
             "--no-sources",
+            "--no-build-isolation",
             "--no-create-gitignore",
             "--out-dir",
             str(artifacts),
@@ -469,7 +687,10 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
         )
         sdists = sorted(artifacts.glob("*.tar.gz"))
         if len(sdists) != 1:
-            raise ManifestError("package build did not produce exactly one sdist")
+            raise ArtifactError("package build did not produce exactly one sdist")
+        identity = _project_identity(root)
+        _inspect_sdist(root, sdists[0], identity=identity)
+        sdist_sha256 = _sha256(sdists[0])
         _run_release_command(
             (*common, "--wheel", str(sdists[0])),
             cwd=temporary_root,
@@ -479,14 +700,18 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
         )
         wheels = sorted(artifacts.glob("*.whl"))
         if len(wheels) != 1:
-            raise ManifestError("package build did not produce exactly one wheel")
+            raise ArtifactError("package build did not produce exactly one wheel")
+        if _sha256(sdists[0]) != sdist_sha256:
+            raise ArtifactError("sdist changed while its wheel was being built")
         summary = inspect_distribution(root, sdists[0], wheels[0])
+        wheel_sha256 = summary.wheel_sha256
 
         _run_release_command(
             (
                 uv_executable,
                 "pip",
                 "install",
+                "--offline",
                 "--python",
                 sys.executable,
                 "--target",
@@ -499,6 +724,8 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
             stage="temporary wheel installation",
             timeout=300,
         )
+        if _sha256(wheels[0]) != wheel_sha256:
+            raise ArtifactError("wheel changed while it was being installed")
         _run_release_command(
             (sys.executable, "-I", "-c", PACKAGE_SMOKE, str(target)),
             cwd=temporary_root,
@@ -575,14 +802,38 @@ def _load_yaml(path: Path) -> object:
         raise ManifestError(f"manifest exceeds {MAX_MANIFEST_BYTES} bytes")
     try:
         text = path.read_text(encoding="utf-8")
-        for token in yaml.scan(text):
+        depth = 0
+        for index, token in enumerate(yaml.scan(text), start=1):
+            if index > MAX_YAML_TOKENS:
+                raise ManifestError("YAML token count exceeds the limit")
             if isinstance(token, (AliasToken, AnchorToken)):
                 raise ManifestError("YAML aliases and anchors are not allowed")
+            if isinstance(
+                token,
+                (
+                    BlockMappingStartToken,
+                    BlockSequenceStartToken,
+                    FlowMappingStartToken,
+                    FlowSequenceStartToken,
+                ),
+            ):
+                depth += 1
+                if depth > MAX_YAML_DEPTH:
+                    raise ManifestError("YAML nesting exceeds the limit")
+            elif isinstance(
+                token,
+                (BlockEndToken, FlowMappingEndToken, FlowSequenceEndToken),
+            ):
+                depth = max(0, depth - 1)
+            elif isinstance(token, ScalarToken) and len(token.value) > MAX_YAML_SCALAR_LENGTH:
+                raise ManifestError("YAML scalar length exceeds the limit")
         return yaml.load(text, Loader=StrictSafeLoader)
     except UnicodeDecodeError as exc:
         raise ManifestError("manifest must be UTF-8") from exc
     except yaml.YAMLError as exc:
         raise ManifestError("manifest contains invalid YAML") from exc
+    except RecursionError as exc:
+        raise ManifestError("YAML nesting exceeds the limit") from exc
 
 
 def _resolve_inside_root(root: Path, reference: str, location: str) -> Path:
@@ -610,11 +861,15 @@ def _registered_script_ids(root: Path) -> frozenset[str]:
     registry = _as_mapping(_load_yaml(registry_path), "scripts registry")
     scripts = _as_list(registry.get("scripts"), "scripts registry.scripts")
     identifiers: set[str] = set()
+    seen: set[str] = set()
     for index, item in enumerate(scripts):
         script = _as_mapping(item, f"scripts registry.scripts[{index}]")
-        identifiers.add(
-            _as_nonempty_string(script.get("id"), f"scripts registry.scripts[{index}].id")
-        )
+        identifier = _as_nonempty_string(script.get("id"), f"scripts registry.scripts[{index}].id")
+        if identifier in seen:
+            raise ManifestError(f"scripts registry has duplicate script ID: {identifier}")
+        seen.add(identifier)
+        if script.get("status") == "active":
+            identifiers.add(identifier)
     return frozenset(identifiers)
 
 
@@ -737,6 +992,24 @@ def _validate_gate(
     return Gate(gate_id=gate_id, category=category, blocking=blocking, state=state)
 
 
+def _policy_digest(document: Mapping[str, object]) -> str:
+    profile = _as_mapping(document["profile"], "profile")
+    gate_values = _as_list(document["gates"], "gates")
+    gate_policy: list[dict[str, object]] = []
+    policy_fields = ("id", "category", "title", "requirement", "blocking", "verification")
+    for index, value in enumerate(gate_values):
+        gate = _as_mapping(value, f"gates[{index}]")
+        gate_policy.append({field: gate[field] for field in policy_fields})
+    gate_policy.sort(key=lambda gate: str(gate["id"]))
+    policy = {
+        "schema_version": document["schema_version"],
+        "profile": {field: profile[field] for field in sorted(PROFILE_FIELDS)},
+        "gates": gate_policy,
+    }
+    encoded = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def load_manifest(path: Path, root: Path) -> Manifest:
     """Load and strictly validate one production-MVP manifest."""
     root = root.resolve(strict=True)
@@ -768,15 +1041,21 @@ def load_manifest(path: Path, root: Path) -> Manifest:
     duplicates = sorted(gate_id for gate_id, count in Counter(gate_ids).items() if count > 1)
     if duplicates:
         raise ManifestError(f"duplicate gate IDs: {', '.join(duplicates)}")
+    policy_sha256 = _policy_digest(document)
+    if policy_sha256 != EXPECTED_POLICY_SHA256:
+        raise ManifestError(
+            f"release policy does not match the canonical policy digest (actual {policy_sha256})"
+        )
     return Manifest(
         schema_version=schema_version,
         profile_id=profile_id,
+        policy_sha256=policy_sha256,
         gates=gates,
     )
 
 
 def _render_text(report: Mapping[str, object]) -> str:
-    status = "READY" if report["ready"] else "BLOCKED"
+    status = "GATES COMPLETE" if report["requirements_complete"] else "GATES INCOMPLETE"
     lines = [
         f"Production MVP {report['profile']}: {status}",
         f"Blocking gates: {report['blocking_gates']}",
@@ -798,7 +1077,7 @@ def main() -> int:
         "--action",
         choices=("validate", "report", "check", "package"),
         required=True,
-        help="Validate schema, report status, or enforce readiness.",
+        help="Validate policy, report status, check completeness, or validate a package.",
     )
     parser.add_argument(
         "--manifest",
@@ -818,11 +1097,6 @@ def main() -> int:
         help="Render deterministic JSON for report/check actions.",
     )
     parser.add_argument(
-        "--artifacts-dir",
-        type=Path,
-        help="Inspect a prebuilt sdist/wheel pair instead of building package artifacts.",
-    )
-    parser.add_argument(
         "--execute",
         action="store_true",
         help="Build and smoke package artifacts; package actions are dry-run by default.",
@@ -836,13 +1110,16 @@ def main() -> int:
 
     if args.action == "package":
         try:
-            if args.artifacts_dir is not None:
-                summary = inspect_artifact_directory(args.root, args.artifacts_dir)
-            elif not args.execute:
+            if not args.execute:
                 print(_render_package_plan(args.uv))
                 return 0
-            else:
-                summary = build_and_validate_distribution(args.root, args.uv)
+            summary = build_and_validate_distribution(args.root, args.uv)
+        except InputError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except ArtifactError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         except ManifestError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -864,7 +1141,7 @@ def main() -> int:
             _resolve_manifest_argument(root, args.manifest),
             root,
         )
-    except (ManifestError, OSError) as exc:
+    except (ManifestError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -876,7 +1153,7 @@ def main() -> int:
         print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     else:
         print(_render_text(report))
-    if args.action == "check" and not report["ready"]:
+    if args.action == "check" and not report["requirements_complete"]:
         return 1
     return 0
 

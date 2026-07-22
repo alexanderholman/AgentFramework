@@ -59,13 +59,22 @@ def test_af_dev_check_preview_validates_release_manifest_and_package() -> None:
 def test_release_gate_workflow_is_registered() -> None:
     registry = yaml.safe_load(SCRIPT_REGISTRY.read_text(encoding="utf-8"))
     release_gate = next(script for script in registry["scripts"] if script["id"] == "release-gates")
+    release_package = next(
+        script for script in registry["scripts"] if script["id"] == "release-package"
+    )
 
-    assert release_gate["command"] == ("python3 scripts/release_gates.py --action '<action>'")
+    assert release_gate["command"] == (
+        "uv run --extra dev python scripts/release_gates.py --action '<action>'"
+    )
     assert set(release_gate["capabilities"]) >= {
         "production-readiness-report",
         "release-enforcement",
-        "package-validation",
     }
+    assert release_gate["parameters"] == ["action"]
+    assert release_package["command"] == (
+        "uv run --extra dev python scripts/release_gates.py --action package --execute"
+    )
+    assert "package-validation" in release_package["capabilities"]
 
 
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:

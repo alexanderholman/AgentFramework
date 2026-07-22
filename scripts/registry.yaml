@@ -29,27 +29,38 @@ scripts:
     intent:
       - "production-readiness"
       - "release"
-      - "package"
       - "validate"
     capabilities:
       - "production-readiness-report"
       - "release-enforcement"
-      - "package-validation"
-      - "artifact-inspection"
-    description: "Validate, report, or enforce the private production-MVP release contract; package builds remain dry-run unless explicitly executed"
-    command: "python3 scripts/release_gates.py --action '<action>'"
+    description: "Validate, report, or check completeness of the canonical private production-MVP policy"
+    command: "uv run --extra dev python scripts/release_gates.py --action '<action>'"
     parameters:
       - "action"
-      - "execute"
-      - "manifest"
-      - "artifacts-dir"
-      - "json"
     outputs:
-      - "readiness-report"
-      - "artifact-digests"
+      - "requirements-report"
       - "validation-report"
     validation:
       - "exit_code in [0, 1, 2] according to documented action semantics"
+    status: "active"
+
+  - id: "release-package"
+    intent:
+      - "release"
+      - "package"
+      - "execute"
+    capabilities:
+      - "package-validation"
+      - "artifact-inspection"
+      - "installed-wheel-smoke"
+    description: "Build an offline wheel from an inspected sdist and validate the installed package"
+    command: "uv run --extra dev python scripts/release_gates.py --action package --execute"
+    parameters: []
+    outputs:
+      - "artifact-digests"
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
     status: "active"
 
   - id: "validate-registry"
