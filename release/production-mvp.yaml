@@ -1,0 +1,450 @@
+schema_version: "1.0.0"
+
+profile:
+  id: "private-single-node-loopback-deterministic"
+  title: "Private single-node deterministic production MVP"
+  release_target: "0.1.0"
+  maturity: "pre-release"
+  constraints:
+    operating_system: "linux"
+    python: "3.12"
+    nodes: 1
+    tenants: 1
+    active_processes_per_database: 1
+    database: "sqlite"
+    routes: "deterministic-only"
+    network_exposure: "loopback"
+    remote_inference: false
+  supported_surfaces:
+    - "cli"
+    - "html-loopback"
+    - "rest-loopback"
+    - "graphql-loopback"
+    - "mcp-stdio"
+    - "mcp-loopback"
+  optional_extensions:
+    - "secure-mcp-tunnel"
+  excluded:
+    - "public-network-exposure"
+    - "multi-tenant-operation"
+    - "model-backed-selection"
+    - "cross-driver-certification"
+    - "peer-to-peer-execution"
+    - "public-package-publication"
+
+gates:
+  - id: "scope.profile-definition"
+    category: "scope"
+    title: "Bounded deployment profile"
+    requirement: "The release declares one node, one tenant, one process, SQLite, loopback-only networking, and deterministic routes."
+    blocking: true
+    verification: "hybrid"
+    state: "met"
+    evidence:
+      - kind: "file"
+        ref: "release/production-mvp.yaml"
+        description: "The versioned profile records supported and excluded deployment behavior."
+      - kind: "file"
+        ref: "SECURITY.md"
+        description: "The security policy prohibits public MCP HTTP exposure before authentication exists."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "quality.source-gate"
+    category: "quality"
+    title: "Authoritative source quality gate"
+    requirement: "Formatting, linting, strict typing, tests, coverage, protocol tests, and governance validation pass together."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "script"
+        ref: "af-dev"
+        description: "The registered AF development runner provides the complete source gate."
+      - kind: "file"
+        ref: ".github/workflows/python.yml"
+        description: "GitHub Actions runs the locked repeatable source gate."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "runtime.deterministic-routes"
+    category: "runtime"
+    title: "Deterministic route and verifier behavior"
+    requirement: "Hello and character-count routes bypass selectors, execute one typed procedure, and pass independent verification."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "file"
+        ref: "tests/unit/test_pipeline.py"
+        description: "Pipeline tests cover deterministic routing, selector bypass, verification, and fail-closed outcomes."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "runtime.interface-contracts"
+    category: "runtime"
+    title: "Interface parity and Task CRUD"
+    requirement: "CLI, HTML, REST, GraphQL, and MCP preserve the shared application semantics and bounded inputs."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "file"
+        ref: "tests/feature/test_http.py"
+        description: "Feature tests exercise the shared HTTP application and Task lifecycle."
+      - kind: "file"
+        ref: "tests/feature/test_mcp.py"
+        description: "Feature tests exercise MCP tools over the same application controller."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "runtime.no-egress-evidence"
+    category: "runtime"
+    title: "Offline and no-egress proof"
+    requirement: "The release demo proves deterministic operation without undeclared network access or selector calls."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Add an isolated no-network release test covering every supported surface."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "artifact.locked-dependencies"
+    category: "artifact"
+    title: "Locked runtime and development dependency graph"
+    requirement: "The source gate installs the committed lockfile without resolving undeclared versions."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "file"
+        ref: "uv.lock"
+        description: "The committed uv lock records the development and runtime dependency graph."
+      - kind: "file"
+        ref: ".github/workflows/python.yml"
+        description: "CI enables locked uv synchronization."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "artifact.package-validation"
+    category: "artifact"
+    title: "Wheel-from-sdist artifact validation"
+    requirement: "CI builds a wheel from the sdist, inspects required and forbidden contents, and smokes installed entry points outside the checkout."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "script"
+        ref: "release-gates"
+        description: "The package action builds wheel-from-sdist in temporary paths, validates contents, installs with no dependencies, and smokes deterministic routes outside the checkout."
+      - kind: "file"
+        ref: "tests/unit/test_release_gates.py"
+        description: "Release-gate tests cover artifact identity, required files, forbidden runtime state, and dry-run behavior."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "artifact.clean-runtime-install"
+    category: "artifact"
+    title: "Clean-host runtime-only installation"
+    requirement: "The exact artifact installs on a clean supported host with only declared runtime dependencies."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Add a clean-environment install job that cannot import the source checkout."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "artifact.final-version"
+    category: "artifact"
+    title: "Final release identity"
+    requirement: "Package metadata, runtime version, changelog, artifact names, and release tag agree on 0.1.0."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Keep 0.1.0a0 until every blocking gate is met, then prepare the final version in a dedicated release PR."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "security.loopback-defaults"
+    category: "security"
+    title: "Loopback-only network defaults"
+    requirement: "HTTP and Streamable HTTP MCP default to loopback and reject unsafe host/origin configuration."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "file"
+        ref: "src/af/config.py"
+        description: "Settings default HTTP and MCP listeners to 127.0.0.1."
+      - kind: "file"
+        ref: "tests/unit/test_bootstrap_config.py"
+        description: "Configuration tests exercise safe defaults and validation."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "security.remote-inference-disabled"
+    category: "security"
+    title: "Remote inference disabled"
+    requirement: "The production profile installs no selector adapter and denies remote selector execution without fallback."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "file"
+        ref: "tests/unit/test_pipeline.py"
+        description: "Policy tests prove remote selector proposals fail closed with zero procedure execution."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "security.authentication-boundary"
+    category: "security"
+    title: "Non-bypassable operator boundary"
+    requirement: "Deployment evidence proves a dedicated OS account with literal loopback/stdio-only access or authenticated TLS proxy coverage for every enabled route."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Implement production preflight evidence for the OS boundary, or add tested application/proxy authentication before wider exposure."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/31"
+
+  - id: "security.threat-model"
+    category: "security"
+    title: "Production-profile threat model"
+    requirement: "A reviewed threat model covers hostile input, local callers, egress, secrets, supply chain, denial of service, backup media, and rollback."
+    blocking: true
+    verification: "manual"
+    state: "unmet"
+    evidence: []
+    next_action: "Publish and independently review a threat model scoped to this deployment profile."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "security.dependency-audit"
+    category: "security"
+    title: "Dependency and secret scanning"
+    requirement: "The exact lock and source commit pass dependency, static, and secret scans with no unresolved high or critical finding."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Add pinned dependency-audit, static-analysis, and secret-scan jobs with an exception policy."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "security.sensitive-data-policy"
+    category: "security"
+    title: "Sensitive-data minimization and redaction"
+    requirement: "Prompts, outputs, database URLs, paths, identities, and secrets have documented retention and redaction behavior across logs, traces, errors, and backups."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Define data classes and add regression tests for every error, trace, log, and backup boundary."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/14"
+      - "https://github.com/alexanderholman/AgentFramework/issues/31"
+
+  - id: "data.restart-persistence"
+    category: "data"
+    title: "SQLite persistence across application restart"
+    requirement: "Representative Task data remains readable after application reconstruction."
+    blocking: true
+    verification: "automated"
+    state: "met"
+    evidence:
+      - kind: "file"
+        ref: "tests/integration/test_sqlalchemy_repository.py"
+        description: "Integration tests recreate the application against the same SQLite database and verify Task data."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "data.external-path-permissions"
+    category: "data"
+    title: "External database path and restrictive permissions"
+    requirement: "Production state uses an absolute local-filesystem path outside the release directory with documented owner, mode, and free-space threshold."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Add production settings validation and tests for absolute paths, local storage, ownership, permissions, and capacity."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/17"
+
+  - id: "data.schema-migrations"
+    category: "data"
+    title: "Versioned SQLite schema lifecycle"
+    requirement: "The supported schema has an immutable version, tested upgrade path, compatibility decision, and rollback policy."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Replace create_all-only startup with versioned migrations and migration tests before any schema-changing release."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/17"
+
+  - id: "data.backup-restore"
+    category: "data"
+    title: "Backup, integrity, and restore drill"
+    requirement: "A quiesced off-release backup restores representative records into an isolated location and passes SQLite integrity plus application smoke checks."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Implement a script-first backup/restore drill and record profile-bound RPO/RTO evidence."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/17"
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "data.retention-deletion"
+    category: "data"
+    title: "Retention and privacy deletion"
+    requirement: "Operators can identify, expire, delete, and verify removal of persisted prompts, outputs, traces, and backup copies under a documented policy."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Define retention defaults and add deletion plus backup-expiry verification."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/31"
+
+  - id: "operations.production-preflight"
+    category: "operations"
+    title: "Production configuration preflight"
+    requirement: "A non-mutating command fails closed on unsafe exposure, relative state paths, unresolved secrets, incompatible schema, missing directories, or unsupported profile values."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Implement af doctor or an equivalent registered production preflight with hostile-configuration tests."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/10"
+      - "https://github.com/alexanderholman/AgentFramework/issues/14"
+
+  - id: "operations.health-readiness"
+    category: "operations"
+    title: "Non-mutating liveness and readiness"
+    requirement: "Operators can distinguish process liveness from database/schema/configuration readiness without creating Tasks or traces."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Add bounded health/readiness probes and prove failure mapping without state mutation."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/14"
+
+  - id: "operations.graceful-shutdown"
+    category: "operations"
+    title: "Startup, SIGTERM, drain, and shutdown lifecycle"
+    requirement: "A supervised process starts, drains, disposes resources once, and exits within a documented timeout during SIGTERM and partial failure."
+    blocking: true
+    verification: "automated"
+    state: "pending"
+    evidence: []
+    next_action: "Complete and integrate scoped lifecycle work from issues 9 and 10, then add process-level shutdown tests."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/9"
+      - "https://github.com/alexanderholman/AgentFramework/issues/10"
+
+  - id: "operations.service-supervision"
+    category: "operations"
+    title: "Versioned non-root service definition"
+    requirement: "A supervised one-worker service runs as a dedicated non-root identity with explicit restart, environment, resource, and state-directory policy."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Add and test one supported service definition plus installation and removal runbooks."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/14"
+
+  - id: "operations.observability"
+    category: "operations"
+    title: "Structured operational evidence"
+    requirement: "Startup, requests, failures, saturation, shutdown, backup, and restore emit bounded redacted logs and useful local metrics with rotation and alerts."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Implement local structured logging, rotation, disk/error alerts, and correlation without sensitive payload leakage."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/14"
+
+  - id: "operations.capacity-limits"
+    category: "operations"
+    title: "Bounded lists, concurrency, storage, and request load"
+    requirement: "Every enabled interface enforces pagination or a documented low-volume cap, request/concurrency limits, storage thresholds, and overload behavior."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Add bounded Task listing and measure the single-process profile through overload, soak, and recovery tests."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/14"
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "operations.rollback-drill"
+    category: "operations"
+    title: "Artifact and data rollback drill"
+    requirement: "The prior artifact and configuration remain available, state is outside the release directory, and a timed rollback or restore meets declared RPO/RTO."
+    blocking: true
+    verification: "manual"
+    state: "unmet"
+    evidence: []
+    next_action: "Write the deployment/rollback runbook and record a representative timed drill."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "accessibility.html-baseline"
+    category: "accessibility"
+    title: "Accessible core HTML workflow"
+    requirement: "Create, list, read, update, delete, and validation-error flows have no serious automated finding and pass keyboard, focus, reflow, zoom, and destructive-action review."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Add automated browser accessibility checks and record a manual WCAG 2.2 AA core-flow review."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+
+  - id: "release.commit-bound-evidence"
+    category: "release"
+    title: "Current commit and artifact evidence bundle"
+    requirement: "Every release result is bound to the full source SHA, artifact digest, deployment-profile digest, tool versions, UTC time, and expiry."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Generate a deterministic release evidence bundle in CI and reject missing, stale, or mismatched evidence."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "release.no-high-findings"
+    category: "release"
+    title: "No unresolved high or critical finding"
+    requirement: "Current CI, security, accessibility, resilience, and independent review evidence has no unresolved high, critical, or actionable blocker."
+    blocking: true
+    verification: "hybrid"
+    state: "unmet"
+    evidence: []
+    next_action: "Complete the release review matrix and resolve or formally reject every actionable finding with evidence."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
+
+  - id: "release.maintainer-approval"
+    category: "release"
+    title: "Explicit maintainer production approval"
+    requirement: "A maintainer reviews the immutable evidence bundle, records the accepted residual risk, and authorizes the exact 0.1.0 artifact."
+    blocking: true
+    verification: "manual"
+    state: "unmet"
+    evidence: []
+    next_action: "Request final approval only after every other blocking gate reports met against the release candidate."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/3"
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"

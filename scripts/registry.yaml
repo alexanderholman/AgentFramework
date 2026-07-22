@@ -25,6 +25,33 @@ scripts:
       - "exit_code == 0"
     status: "active"
 
+  - id: "release-gates"
+    intent:
+      - "production-readiness"
+      - "release"
+      - "package"
+      - "validate"
+    capabilities:
+      - "production-readiness-report"
+      - "release-enforcement"
+      - "package-validation"
+      - "artifact-inspection"
+    description: "Validate, report, or enforce the private production-MVP release contract; package builds remain dry-run unless explicitly executed"
+    command: "python3 scripts/release_gates.py --action '<action>'"
+    parameters:
+      - "action"
+      - "execute"
+      - "manifest"
+      - "artifacts-dir"
+      - "json"
+    outputs:
+      - "readiness-report"
+      - "artifact-digests"
+      - "validation-report"
+    validation:
+      - "exit_code in [0, 1, 2] according to documented action semantics"
+    status: "active"
+
   - id: "validate-registry"
     intent:
       - "validate"
