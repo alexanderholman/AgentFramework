@@ -149,9 +149,59 @@ class InvalidBinding(AFError):
     """Raised when a dependency binding would be replaced implicitly."""
 
 
+def _safe_type_label(value: object) -> str:
+    candidate = value if isinstance(value, type) else type(value)
+    try:
+        label = type.__getattribute__(candidate, "__name__")
+    except BaseException:
+        return "service"
+    if type(label) is not str or not label or len(label) > 100 or not label.isidentifier():
+        return "service"
+    return label
+
+
 class ServiceNotBound(AFError):
     def __init__(self, token: object) -> None:
-        super().__init__(f"service is not bound: {token!r}")
+        super().__init__(f"service is not bound: {_safe_type_label(token)}")
+
+
+class CircularDependency(AFError):
+    def __init__(self, chain: tuple[object, ...]) -> None:
+        self.chain = chain
+        labels: list[str] = []
+        for item in chain:
+            try:
+                token = object.__getattribute__(item, "token")
+            except BaseException:
+                token = item
+            labels.append(_safe_type_label(token))
+        super().__init__(f"circular dependency: {' -> '.join(labels)}")
+
+
+class ScopeDisposed(AFError):
+    """Raised when resolution is attempted through a closing or disposed scope."""
+
+
+class ScopeUnavailable(AFError):
+    """Raised when a binding is resolved outside its declared lifetime scope."""
+
+
+class AsyncDisposalRequired(AFError):
+    """Raised when synchronous cleanup would leave asynchronous resources behind."""
+
+
+class AsyncResolutionRequired(AFError):
+    """Raised when a synchronous caller reaches an asynchronous factory."""
+
+
+class ShutdownTimeout(AFError):
+    """Protected evidence that shutdown exceeded its configured total budget."""
+
+
+class ScopeDisposalError(AFError):
+    def __init__(self, failures: tuple[BaseException, ...]) -> None:
+        self.failures = failures
+        super().__init__(f"scope disposal failed for {len(failures)} resource(s)")
 
 
 class UnsupportedWork(AFError):
