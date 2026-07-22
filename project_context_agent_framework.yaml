@@ -50,16 +50,16 @@ current_state:
     - "Task CRUD shared by CLI, HTML, REST, GraphQL, and MCP"
     - "In-memory and SQLAlchemy/SQLite persistence adapters"
     - "Python quality gate and legacy agent validation"
-    - "A strict private single-node production-MVP manifest, readiness report, and wheel-from-sdist package smoke"
+    - "A canonical private single-node production-MVP policy manifest, requirements report, and offline wheel-from-sdist package smoke"
   what_is_missing:
     - "Production authentication and deployment for remote ChatGPT MCP access"
     - "A real local or remote selector provider adapter"
     - "Schema migrations, production observability, and hardened multi-user authorization"
-    - "Commit-bound release evidence, clean-host installation, backup/restore, service supervision, rollback, capacity, and accessibility certification"
+    - "Commit-bound release evidence, provenance/signing, clean-host installation, backup/restore, service supervision, rollback, and hard capacity controls"
   known_issues:
     - "[ASSUMPTION] The MVP is single-process and synchronous at its application core."
     - "[RISK] Streamable HTTP is local-only until authentication and deployment are designed."
-    - "[RISK] The production-MVP readiness check remains blocked until every required control has current evidence."
+    - "[RISK] Policy completeness never substitutes for candidate-bound deployment evidence and explicit maintainer production approval."
 
 workflow:
   execution_loop:

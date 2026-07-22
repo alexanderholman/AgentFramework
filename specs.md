@@ -950,3 +950,84 @@ is fail-closed and based on versioned requirements plus current subject-bound ev
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 
 ---
+
+## [SPEC-017] Canonical Production Policy and External Admission Evidence
+**Date**: 2026-07-22
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+This specification clarifies and narrows SPEC-016. The repository checker proves canonical
+policy integrity and declared implementation-gate completeness; it never authenticates
+external evidence or authorizes production. The first profile has one coherent live surface:
+one dedicated-account MCP-stdio process per SQLite database, with CLI maintenance only while
+that process is stopped.
+
+### Requirements
+- MUST bind the exact profile and every mandatory gate's ID, category, title, requirement,
+  blocking status, and verification mode to a reviewed canonical policy digest
+- MUST reject removed, added, demoted, weakened, or profile-widening policy content until a
+  reviewed schema/policy revision intentionally replaces the digest
+- MUST report `requirements_complete` and `certifies_production: false`; MUST NOT use
+  `READY` or treat checker exit `0` as deployment authorization
+- MUST keep issue #3 authoritative for any final package version and MUST NOT independently
+  authorize `0.1.0` from the narrower profile
+- MUST permit only one live MCP-stdio process, one tenant/operator boundary, one SQLite
+  database, and deterministic routes in this profile
+- MUST require CLI maintenance to occur only while the service is quiesced and MUST exclude
+  HTML, REST, GraphQL, OpenAPI, MCP HTTP, Secure MCP Tunnel, and every AF listener
+- MUST include separate blocking gates for candidate identity, provenance/signing,
+  clean-host install, target deployment/recovery evidence, current findings, and maintainer
+  approval
+- MUST inspect and hash the sdist before using its build backend, verify it remains unchanged,
+  and build the wheel offline with hash-locked build tooling from the development lock
+- MUST compare checkout, sdist, and wheel project identity, dependencies, scripts, runtime
+  source, filenames, platform tags, required files, and complete wheel `RECORD` hashes
+- MUST reject foreign packages, relocation data, duplicate/unsafe/archive-special members,
+  forbidden runtime state, oversized archives/members, source drift, and metadata drift
+- MUST install only the exact inspected wheel outside the checkout, verify its digest again,
+  import both console entry-point targets, and exercise deterministic CLI routes
+- MUST execute build and smoke stages with an allowlisted uncredentialed environment,
+  temporary home, no inherited package-manager configuration, and no network access
+- MUST distinguish policy/input errors (`2`) from artifact/build/install/smoke failure (`1`)
+- MUST create the final candidate before candidate-bound evidence, signatures, deployment
+  drills, approval, and tag; any rebuild or metadata change invalidates that evidence
+- MUST bind external evidence to clean source, candidate/signature/profile/configuration
+  digests, platform/tools, reviewer independence, deployment subject, observation time,
+  expiry, and revocation; the static manifest alone cannot prove these facts
+
+### Tests
+- **Test ID**: TEST-017-1
+  - **Description**: Protect the canonical policy
+  - **Pass Criteria**: Removing/demoting a gate or widening network, process, tenant, route,
+    or inference constraints fails validation with exit `2`
+  - **Fail Criteria**: A reduced or wider manifest can report complete
+- **Test ID**: TEST-017-2
+  - **Description**: Separate completeness from production authorization
+  - **Pass Criteria**: An all-met synthetic canonical manifest reports implementation
+    completeness while `certifies_production` remains false and no `READY` claim appears
+  - **Fail Criteria**: Manifest state alone authorizes deployment
+- **Test ID**: TEST-017-3
+  - **Description**: Validate complete artifact identity and provenance inputs
+  - **Pass Criteria**: Dependency drift, missing/invalid `RECORD`, foreign content, source
+    mismatch, filename/tag mismatch, or entry-point target loss blocks the package
+  - **Fail Criteria**: Structurally plausible but unrelated/tampered artifacts pass
+- **Test ID**: TEST-017-4
+  - **Description**: Validate bounded hostile input handling
+  - **Pass Criteria**: Excessive YAML/archive depth, members, size, duplicates, links, and
+    path escapes fail deterministically without traceback or unbounded expansion
+  - **Fail Criteria**: Malformed policy or artifacts exhaust or escape validation
+- **Test ID**: TEST-017-5
+  - **Description**: Validate isolated offline package execution
+  - **Pass Criteria**: A clean checkout builds with locked offline tooling, inherited secrets
+    are absent, exact artifact digests remain stable, and installed CLI/MCP targets import
+  - **Fail Criteria**: Build/smoke requires egress, credentials, checkout imports, or mutable
+    artifacts
+
+### Related Specs
+- SPEC-003 (MUST/SHOULD/MAY Requirements)
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+
+---

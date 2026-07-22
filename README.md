@@ -23,7 +23,7 @@ The first vertical slice includes:
 The package is currently pre-release software at version `0.1.0a0` until roadmap issue #3
 quality gates are complete.
 
-The first deployable target is the deliberately narrow
+The first candidate deployment target is the deliberately narrow
 [private single-node production-MVP profile](docs/production-mvp.md). The current manifest
 reports **not ready** and names every release blocker; it does not treat repository privacy
 or loopback defaults as production certification.
@@ -137,11 +137,12 @@ legacy AgentFactory governance suite. It also validates the production-MVP manif
 builds, inspects, temporarily installs, and smokes a wheel produced from the sdist. The
 framework tests are deliberately network-free.
 
-Inspect release readiness separately:
+Inspect canonical policy completeness separately; a complete report still does not authorize
+production deployment:
 
 ```bash
-python3 scripts/release_gates.py --action report
-python3 scripts/release_gates.py --action check  # expected to fail until blockers are closed
+uv run --extra dev python scripts/release_gates.py --action report
+uv run --extra dev python scripts/release_gates.py --action check
 ```
 
 ## Repository governance

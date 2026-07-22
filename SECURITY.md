@@ -27,5 +27,6 @@ transport is for loopback development only and must not be exposed publicly.
 The same restriction applies to HTML, REST, GraphQL, and OpenAPI. Repository privacy,
 trusted-host checks, and allowed-origin checks do not authenticate a caller. See the
 [private production-MVP profile](docs/production-mvp.md) for the dedicated-account
-loopback/stdio trust boundary, required deployment evidence, and release-blocking security,
-recovery, and operations controls.
+MCP-stdio trust boundary, prohibition on concurrent CLI/database access, required deployment
+evidence, and release-blocking security, recovery, and operations controls. Every AF network
+listener, including loopback HTTP and Secure MCP Tunnel, is outside that first profile.

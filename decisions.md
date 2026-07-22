@@ -1725,3 +1725,73 @@ production approval.
 - Tracks: GitHub roadmap #3 and release-certification issue #34
 
 ---
+
+## [DEC-031] Separate Policy Completeness from Production Authorization
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon independent-review response
+
+### Context
+Independent review of DEC-030 found that a mutable manifest could delete mandatory gates,
+widen the profile, and eventually call itself ready. It also found conflicting authority for
+`0.1.0`, incoherent simultaneous CLI/HTTP/MCP process claims, static evidence that could not
+prove current execution, and artifact checks that did not fully bind sdist, wheel, source,
+dependencies, and executed bytes.
+
+Append-only history preserves DEC-030. This record supersedes its ambiguous readiness,
+surface, and version-sequencing language while retaining the useful bounded-profile decision.
+
+### Decision
+1. Treat the checker as canonical policy/completeness tooling, not production admission. It
+   always reports `certifies_production: false`, even when implementation gates are complete.
+2. Pin the exact profile and mandatory gate definitions by reviewed digest; changing policy
+   requires an explicit reviewed revision rather than a state edit.
+3. Narrow the first live surface to one MCP-stdio process under a dedicated OS account. CLI
+   maintenance requires a stopped service; all AF network listeners and Secure MCP Tunnel are
+   excluded.
+4. Keep roadmap issue #3 authoritative for final version identity. This profile targets a
+   private candidate and cannot independently release or tag `0.1.0`.
+5. Add explicit provenance/signing and target deployment/recovery gates.
+6. Create the exact final-version candidate before gathering candidate-bound evidence,
+   signatures, deployment drills, maintainer approval, and tag. Any candidate change restarts
+   those gates.
+7. Lock the PEP 517 backend in the development lock, build offline without isolation from an
+   allowlisted uncredentialed environment, inspect/hash the sdist before wheel construction,
+   and reject artifact mutation.
+8. Bind checkout, sdist, and wheel through complete normalized metadata, runtime source,
+   entry-point targets, exact allowed wheel contents, platform metadata, and `RECORD` hashes.
+9. Keep external evidence and approval outside static self-assertion: immutable candidate,
+   profile/configuration, platform/tool, time/expiry/revocation, reviewer, and deployment
+   identity remain required before operation.
+
+### Consequences
+**Positive:**
+- A shortened or widened manifest cannot silently pass the production policy.
+- Operators cannot mistake a green policy check for permission to deploy.
+- The first process and trust boundary are coherent and testable.
+- Versioning no longer conflicts with the broader roadmap.
+- Package validation now addresses dependency/source substitution and executed-byte drift.
+
+**Negative:**
+- The profile no longer claims live web or ChatGPT tunnel access.
+- Final admission still needs external evidence collection and human authorization tooling.
+- Canonical policy changes require deliberate digest review.
+- Offline package checks require build tooling to remain in the committed development lock.
+
+### Related Decisions
+- DEC-023 (Establish AgentFramework as the Canonical AF Repository)
+- DEC-028 (Adopt an Async-Capable Application and Provider Lifecycle)
+- DEC-030 (Establish a Bounded Private Production-MVP Profile)
+
+### Related Specs
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+- SPEC-017 (Canonical Production Policy and External Admission Evidence)
+
+### Output References
+- Hardened: `scripts/release_gates.py`, `tests/unit/test_release_gates.py`
+- Clarified: `docs/production-mvp.md`, `release/production-mvp.yaml`
+- Split: read-only `release-gates` and executable `release-package` registry workflows
+- Preserved: issue #3 version authority and issue #9 implementation isolation
+
+---
