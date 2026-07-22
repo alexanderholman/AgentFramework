@@ -2,9 +2,116 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+from enum import StrEnum
+
 
 class AFError(Exception):
     """Base class for expected AF failures."""
+
+
+class FailureCategory(StrEnum):
+    CONFIGURATION = "configuration"
+    RESOLUTION = "resolution"
+    CAPABILITY = "capability"
+    VALIDATION = "validation"
+    AUTHORIZATION = "authorization"
+    TRANSPORT = "transport"
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
+    INTEGRITY = "integrity"
+    CANCELLATION = "cancellation"
+    SHUTDOWN = "shutdown"
+
+
+class PlatformReason(StrEnum):
+    CONFIGURATION_INVALID = "configuration_invalid"
+    CONFIGURATION_PROFILE_UNKNOWN = "configuration_profile_unknown"
+    CONFIGURATION_SECRET_UNRESOLVED = "configuration_secret_unresolved"
+    DEPENDENCY_RESOLUTION_FAILED = "dependency_resolution_failed"
+    CONTEXT_UNAVAILABLE = "context_unavailable"
+    CAPABILITY_UNAVAILABLE = "capability_unavailable"
+    VALIDATION_FAILED = "validation_failed"
+    AUTHORIZATION_DENIED = "authorization_denied"
+    TRANSPORT_FAILED = "transport_failed"
+    TRANSIENT_FAILURE = "transient_failure"
+    PERMANENT_FAILURE = "permanent_failure"
+    INTEGRITY_FAILURE = "integrity_failure"
+    CANCELLED = "cancelled"
+    SHUTDOWN_FAILED = "shutdown_failed"
+
+
+_REASON_CATEGORIES = {
+    PlatformReason.CONFIGURATION_INVALID: FailureCategory.CONFIGURATION,
+    PlatformReason.CONFIGURATION_PROFILE_UNKNOWN: FailureCategory.CONFIGURATION,
+    PlatformReason.CONFIGURATION_SECRET_UNRESOLVED: FailureCategory.CONFIGURATION,
+    PlatformReason.DEPENDENCY_RESOLUTION_FAILED: FailureCategory.RESOLUTION,
+    PlatformReason.CONTEXT_UNAVAILABLE: FailureCategory.RESOLUTION,
+    PlatformReason.CAPABILITY_UNAVAILABLE: FailureCategory.CAPABILITY,
+    PlatformReason.VALIDATION_FAILED: FailureCategory.VALIDATION,
+    PlatformReason.AUTHORIZATION_DENIED: FailureCategory.AUTHORIZATION,
+    PlatformReason.TRANSPORT_FAILED: FailureCategory.TRANSPORT,
+    PlatformReason.TRANSIENT_FAILURE: FailureCategory.TRANSIENT,
+    PlatformReason.PERMANENT_FAILURE: FailureCategory.PERMANENT,
+    PlatformReason.INTEGRITY_FAILURE: FailureCategory.INTEGRITY,
+    PlatformReason.CANCELLED: FailureCategory.CANCELLATION,
+    PlatformReason.SHUTDOWN_FAILED: FailureCategory.SHUTDOWN,
+}
+
+_PUBLIC_MESSAGES = {
+    FailureCategory.CONFIGURATION: "configuration is invalid",
+    FailureCategory.RESOLUTION: "required application context is unavailable",
+    FailureCategory.CAPABILITY: "required capability is unavailable",
+    FailureCategory.VALIDATION: "input validation failed",
+    FailureCategory.AUTHORIZATION: "operation is not authorized",
+    FailureCategory.TRANSPORT: "transport operation failed",
+    FailureCategory.TRANSIENT: "operation temporarily failed",
+    FailureCategory.PERMANENT: "operation failed",
+    FailureCategory.INTEGRITY: "integrity validation failed",
+    FailureCategory.CANCELLATION: "operation was cancelled",
+    FailureCategory.SHUTDOWN: "application shutdown failed",
+}
+
+
+def category_for_reason(reason: PlatformReason) -> FailureCategory:
+    return _REASON_CATEGORIES[reason]
+
+
+@dataclass(frozen=True, slots=True)
+class PublicError:
+    code: str
+    message: str
+
+
+class PlatformError(AFError):
+    """Sanitized platform failure with protected evidence for trusted telemetry."""
+
+    def __init__(
+        self,
+        reason: PlatformReason,
+        *,
+        stage: str,
+        protected_cause: BaseException | None = None,
+    ) -> None:
+        if not stage or len(stage) > 200 or re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", stage):
+            raise ValueError("stage must be a bounded non-empty single-line value")
+        self.reason = reason
+        self.category = category_for_reason(reason)
+        self.stage = stage
+        self.public_message = _PUBLIC_MESSAGES[self.category]
+        self.protected_cause = protected_cause
+        super().__init__(self.public_message)
+
+    @property
+    def public_error(self) -> PublicError:
+        return PublicError(self.reason.value, self.public_message)
+
+    def __repr__(self) -> str:
+        return (
+            f"PlatformError(reason={self.reason.value!r}, stage={self.stage!r}, "
+            f"public_message={self.public_message!r})"
+        )
 
 
 class InvalidCharacter(AFError, ValueError):
