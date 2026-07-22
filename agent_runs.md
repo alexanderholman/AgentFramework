@@ -799,3 +799,57 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #016 - Prime Language / Ideon Deterministic Reference Slice
+**Date**: 2026-07-22
+**Agent**: ChatGPT Codex
+**Status**: Completed
+
+### Inputs
+- Prime Language and Ideon System Specification v0.1 supplied as
+  `prime_language_ideon_system_spec_v0.1.md`
+- AgentFramework `master` at `fa101610284962c9d33bce5da778b3836d57992e`
+- Existing AF layer, dependency, testing, and append-only governance contracts
+
+### Outputs
+- Added immutable Ideon graph, canonical identity, arbitrary-precision key, exact revision,
+  logical dictionary, inquiry, temporal, Principia, SHOULD, and runtime-record domain modules
+- Added an injective length-prefixed binary codec for constructed keys, explicit manifested
+  prime-key registration, SHA-256 graph revisions, exact reference resolution, and conflict
+  detection through a process-local atomic registry adapter
+- Added the controlled `sat on the bank`, edition-order, Whern, WILL, relation, semantic-island,
+  paraphrase, SHOULD, unknown-form, context, large-key, and nested-composition conformance cases
+- Integrated one shared Ideon application service/controller through AF bootstrap, CLI, and REST
+- Preserved the supplied system specification and documented the delivered slice, limitations,
+  persistence evolution, and Prolog/neural/natural-reading follow-up
+- Appended SPEC-016 and DEC-030 without altering prior governed content
+
+### Verified Results
+- Focused Ideon suite: 86 passed; 91 percent branch coverage
+- Full reconstructed-checkout suite: 374 passed; one Git-history-dependent governance test
+  unavailable because the connector workspace is not a Git checkout
+- Full-suite coverage: 91.00 percent; required minimum 90 percent
+- Ruff format and lint: passed across source, tests, and scripts
+- Strict mypy: no issues in 45 source files
+- Node route-gate suite: 9 passed
+- Governance content validation: 22 of 22 passed; append-only history check skipped locally
+- Source distribution and wheel build: passed
+
+### Issues Encountered
+- The initial injective JSON-to-integer design exceeded Python's protected decimal conversion
+  limit on modest compositions; the final codec uses length-prefixed binary identity data and
+  a limit-independent decimal transport encoder, with 20-token and ten-level regressions
+- The scratch reconstruction has no repository object history, so the reviewed first-PR
+  append-only topology test cannot resolve its historical SHA locally; the real branch/CI
+  checkout remains the authority for that single check
+- FastAPI/Starlette emits the repository's existing TestClient deprecation warning; no new
+  dependency was introduced
+- General parsing, Prolog parity, neural routes, durable storage, and held-out natural reading
+  remain explicitly outside this deterministic reference slice
+
+### Related References
+- Specification: `docs/prime-language-ideon-system-spec-v0.1.md`
+- Implementation note: `docs/prime-language-ideon-implementation.md`
+- Script: `[SCRIPT:af-dev]`
+
+---

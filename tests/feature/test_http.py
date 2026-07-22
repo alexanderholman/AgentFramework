@@ -78,6 +78,21 @@ def test_html_index_and_form_answer(application) -> None:  # type: ignore[no-unt
     assert 'data-testid="answer">3<' in created.text
 
 
+def test_http_app_exposes_the_composed_ideon_route(application) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        response = client.post(
+            "/api/v1/ideons/interpret",
+            json={
+                "surface": "sat on the bank",
+                "source_id": "fixture:http-ideon",
+                "rights": "internal-test-fixture",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["decision"]["decision"] == "ask"
+
+
 def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-def]
     with _http_client(application) as client:
         empty_list = client.get("/tasks")

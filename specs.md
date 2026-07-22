@@ -871,3 +871,74 @@ capability, data, and delivery contracts.
 - SPEC-014 (Planner Side-Effect Authorization)
 
 ---
+
+## [SPEC-016] Deterministic Prime Language and Ideon Reference Contract
+**Date**: 2026-07-22
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+AF represents a resolved or deliberately open utterance as an authoritative, typed Ideon
+graph. A positive natural-number stable key addresses the contained idea, while a separate
+SHA-256 revision identifies one immutable recorded topology. The key is not the graph and
+must never be treated as its meaning.
+
+### Requirements
+- MUST keep graph identity, stable key, and immutable revision as distinct values.
+- MUST reserve zero for structural/control use.
+- MUST allocate actual odd-prime numeric keys to registered prime Ideons and MUST record them
+  in a versioned registry manifest.
+- MUST construct non-prime keys from injective canonical identity bytes in a disjoint even
+  key lane.
+- MUST include namespace, ruleset, ordered roles/children, and declared identity-bearing
+  context in canonical identity.
+- MUST preserve original UTF-8 and source spans while treating normalization as an added view.
+- MUST retain zero, one, or many dictionary candidates and MUST NOT convert confidence into
+  forced semantic closure.
+- MUST emit actual structured results for WHO, WHAT, WHERE, WHEN, WHERN, WHY, HOW, IS, COULD,
+  WOULD, and SHOULD.
+- MUST decide ask, answer, act, stop, or continue-reading from explicit openings, closure, and
+  SHOULD rules.
+- MUST resolve exact (stable_key, revision) references and fail closed on key, identity, or
+  revision conflicts.
+- MUST serialize arbitrary-precision keys as decimal strings at JSON boundaries.
+- MUST keep the typed Ideon record outside the current string-oriented generic procedure
+  pipeline; later pipeline routes may carry only a record reference or canonical document.
+
+### Tests
+- **Test ID**: TEST-016-1
+  - **Description**: Validate key and revision separation
+  - **Pass Criteria**: Prime and constructed key lanes, zero reservation, immutable revision
+    history, exact resolution, canonical deduplication, and explicit conflicts all pass
+  - **Fail Criteria**: A key is treated as a graph, a lane overlaps, or identity/revision data
+    is overwritten
+- **Test ID**: TEST-016-2
+  - **Description**: Validate ambiguity and all eleven inquiries
+  - **Pass Criteria**: "sat on the bank" retains both bank senses, reports missing actor and
+    contested location, emits eleven fields, and asks without guessing
+  - **Fail Criteria**: A candidate disappears without traced context or the system closes early
+- **Test ID**: TEST-016-3
+  - **Description**: Validate contextual closure and deterministic replay
+  - **Pass Criteria**: Actor plus river context selects only the declared river sense; identical
+    inputs produce the same reference and byte-identical record
+  - **Fail Criteria**: Operational timing changes semantic bytes or context is silently ambient
+- **Test ID**: TEST-016-4
+  - **Description**: Validate order, Whern, WILL, SHOULD, and relation representations
+  - **Pass Criteria**: Ordered compositions differ, was/is/will follows perspective, temporal
+    and volitional will differ, high-harm SHOULD stops/offers a safer route, and compact plus
+    reified relations round-trip
+  - **Fail Criteria**: Order is lost, modality is conflated, or normative risk is ignored
+- **Test ID**: TEST-016-5
+  - **Description**: Validate large/nested keys, unresolved forms, and context preservation
+  - **Pass Criteria**: Twenty-token and ten-level nested composites serialize and resolve;
+    unrelated unknown forms receive different keys; non-identity context changes revisions while
+    declared identity context changes keys
+  - **Fail Criteria**: Integer conversion limits escape to an interface, unknown forms collapse,
+    context disappears from the exact graph, or interpreter-wide limits are weakened
+
+### Related Specs
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+
+---

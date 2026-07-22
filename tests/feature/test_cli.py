@@ -48,6 +48,18 @@ def test_cli_route_agent_returns_structured_decision(application) -> None:  # ty
     }
 
 
+def test_cli_ideon_command_uses_the_composed_reference_service(application) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(
+        create_cli(application),
+        ["ideon", "interpret", "sat on the bank", "--actor", "alice", "--domain", "river"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["decision"]["decision"] == "answer"
+    assert payload["selected_senses"][-1] == "bank.river-edge"
+
+
 def test_cli_task_crud(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
     created_result = runner.invoke(cli, ["tasks", "create", "how many rs in strawberry"])

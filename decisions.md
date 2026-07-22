@@ -1643,3 +1643,65 @@ weaken transactions, ordering, durability, search, or policy enforcement.
 - Tracks: GitHub epic #35 and issue #7
 
 ---
+
+## [DEC-030] Add Ideons as a Typed Bounded Context Before Neural Routes
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / ChatGPT implementation session
+
+### Context
+The Prime Language specification requires authoritative idea graphs, explicit ambiguity,
+versioned logical dictionaries, eleven specialist inquiries, and stable numeric references.
+AF's existing generic procedure contract carries string arguments and outputs; flattening an
+Ideon into that contract would lose type, revision, provenance, and non-closure semantics.
+
+### Decision
+1. Add Ideons as a domain/application bounded context with immutable graph and record values.
+2. Keep graph identity, stable numeric key, and immutable revision separate.
+3. Allocate registered prime Ideons from an odd-prime manifest and construct all other keys in
+   an injective even lane from canonical identity bytes.
+4. Keep mutable stores in infrastructure behind an IdeonStore protocol.
+5. Make candidate preservation and all eleven inquiry outputs authoritative structured data.
+6. Place interpretation orchestration in one application service/controller shared by
+   presentation adapters.
+7. Expose the controlled reference slice through CLI and REST, while retaining the complete
+   record rather than coercing it into Task output.
+8. Defer a generic procedure adapter, Prolog driver, durable registry, corpus compiler, and
+   neural routes until the deterministic contract is stable.
+
+### Alternatives Considered
+- **Put graphs directly in the Task pipeline:** rejected because its current string contracts
+  cannot preserve the authoritative schema.
+- **Use hashes as both key and meaning:** rejected because a key addresses but is not an Ideon.
+- **Guess the highest-scoring sense:** rejected because unresolved material distinctions are
+  valid open states and may require a question.
+- **Start with model training:** rejected because all routes need one validated target contract.
+
+### Consequences
+- AF gains a deterministic reference path with exact replay and conflict detection.
+- Controlled language examples can be tested before a statistical parser exists.
+- Very large arbitrary-precision keys are serialized as decimal strings at transport edges.
+- New prime registration requires an explicit key from a versioned manifest; no insertion-order allocator is used.
+- Constructed keys use a versioned length-prefixed binary identity codec and limit-independent decimal transport serialization.
+- Language-profile identity includes the Unicode database and normalization policy, and runtime/profile mismatches fail closed.
+- The initial dictionary is intentionally tiny and cannot support general-language claims.
+- Later Prolog and neural implementations can be compared against the same records.
+
+### Related Decisions
+- DEC-022 (Adopt the AF Python Vertical Slice and MCP-First ChatGPT Boundary)
+- DEC-025 (Adopt the Capability Ladder and Scoped Reviewed Generation)
+- DEC-029 (Use Providers, Managers, Named Drivers, and Honest Delivery Semantics)
+
+### Related Specs
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Deterministic Prime Language and Ideon Reference Contract)
+
+### Output References
+- Added: "docs/prime-language-ideon-implementation.md"
+- Added: "src/af/domain/ideons/"
+- Added: "src/af/application/ideons.py"
+- Added: "src/af/infrastructure/ideons.py"
+- Added: "src/af/interfaces/ideons.py"
+
+---
