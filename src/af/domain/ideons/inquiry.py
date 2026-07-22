@@ -1,9 +1,33 @@
 """Inquiry state and deterministic ask/answer/stop rules.
 
-Eleven questions are structurally present in every InquiryState.  Deterministic
-behaviour is implemented for WHO, WHAT, WHERE, WHEN, WHERN, IS, and SHOULD.
-WHY, HOW, COULD, and WOULD default to NOT_APPLICABLE until their respective
-procedural rules are added; they are represented but not yet evaluated.
+All eleven questions are structurally present in every InquiryState with
+evidence-driven deterministic behaviour:
+
+- WHO   — satisfied when context actor is declared; open (material) when a viable
+          candidate carries an unfilled who-typed role (agent, subject, experiencer,
+          source, possessor, affected); not-applicable otherwise.
+- WHAT  — satisfied when every word-form has at least one viable dictionary candidate;
+          open (material) when any word-form has no viable candidate.
+- WHERE — satisfied when exactly one location candidate is viable; contested (material)
+          when multiple candidates remain; not-applicable when none are present.
+- WHEN  — satisfied when a temporal or conditional anchor is declared (context.time for
+          a timestamp witness; context.when for an event/criterion expression); not-
+          applicable otherwise.
+- WHERN — composite WHERE + WHEN.  Satisfied when both the spatial/domain component
+          (WHERE satisfied or context.where declared) and the temporal/conditional
+          component (WHEN satisfied) are present.  Open (non-material) with the
+          missing role identified when only one component is available.
+- IS    — satisfied when at least one predicate (action, state, relation) is present;
+          open (material) when none are found.
+- WHY   — open (non-material) when a predicate is present that could have a causal
+          explanation; not-applicable otherwise.
+- HOW   — open (non-material) when a predicate is present that could have a method or
+          manner role; not-applicable otherwise.
+- COULD — open (non-material) when both a predicate and a declared actor are present;
+          not-applicable otherwise.
+- WOULD — open (non-material) when a predicate is present that could be qualified
+          hypothetically or conditionally; not-applicable otherwise.
+- SHOULD — satisfied when a ShouldAssessment is provided.
 """
 
 from __future__ import annotations
@@ -22,6 +46,10 @@ from af.domain.ideons.records import (
     InquiryStatus,
     Question,
     ShouldAssessment,
+)
+
+_WHO_TYPED_ROLES: frozenset[str] = frozenset(
+    {"agent", "subject", "experiencer", "source", "possessor", "affected"}
 )
 
 
@@ -45,18 +73,25 @@ class InquiryEngine:
             if forms.forms[index].form_type == "word-form"
         )
 
-        # Compute predicate presence upfront: it drives both IS and WHO evaluation.
-        # WHO is material-open only when a predicate requires an agent; IS is open
-        # when no predicate is found.  Computing this once avoids two passes.
+        # Compute predicate presence upfront: drives IS, WHY, HOW, COULD, WOULD.
         has_predicate = any(
             candidate.entry.semantic_type in {"action", "state", "relation"}
             for candidate_set in word_candidate_sets
             for candidate in candidate_set.viable
         )
 
-        # WHO: only materially open when a predicate is present that requires an agent.
-        # Distinguish: agent present → SATISFIED; predicate present but no agent → OPEN
-        # (material); no predicate → NOT_APPLICABLE (nothing requires an actor).
+        # Compute who-typed role presence: drives WHO.
+        # WHO is material-open only when a viable candidate has an unfilled who-typed
+        # role (agent, subject, experiencer, source, possessor, affected).  An
+        # impersonal state/process with no who-typed roles leaves WHO NOT_APPLICABLE
+        # even when a predicate is present.
+        has_who_typed_role = any(
+            bool(_WHO_TYPED_ROLES.intersection(candidate.entry.semantic_roles))
+            for candidate_set in word_candidate_sets
+            for candidate in candidate_set.viable
+        )
+
+        # WHO
         actor = context.get("actor")
         if actor:
             results[Question.WHO] = InquiryResult(
@@ -65,7 +100,7 @@ class InquiryEngine:
                 role="actor",
                 evidence=(f"context:actor={actor}",),
             )
-        elif has_predicate:
+        elif has_who_typed_role:
             results[Question.WHO] = InquiryResult(
                 Question.WHO,
                 InquiryStatus.OPEN,
@@ -74,8 +109,9 @@ class InquiryEngine:
                 material=True,
                 evidence=("missing:actor",),
             )
-        # else: leave WHO as NOT_APPLICABLE (default)
+        # else: leave WHO as NOT_APPLICABLE (impersonal or no predicate)
 
+        # WHAT
         unknown = tuple(
             candidate_set for candidate_set in word_candidate_sets if not candidate_set.viable
         )
@@ -92,6 +128,7 @@ class InquiryEngine:
             evidence=tuple(f"unknown-form:{item.surface}" for item in unknown),
         )
 
+        # WHERE
         location_candidates = tuple(
             candidate
             for candidate_set in word_candidate_sets
@@ -121,21 +158,76 @@ class InquiryEngine:
                 evidence=(f"selected:{location_candidates[0].entry.entry_id}",),
             )
 
-        if context.get("time") is not None:
+        # WHEN: condition-bearing temporal relation (timestamp, interval, event, criterion).
+        # Satisfied by context.time (timestamp witness) or context.when (event/criterion
+        # expression).  A timestamp is one possible witness; WHEN is not a scalar datetime.
+        time_val = context.get("time")
+        when_val = context.get("when")
+        when_satisfied = bool(time_val or when_val)
+        if when_satisfied:
+            when_evidence: tuple[str, ...] = tuple(
+                v
+                for v in (
+                    f"context:time={time_val}" if time_val else None,
+                    f"context:when={when_val}" if when_val else None,
+                )
+                if v is not None
+            )
             results[Question.WHEN] = InquiryResult(
                 Question.WHEN,
                 InquiryStatus.SATISFIED,
-                role="temporal-anchor",
-                evidence=(f"context:time={context.get('time')}",),
+                role="temporal-condition",
+                evidence=when_evidence,
             )
-        if context.get("criterion") is not None:
+
+        # WHERN: composite WHERE (spatial/domain) + WHEN (temporal/conditional).
+        # Satisfied only when both components are present.  Open (non-material) with the
+        # missing role identified when only one component is available.
+        where_context = context.get("where")
+        where_component = (
+            results[Question.WHERE].status is InquiryStatus.SATISFIED
+            or where_context is not None
+        )
+        if where_component and when_satisfied:
+            w_ev = (
+                (f"context:where={where_context}",)
+                if where_context
+                else ("where:from-candidates",)
+            )
+            t_ev: tuple[str, ...] = tuple(
+                v
+                for v in (
+                    f"context:time={time_val}" if time_val else None,
+                    f"context:when={when_val}" if when_val else None,
+                )
+                if v is not None
+            )
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
                 InquiryStatus.SATISFIED,
-                role="criterion",
-                evidence=(f"context:criterion={context.get('criterion')}",),
+                role="spatiotemporal-condition",
+                evidence=w_ev + t_ev,
+            )
+        elif where_component:
+            results[Question.WHERN] = InquiryResult(
+                Question.WHERN,
+                InquiryStatus.OPEN,
+                role="spatiotemporal-condition",
+                required_information="temporal condition for WHERN",
+                material=False,
+                evidence=("missing:when",),
+            )
+        elif when_satisfied:
+            results[Question.WHERN] = InquiryResult(
+                Question.WHERN,
+                InquiryStatus.OPEN,
+                role="spatiotemporal-condition",
+                required_information="spatial or domain location for WHERN",
+                material=False,
+                evidence=("missing:where",),
             )
 
+        # IS
         results[Question.IS] = InquiryResult(
             Question.IS,
             InquiryStatus.SATISFIED if has_predicate else InquiryStatus.OPEN,
@@ -144,6 +236,52 @@ class InquiryEngine:
             material=not has_predicate,
             evidence=("predicate-present",) if has_predicate else ("missing:predicate",),
         )
+
+        # WHY: open (non-material) when a predicate is present that could have a causal
+        # explanation; not-applicable otherwise.
+        if has_predicate:
+            results[Question.WHY] = InquiryResult(
+                Question.WHY,
+                InquiryStatus.OPEN,
+                role="causal-explanation",
+                material=False,
+                evidence=("predicate-present",),
+            )
+
+        # HOW: open (non-material) when a predicate is present that could have a
+        # method/manner role; not-applicable otherwise.
+        if has_predicate:
+            results[Question.HOW] = InquiryResult(
+                Question.HOW,
+                InquiryStatus.OPEN,
+                role="method-or-manner",
+                material=False,
+                evidence=("predicate-present",),
+            )
+
+        # COULD: open (non-material) when both a predicate and a declared actor are
+        # present; capability assessment requires an identified agent.
+        if has_predicate and actor:
+            results[Question.COULD] = InquiryResult(
+                Question.COULD,
+                InquiryStatus.OPEN,
+                role="capability-assessment",
+                material=False,
+                evidence=("predicate-present", f"context:actor={actor}"),
+            )
+
+        # WOULD: open (non-material) when a predicate is present that could be qualified
+        # hypothetically or conditionally; not-applicable otherwise.
+        if has_predicate:
+            results[Question.WOULD] = InquiryResult(
+                Question.WOULD,
+                InquiryStatus.OPEN,
+                role="hypothetical-or-conditional",
+                material=False,
+                evidence=("predicate-present",),
+            )
+
+        # SHOULD
         if should is not None:
             results[Question.SHOULD] = InquiryResult(
                 Question.SHOULD,

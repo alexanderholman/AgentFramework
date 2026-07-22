@@ -1,8 +1,21 @@
-"""Pure Whern and temporal-perspective rules.
+"""Temporal model: WhenCondition, Whern (WHERE+WHEN composite), and tense rules.
 
 Temporal modality attaches to propositions, relations, and context rather than being
 encoded as a privileged inquiry attention.  The three tense values map directly to the
 ``WAS < IS > PROJECTED`` qualification axis: past, present, and future/projected states.
+
+``WHEN(P)`` — under what temporal or contextual condition does/did P hold?  A timestamp
+is one possible witness; WHEN also supports intervals, event/state predicates, and
+condition clauses.
+
+``WHERN(P)`` — in what combined place-and-time/condition does/did P hold?  WHERN is the
+conjunction of a WHERE (spatial/domain) component and a WHEN (temporal/conditional)
+component.  It is satisfied only when both roles are present.
+
+Global tense qualification (``WAS < IS > PROJECTED``) attaches to propositions and
+relations via ``TemporalQualification``.  The surface token ``will`` is disambiguated
+through the dictionary into a temporal relation (WHEN slot) or a volitional action; it
+does not create a privileged inquiry attention.
 """
 
 from __future__ import annotations
@@ -13,19 +26,33 @@ from enum import StrEnum
 
 
 class Tense(StrEnum):
-    """Temporal perspective of an event relative to a declared reference Whern.
+    """Temporal perspective of a proposition relative to a declared temporal standpoint.
 
-    A *reference Whern* is the observer's temporal standpoint (typically the
-    utterance moment).  ``render_tense`` compares an event's anchor against it
-    to yield one of these three values.  ``WAS`` and ``IS`` record attested
-    states; ``PROJECTED`` represents a future or projected state.  All three
-    qualify propositions and relations in context rather than serving as an
-    isolated inquiry attention.
+    ``render_tense`` compares a ``WhenCondition`` against a reference perspective to
+    yield one of these three values.  ``WAS`` and ``IS`` record attested states;
+    ``PROJECTED`` represents a future or projected state.  All three qualify propositions
+    and relations in context rather than serving as an isolated inquiry attention.
     """
 
     WAS = "was"
     IS = "is"
     PROJECTED = "projected"
+
+
+class WhenKind(StrEnum):
+    """Typed alternatives for the condition under which a proposition holds.
+
+    TIMESTAMP — an instant in time (``instant`` field is set).
+    INTERVAL  — a time range (``interval_start``/``interval_end`` fields, either may be
+                open).
+    EVENT     — an event or state predicate label (``expression`` field is set).
+    CRITERION — a condition clause or transition expression (``expression`` field is set).
+    """
+
+    TIMESTAMP = "timestamp"
+    INTERVAL = "interval"
+    EVENT = "event"
+    CRITERION = "criterion"
 
 
 class AuxiliaryKind(StrEnum):
@@ -40,6 +67,64 @@ class AuxiliaryKind(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class WhenCondition:
+    """Condition-bearing temporal relation under which a proposition holds/held/becomes true.
+
+    Supports timestamp (instant), interval (start/end), event/state predicate label,
+    and condition clause/transition expression as typed alternatives.  A timestamp is one
+    possible witness; WHEN is not reducible to a scalar datetime field.
+
+    Use this as the temporal/conditional role in ``TemporalQualification`` and as the
+    ``when`` component of ``Whern``.
+    """
+
+    kind: WhenKind
+    instant: datetime | None = None
+    interval_start: datetime | None = None
+    interval_end: datetime | None = None
+    expression: str | None = None
+    status: str = "declared"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, WhenKind):
+            raise TypeError("kind must be a WhenKind")
+        if self.kind is WhenKind.TIMESTAMP:
+            if self.instant is None:
+                raise ValueError("TIMESTAMP WhenCondition requires an instant")
+            if self.instant.tzinfo is None:
+                raise ValueError("WhenCondition instant must be timezone-aware")
+        elif self.kind is WhenKind.INTERVAL:
+            for label, value in (
+                ("interval_start", self.interval_start),
+                ("interval_end", self.interval_end),
+            ):
+                if value is not None and value.tzinfo is None:
+                    raise ValueError(f"WhenCondition {label} must be timezone-aware")
+        elif self.kind in {WhenKind.EVENT, WhenKind.CRITERION}:
+            if not self.expression:
+                raise ValueError(f"{self.kind} WhenCondition requires a non-empty expression")
+        if not self.status:
+            raise ValueError("WhenCondition status must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class Whern:
+    """Composite spatiotemporal constraint: the conjunction of WHERE and WHEN components.
+
+    ``WHERN(P)`` asks: in what combined place-and-time/condition does/did P hold?
+    It is satisfied only when both the spatial/domain (``where``) and the
+    temporal/conditional (``when``) roles are present and satisfied.
+
+    ``WHEN(P)`` alone — ``WhenCondition`` — asks under what temporal or contextual
+    condition P holds.  ``WHERE(P)`` alone identifies the spatial or domain context.
+    ``WHERN`` is their composition, not a synonym for either individually.
+    """
+
+    when: WhenCondition | None = None
+    where: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TemporalQualification:
     """A tense qualification that attaches to a proposition or relation node.
 
@@ -48,53 +133,40 @@ class TemporalQualification:
     """
 
     tense: Tense
-    whern: Whern
+    when: WhenCondition
 
     def __post_init__(self) -> None:
         if not isinstance(self.tense, Tense):
             raise TypeError("tense must be a Tense")
-        if not isinstance(self.whern, Whern):
-            raise TypeError("whern must be a Whern")
+        if not isinstance(self.when, WhenCondition):
+            raise TypeError("when must be a WhenCondition")
 
 
-@dataclass(frozen=True, slots=True)
-class Whern:
-    temporal_anchor: datetime | None
-    reference_perspective: datetime | None
-    criterion: str = "now = datetime_provided"
-    status: str = "declared"
+def render_tense(event: WhenCondition, reference: WhenCondition) -> Tense:
+    """Render the tense of *event* relative to a *reference* temporal perspective.
 
-    def __post_init__(self) -> None:
-        for label, value in (
-            ("temporal anchor", self.temporal_anchor),
-            ("reference perspective", self.reference_perspective),
-        ):
-            if value is not None and value.tzinfo is None:
-                raise ValueError(f"{label} must be timezone-aware")
-        if not self.criterion:
-            raise ValueError("Whern criterion must not be empty")
-        if not self.status:
-            raise ValueError("Whern status must not be empty")
-
-
-def render_tense(event: Whern, reference: Whern) -> Tense:
-    """Render the tense of *event* relative to a *reference* Whern.
-
-    Returns ``WAS`` when the event precedes the reference perspective, ``IS`` when
-    they coincide, and ``PROJECTED`` when the event follows it.  The result qualifies
-    the proposition or relation that the event Whern is attached to.
+    Both arguments must be comparable ``WhenCondition`` instances of the same kind.
+    For ``TIMESTAMP`` conditions, the instants are compared directly.  For ``CRITERION``
+    conditions, matching expressions with ``status='satisfied'`` return ``IS``.
+    The result qualifies the proposition or relation attached to the event condition.
     """
-    event_time = event.temporal_anchor
-    reference_time = reference.reference_perspective or reference.temporal_anchor
-    if event_time is None or reference_time is None:
-        if event.criterion == reference.criterion and event.status == "satisfied":
+    if event.kind is WhenKind.TIMESTAMP and reference.kind is WhenKind.TIMESTAMP:
+        assert event.instant is not None and reference.instant is not None
+        if event.instant < reference.instant:
+            return Tense.WAS
+        if event.instant > reference.instant:
+            return Tense.PROJECTED
+        return Tense.IS
+    if event.kind is WhenKind.CRITERION and reference.kind is WhenKind.CRITERION:
+        if event.expression == reference.expression and event.status == "satisfied":
             return Tense.IS
-        raise ValueError("tense rendering requires comparable Whern anchors or criteria")
-    if event_time < reference_time:
-        return Tense.WAS
-    if event_time > reference_time:
-        return Tense.PROJECTED
-    return Tense.IS
+        raise ValueError(
+            "criterion tense rendering requires matching expressions and satisfied status"
+        )
+    raise ValueError(
+        "tense rendering requires comparable WhenCondition kinds; "
+        f"got {event.kind!r} and {reference.kind!r}"
+    )
 
 
 def auxiliary_kind(relation: str) -> AuxiliaryKind:

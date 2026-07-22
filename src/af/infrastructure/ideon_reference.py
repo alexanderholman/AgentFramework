@@ -34,10 +34,11 @@ class _SeedSense:
     semantic_type: str
     question: Question
     valid_contexts: tuple[tuple[str, str], ...] = ()
+    semantic_roles: tuple[str, ...] = ()
 
 
 _SEED_SENSES = (
-    _SeedSense("sit.past", 3, ("sat",), "action", Question.WHAT),
+    _SeedSense("sit.past", 3, ("sat",), "action", Question.WHAT, (), ("agent",)),
     _SeedSense("on.spatial", 5, ("on",), "relation", Question.WHERE),
     _SeedSense("the.definite", 7, ("the",), "property", Question.WHAT),
     _SeedSense(
@@ -86,6 +87,7 @@ _SEED_SENSES = (
         "action",
         Question.WHAT,
         (("mode", "volitional"),),
+        ("agent",),
     ),
 )
 
@@ -124,6 +126,7 @@ def _entry_from_ref(seed: _SeedSense, ref: IdeonRef) -> SenseEntry:
         semantic_type=seed.semantic_type,
         question_slot=seed.question,
         valid_contexts=seed.valid_contexts,
+        semantic_roles=seed.semantic_roles,
         provenance=("principia-v0:controlled-fixture",),
         evidence_status="defined-fixture",
         rights="project-authored",

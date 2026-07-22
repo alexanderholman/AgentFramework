@@ -29,10 +29,11 @@ PROFILE = LanguageProfileRef("en", "0.1", unicodedata.unidata_version, dialect="
 
 def reference_service() -> tuple[IdeonService, InMemoryIdeonRegistry]:
     store = InMemoryIdeonRegistry("reference-test@0.1")
+    # Each element: (entry_id, key, forms, semantic_type, question, valid_contexts, semantic_roles)
     declarations = (
-        ("sit.past", 3, ("sat",), "action", Question.WHAT, ()),
-        ("on.spatial", 5, ("on",), "relation", Question.WHERE, ()),
-        ("the.definite", 7, ("the",), "property", Question.WHAT, ()),
+        ("sit.past", 3, ("sat",), "action", Question.WHAT, (), ("agent",)),
+        ("on.spatial", 5, ("on",), "relation", Question.WHERE, (), ()),
+        ("the.definite", 7, ("the",), "property", Question.WHAT, (), ()),
         (
             "bank.river-edge",
             11,
@@ -40,6 +41,7 @@ def reference_service() -> tuple[IdeonService, InMemoryIdeonRegistry]:
             "entity",
             Question.WHERE,
             (("domain", "river"),),
+            (),
         ),
         (
             "bank.financial-institution",
@@ -48,10 +50,11 @@ def reference_service() -> tuple[IdeonService, InMemoryIdeonRegistry]:
             "entity",
             Question.WHERE,
             (("domain", "finance"),),
+            (),
         ),
     )
     entries: list[SenseEntry] = []
-    for entry_id, key, forms, semantic_type, question, contexts in declarations:
+    for entry_id, key, forms, semantic_type, question, contexts, roles in declarations:
         ref = store.intern(
             IdeonGraph(
                 IdeonIdentity(
@@ -75,6 +78,7 @@ def reference_service() -> tuple[IdeonService, InMemoryIdeonRegistry]:
                 semantic_type=semantic_type,
                 question_slot=question,
                 valid_contexts=contexts,
+                semantic_roles=roles,
                 provenance=("fixture:principia-v0",),
             )
         )

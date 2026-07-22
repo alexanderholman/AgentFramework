@@ -193,6 +193,7 @@ class SenseEntry:
     provenance: tuple[str, ...] = ()
     evidence_status: str = "defined"
     rights: str = "internal-test-fixture"
+    semantic_roles: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _identifier(self.entry_id, "entry id")

@@ -1769,3 +1769,79 @@ undocumented as identity codes; and inquiry coverage overclaimed.
 - Modified: `docs/prime-language-ideon-implementation.md`
 
 ---
+
+---
+
+## [DEC-032] Ideon Temporal Model: Composite Whern, Condition-Bearing WHEN, Role-Driven WHO
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-017 (DEC-031) identified four remaining semantic errors in the Ideon
+reference slice:
+1. WHERN was described as criterion-conditioned temporality rather than the WHERE+WHEN
+   composite; this contradicted the WHERN = WHERE + WHEN amalgamation definition.
+2. WHEN was satisfied only by a scalar datetime (context.time) rather than being
+   condition-bearing (supporting event predicates, criteria, intervals, orderings).
+3. WHO was driven by generic predicate presence rather than declared unfilled who-typed
+   roles; impersonal states falsely triggered a material opening.
+4. WHY, HOW, COULD, and WOULD defaulted globally to NOT_APPLICABLE, which is incorrect
+   when a relevant predicate is present.
+Additionally, "reference Whern" was used as a synonym for temporal standpoint, which
+contradicts the WHERN = WHERE+WHEN definition.
+
+### Decision
+1. Replace `Whern(temporal_anchor, reference_perspective, criterion)` with:
+   - `WhenCondition(kind: WhenKind, ...)` — condition-bearing typed temporal relation
+     (TIMESTAMP, INTERVAL, EVENT, CRITERION kinds).
+   - `Whern(when: WhenCondition | None, where: str | None)` — composite WHERE+WHEN.
+2. `render_tense` now accepts two `WhenCondition` arguments; `TemporalQualification`
+   uses `when: WhenCondition` rather than `whern: Whern`.
+3. WHEN inquiry: satisfied by context.time (timestamp) OR context.when (condition
+   expression).  Context field name changes from criterion to when.
+4. WHERN inquiry: SATISFIED when both WHERE (from dictionary or context.where) and
+   WHEN are present; OPEN (non-material) with missing role when only one is present.
+5. Add `semantic_roles: tuple[str, ...]` to `SenseEntry` (default empty).  WHO is
+   materially open only when a viable candidate has a who-typed role and no actor is
+   declared.  Impersonal predicates (semantic_roles=()) leave WHO NOT_APPLICABLE.
+6. WHY, HOW, WOULD: OPEN (non-material, material=False) when a predicate is present,
+   NOT_APPLICABLE otherwise.  COULD: OPEN (non-material) when predicate+actor present.
+7. Remove "reference Whern" terminology from docstrings; use "temporal perspective".
+
+### Alternatives Considered
+- **Keep Whern as temporal-only, add Whern2 for composite:** rejected; clean rename
+  is clearer and removes the false synonym between WHERN and temporal standpoint.
+- **Add a material=True rule for WHY/HOW/COULD/WOULD:** rejected; full causal and
+  capability reasoning is beyond this reference slice; non-material open is correct
+  for minimal deterministic procedures.
+
+### Consequences
+- `WhenCondition` replaces `Whern` as the temporal/conditional anchor in
+  `TemporalQualification`.  `Whern` is now the composite spatial+temporal constraint.
+- WHERN requires both WHERE and WHEN to be satisfied; partial state is explicitly
+  represented as non-material OPEN with the missing role in evidence.
+- WHO correctly distinguishes agentive from impersonal predicates via semantic_roles.
+- All eleven inquiry attentions now have minimal deterministic procedures.
+- Existing tests updated; six new tests added for the corrected semantics.
+
+### Supersedes
+- DEC-031 (Ideon Correction: Provenance Separation, Temporal Qualification, Inquiry
+  Scope) — the WHERN description in DEC-031 ("criterion-conditioned temporality") is
+  superseded.  The prior decisions remain in the record.
+
+### Related Decisions
+- DEC-030, DEC-031
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018
+
+### Output References
+- Modified: `src/af/domain/ideons/temporal.py`
+- Modified: `src/af/domain/ideons/records.py`
+- Modified: `src/af/domain/ideons/inquiry.py`
+- Modified: `src/af/infrastructure/ideon_reference.py`
+- Modified: `tests/unit/test_ideon_language.py`
+- Modified: `tests/unit/test_ideon_service.py`
+
+---

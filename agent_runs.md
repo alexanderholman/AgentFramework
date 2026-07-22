@@ -894,3 +894,56 @@ None
 - Decision: DEC-031
 
 ---
+
+---
+
+## Run #018 — Ideon Temporal Model Corrections
+**Date**: 2026-07-22
+**Agent**: Copilot Coding Agent
+**Triggered by**: PR review comment #5052571328 (Alexander Holman)
+
+### Scope
+Second correction pass on the deterministic Prime Language reference slice.  Addressed
+four remaining blockers: composite Whern (WHERE+WHEN), condition-bearing WHEN,
+role-driven WHO, and minimal procedures for WHY/HOW/COULD/WOULD.
+
+### Changes Made
+- `src/af/domain/ideons/temporal.py`: Added `WhenKind` enum and `WhenCondition`
+  dataclass (condition-bearing typed temporal relation).  Redesigned `Whern` as
+  WHERE+WHEN composite.  Updated `TemporalQualification.when: WhenCondition`.
+  Updated `render_tense(WhenCondition, WhenCondition)`.  Removed "reference Whern"
+  terminology.
+- `src/af/domain/ideons/records.py`: Added `semantic_roles: tuple[str, ...] = ()`
+  field to `SenseEntry`.
+- `src/af/domain/ideons/inquiry.py`: WHO driven by `semantic_roles` (who-typed roles),
+  not generic predicate presence.  WHEN satisfied by context.time OR context.when.
+  WHERN requires WHERE+WHEN composite; partial presence yields OPEN (non-material).
+  Added minimal evidence-driven procedures for WHY, HOW, COULD, WOULD.  Updated
+  module docstring to reflect all eleven attentions having deterministic behaviour.
+- `src/af/infrastructure/ideon_reference.py`: Added `semantic_roles` to `_SeedSense`
+  and updated `sit.past` and `will.intends` entries with `("agent",)` roles.
+- `tests/unit/test_ideon_language.py`: Updated imports and temporal test fixtures
+  to use `WhenCondition`/`WhenKind`.  Added six new tests (TEST-018-1 through 8).
+- `tests/unit/test_ideon_service.py`: Updated `reference_service()` to pass
+  `semantic_roles` for `sit.past`.
+- `specs.md`: Appended SPEC-018.
+- `decisions.md`: Appended DEC-032 (superseding WHERN description in DEC-031).
+- `agent_runs.md`: Appended Run #018.
+
+### Verified Results
+- Focused Ideon suite (language + service + validation): 77 passed
+- All unit tests (excluding pre-existing git-history-dependent governance test): 311 passed
+- Strict mypy (src only): no issues
+- Ruff check + format: passed
+
+### Issues Encountered
+- Pre-existing: `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone).  GitHub CI is
+  authoritative for this check.
+
+### Related References
+- Spec: SPEC-018
+- Decision: DEC-032
+- PR review comment: #5052571328
+
+---

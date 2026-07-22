@@ -24,7 +24,8 @@ from af.domain.ideons.temporal import (
     AuxiliaryKind,
     TemporalQualification,
     Tense,
-    Whern,
+    WhenCondition,
+    WhenKind,
     auxiliary_kind,
     render_tense,
 )
@@ -41,6 +42,7 @@ def entry(
     slot: Question,
     *,
     valid_contexts: tuple[tuple[str, str], ...] = (),
+    semantic_roles: tuple[str, ...] = (),
 ) -> SenseEntry:
     return SenseEntry(
         entry_id=entry_id,
@@ -53,13 +55,14 @@ def entry(
         semantic_type=semantic_type,
         question_slot=slot,
         valid_contexts=valid_contexts,
+        semantic_roles=semantic_roles,
     )
 
 
 def reference_dictionary() -> LogicDictionary:
     return LogicDictionary(
         (
-            entry("sit.past", 2, "sat", "action", Question.WHAT),
+            entry("sit.past", 2, "sat", "action", Question.WHAT, semantic_roles=("agent",)),
             entry("on.spatial", 3, "on", "relation", Question.WHERE),
             entry("the.definite", 5, "the", "property", Question.WHAT),
             entry(
@@ -121,9 +124,11 @@ def test_bank_candidates_remain_open_until_context_materially_selects_a_set() ->
 
 
 def test_all_eleven_questions_are_represented_and_open_ideon_asks() -> None:
-    """All eleven questions appear in InquiryState.  Seven have deterministic behaviour
-    in this slice: WHO, WHAT, WHERE, WHEN, WHERN, IS, SHOULD.  WHY, HOW, COULD, and
-    WOULD are structurally represented but default to NOT_APPLICABLE until implemented."""
+    """All eleven questions appear in InquiryState with evidence-driven deterministic
+    behaviour.  WHO is material-open when a viable candidate carries a who-typed role
+    and no actor is declared.  WHERE is contested when multiple location senses remain.
+    WHY, HOW, WOULD are non-material open when a predicate is present; COULD is
+    non-material open only when predicate and actor are both present."""
     forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
     candidates = reference_dictionary().candidates(forms, ContextGraph())
     inquiry = InquiryEngine().query(forms, candidates, ContextGraph())
@@ -215,26 +220,39 @@ def test_should_high_expected_harm_stops_or_explicitly_offers_safer_route() -> N
 
 
 def test_one_event_renders_as_was_is_or_projected_by_reference_whern() -> None:
-    """Temporal perspective uses WAS/IS/PROJECTED; future tense is PROJECTED."""
+    """render_tense compares WhenCondition instances; future tense is PROJECTED.
+    A TIMESTAMP WhenCondition requires a timezone-aware instant."""
     event_time = datetime(2026, 7, 22, 12, tzinfo=UTC)
-    event = Whern(event_time, None)
+    event = WhenCondition(WhenKind.TIMESTAMP, instant=event_time)
 
-    assert render_tense(event, Whern(None, event_time + timedelta(hours=1))) is Tense.WAS
-    assert render_tense(event, Whern(None, event_time)) is Tense.IS
-    assert render_tense(event, Whern(None, event_time - timedelta(hours=1))) is Tense.PROJECTED
+    assert (
+        render_tense(
+            event,
+            WhenCondition(WhenKind.TIMESTAMP, instant=event_time + timedelta(hours=1)),
+        )
+        is Tense.WAS
+    )
+    assert render_tense(event, WhenCondition(WhenKind.TIMESTAMP, instant=event_time)) is Tense.IS
+    assert (
+        render_tense(
+            event,
+            WhenCondition(WhenKind.TIMESTAMP, instant=event_time - timedelta(hours=1)),
+        )
+        is Tense.PROJECTED
+    )
     with pytest.raises(ValueError, match="timezone-aware"):
-        Whern(datetime(2026, 7, 22, 12), None)
+        WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 7, 22, 12))
 
 
 def test_temporal_qualification_attaches_to_proposition_not_as_separate_inquiry() -> None:
-    """Past/present/projected qualification wraps a Whern and attaches to a proposition.
-    Equivalent propositions differ only in their TemporalQualification, not their form."""
+    """Past/present/projected qualification wraps a WhenCondition and attaches to a
+    proposition.  Equivalent propositions differ only in their TemporalQualification."""
     anchor = datetime(2026, 1, 1, tzinfo=UTC)
-    ref = Whern(None, anchor)
+    ref = WhenCondition(WhenKind.TIMESTAMP, instant=anchor)
 
-    past_event = Whern(anchor - timedelta(days=365), None)
-    present_event = Whern(anchor, None)
-    future_event = Whern(anchor + timedelta(days=365), None)
+    past_event = WhenCondition(WhenKind.TIMESTAMP, instant=anchor - timedelta(days=365))
+    present_event = WhenCondition(WhenKind.TIMESTAMP, instant=anchor)
+    future_event = WhenCondition(WhenKind.TIMESTAMP, instant=anchor + timedelta(days=365))
 
     past_q = TemporalQualification(render_tense(past_event, ref), past_event)
     present_q = TemporalQualification(render_tense(present_event, ref), present_event)
@@ -246,14 +264,139 @@ def test_temporal_qualification_attaches_to_proposition_not_as_separate_inquiry(
     assert past_q != present_q != future_q
 
 
-def test_whern_criterion_is_distinct_from_ordinary_temporal_anchor() -> None:
-    """WHERN is criterion-conditioned temporality.  A criterion-satisfied Whern renders
-    IS without requiring a concrete datetime anchor."""
+def test_when_condition_satisfied_by_criterion_without_timestamp() -> None:
+    """WHEN is condition-bearing: a CRITERION WhenCondition satisfies render_tense
+    without any datetime when expressions match and status is 'satisfied'.
+    WHEN is not reducible to a scalar datetime field."""
     criterion = "task-complete"
-    criterion_whern = Whern(None, None, criterion=criterion, status="satisfied")
-    reference = Whern(None, None, criterion=criterion, status="satisfied")
+    event_cond = WhenCondition(WhenKind.CRITERION, expression=criterion, status="satisfied")
+    reference_cond = WhenCondition(WhenKind.CRITERION, expression=criterion, status="satisfied")
 
-    assert render_tense(criterion_whern, reference) is Tense.IS
+    assert render_tense(event_cond, reference_cond) is Tense.IS
+
+
+def test_whern_is_composite_of_where_and_when_components() -> None:
+    """Whern is the WHERE+WHEN composite.  WHERN(P) is satisfied only when both the
+    spatial/domain component (context.where) and the temporal/conditional component
+    (context.when or context.time) are present.  Partial presence leaves WHERN open
+    (non-material) with the missing role identified."""
+    forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
+    dictionary = reference_dictionary()
+
+    # Both WHERE and WHEN provided: WHERN SATISFIED
+    ctx_both = ContextGraph.from_dict({"where": "london", "when": "task-complete"})
+    inquiry_both = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_both), ctx_both
+    )
+    assert inquiry_both.get(Question.WHERN).status is InquiryStatus.SATISFIED
+    assert inquiry_both.get(Question.WHEN).status is InquiryStatus.SATISFIED
+
+    # Only WHEN provided: WHERN OPEN (non-material), missing where
+    ctx_when_only = ContextGraph.from_dict({"when": "task-complete"})
+    inquiry_when_only = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_when_only), ctx_when_only
+    )
+    assert inquiry_when_only.get(Question.WHERN).status is InquiryStatus.OPEN
+    assert inquiry_when_only.get(Question.WHERN).material is False
+    assert "missing:where" in inquiry_when_only.get(Question.WHERN).evidence
+
+    # Only WHERE provided: WHERN OPEN (non-material), missing when
+    ctx_where_only = ContextGraph.from_dict({"where": "london"})
+    inquiry_where_only = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_where_only), ctx_where_only
+    )
+    assert inquiry_where_only.get(Question.WHERN).status is InquiryStatus.OPEN
+    assert inquiry_where_only.get(Question.WHERN).material is False
+    assert "missing:when" in inquiry_where_only.get(Question.WHERN).evidence
+
+    # Neither provided: WHERN NOT_APPLICABLE
+    inquiry_neither = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ContextGraph()), ContextGraph()
+    )
+    assert inquiry_neither.get(Question.WHERN).status is InquiryStatus.NOT_APPLICABLE
+
+
+def test_whern_satisfied_by_dict_where_plus_context_time() -> None:
+    """WHERN is also satisfied when the WHERE inquiry resolves via dictionary candidates
+    (not only context.where) combined with a timestamp in context.time."""
+    forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
+    dictionary = reference_dictionary()
+
+    ctx = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-01-01T00:00:00Z"}
+    )
+    inquiry = InquiryEngine().query(forms, dictionary.candidates(forms, ctx), ctx)
+
+    assert inquiry.get(Question.WHERE).status is InquiryStatus.SATISFIED
+    assert inquiry.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inquiry.get(Question.WHERN).status is InquiryStatus.SATISFIED
+
+
+def test_who_not_applicable_for_impersonal_state_predicate() -> None:
+    """WHO must be NOT_APPLICABLE when a predicate is present but carries no who-typed
+    roles.  An impersonal state (semantic_roles=()) does not require an agent."""
+    impersonal_state = entry(
+        "rain.intransitive", 13, "rains", "state", Question.IS,
+        semantic_roles=(),
+    )
+    dictionary = LogicDictionary((impersonal_state,))
+    forms = LosslessFormEncoder().encode("rains", PROFILE)
+    candidates = dictionary.candidates(forms, ContextGraph())
+    inquiry = InquiryEngine().query(forms, candidates, ContextGraph())
+
+    assert inquiry.get(Question.IS).status is InquiryStatus.SATISFIED
+    assert inquiry.get(Question.WHO).status is InquiryStatus.NOT_APPLICABLE
+    assert inquiry.get(Question.WHO).material is False
+
+
+def test_who_open_for_agentive_predicate_without_actor() -> None:
+    """WHO must be materially open when a viable candidate carries an agent role and no
+    actor is declared in context.  Providing the actor resolves WHO to SATISFIED."""
+    agentive = entry(
+        "write.present", 13, "writes", "action", Question.WHAT, semantic_roles=("agent",)
+    )
+    dictionary = LogicDictionary((agentive,))
+    forms = LosslessFormEncoder().encode("writes", PROFILE)
+    candidates = dictionary.candidates(forms, ContextGraph())
+
+    inquiry_no_actor = InquiryEngine().query(forms, candidates, ContextGraph())
+    assert inquiry_no_actor.get(Question.WHO).status is InquiryStatus.OPEN
+    assert inquiry_no_actor.get(Question.WHO).material is True
+
+    ctx_with_actor = ContextGraph.from_dict({"actor": "alice"})
+    inquiry_with_actor = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_with_actor), ctx_with_actor
+    )
+    assert inquiry_with_actor.get(Question.WHO).status is InquiryStatus.SATISFIED
+
+
+def test_why_how_could_would_are_open_non_material_when_predicate_present() -> None:
+    """WHY, HOW, WOULD are non-material open when a predicate is present.  COULD
+    additionally requires a declared actor.  None of them block closure."""
+    forms_with_pred = LosslessFormEncoder().encode("sat on the bank", PROFILE)
+    ctx_with_actor = ContextGraph.from_dict({"actor": "alice", "domain": "river"})
+    candidates = reference_dictionary().candidates(forms_with_pred, ctx_with_actor)
+    inquiry = InquiryEngine().query(forms_with_pred, candidates, ctx_with_actor)
+
+    # All four are OPEN but non-material → do not block closure
+    for q in (Question.WHY, Question.HOW, Question.WOULD):
+        assert inquiry.get(q).status is InquiryStatus.OPEN, q
+        assert inquiry.get(q).material is False, q
+    assert inquiry.get(Question.COULD).status is InquiryStatus.OPEN
+    assert inquiry.get(Question.COULD).material is False
+
+    assert inquiry.material_openings == ()
+    assert DecisionEngine().decide(inquiry).decision is Decision.ANSWER
+
+
+def test_could_not_applicable_when_no_actor_declared() -> None:
+    """COULD requires both a predicate and a declared actor.  Without an actor,
+    capability assessment is not applicable."""
+    forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
+    candidates = reference_dictionary().candidates(forms, ContextGraph())
+    inquiry = InquiryEngine().query(forms, candidates, ContextGraph())
+
+    assert inquiry.get(Question.COULD).status is InquiryStatus.NOT_APPLICABLE
 
 
 def test_temporal_and_volitional_auxiliary_relations_are_classified_separately() -> None:

@@ -998,3 +998,59 @@ errors identified in review are addressed without changing the overall architect
 - SPEC-016 (Deterministic Prime Language and Ideon Reference Contract)
 
 ---
+
+---
+
+## [SPEC-018] Ideon Correction: Composite Whern, Condition-Bearing WHEN, Role-Driven WHO, and Full Inquiry Procedures
+**Date**: 2026-07-22
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Second correction pass on the deterministic Prime Language reference slice addressing
+four remaining semantic errors identified in review of SPEC-017.
+
+### Requirements
+- MUST model WHEN as a condition-bearing temporal relation (WhenCondition with typed
+  alternatives: TIMESTAMP, INTERVAL, EVENT, CRITERION) rather than a scalar datetime.
+  A timestamp is one possible witness; WHEN supports anchors, intervals, event/state
+  predicates, and condition clauses.
+- MUST model WHERN as the conjunction of a WHERE (spatial/domain) component and a WHEN
+  (temporal/conditional) component.  WHERN(P) is satisfied only when both components
+  are present; partial presence yields OPEN (non-material) with the missing role
+  identified.  WHERN must not be used as a synonym for temporal standpoint alone.
+- MUST drive WHO from declared unfilled who-typed semantic roles on viable candidates
+  (agent, subject, experiencer, source, possessor, affected).  An impersonal state or
+  process with semantic_roles=() leaves WHO NOT_APPLICABLE even when a predicate is
+  present.  Agentive predicates carry semantic_roles=("agent",) and leave WHO
+  materially open when no actor is declared.
+- MUST attach global tense qualification (WAS/IS/PROJECTED) to propositions/relations
+  via TemporalQualification(tense, when: WhenCondition) rather than using Whern as the
+  host type.
+- MUST implement minimal evidence-driven procedures for WHY, HOW, COULD, and WOULD:
+    - WHY: OPEN (non-material) when a predicate is present; NOT_APPLICABLE otherwise.
+    - HOW: OPEN (non-material) when a predicate is present; NOT_APPLICABLE otherwise.
+    - COULD: OPEN (non-material) when both a predicate and a declared actor are present.
+    - WOULD: OPEN (non-material) when a predicate is present; NOT_APPLICABLE otherwise.
+  All four are non-blocking (material=False) so they do not prevent closure.
+- MUST rename 'reference Whern' terminology to 'temporal perspective' wherever used
+  to describe the observer's standpoint.
+- MUST NOT retain the old Whern(temporal_anchor, reference_perspective, criterion)
+  API; it is replaced by WhenCondition (typed temporal/conditional relation) and
+  Whern (WHERE+WHEN composite).
+
+### Tests
+- **TEST-018-1**: WHEN satisfied by EVENT/CRITERION WhenCondition without a datetime
+- **TEST-018-2**: WHERN satisfied only when both WHERE and WHEN components are present
+- **TEST-018-3**: WHERN open (non-material) with missing:where when only WHEN provided
+- **TEST-018-4**: WHERN open (non-material) with missing:when when only WHERE provided
+- **TEST-018-5**: WHO NOT_APPLICABLE for impersonal state predicate (semantic_roles=())
+- **TEST-018-6**: WHO OPEN (material) for agentive predicate (semantic_roles=("agent",))
+- **TEST-018-7**: WHY/HOW/WOULD non-material open when predicate present
+- **TEST-018-8**: COULD non-material open only when predicate and actor both present
+
+### Related Specs
+- SPEC-016 (Deterministic Prime Language and Ideon Reference Contract)
+- SPEC-017 (Ideon Correction: Provenance Separation, Temporal Qualification, and Inquiry Scope)
+
+---
