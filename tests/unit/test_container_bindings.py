@@ -519,7 +519,7 @@ def test_bind_async_accepts_callable_returning_asyncio_future() -> None:
     """A normal callable returning an asyncio.Future satisfies the AsyncFactory contract."""
 
     def future_factory(_: object) -> asyncio.Future[Store]:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future: asyncio.Future[Store] = loop.create_future()
         future.set_result(Store())
         return future
