@@ -153,26 +153,63 @@ def test_invocation_scope_owns_ambient_execution_context_lifetime() -> None:
         current_context()
 
 
-def test_external_disposal_revokes_an_entered_invocation_context() -> None:
+def test_external_disposal_rejects_an_entered_invocation_owner() -> None:
     async def scenario() -> None:
         execution = ExecutionContext(tenant_id="revoked-tenant")
         invocation = Container().application_scope().invocation_scope(context=execution)
         entered = asyncio.Event()
-        inspect_after_close = asyncio.Event()
+        release_owner = asyncio.Event()
 
         async def owner() -> None:
             async with invocation:
                 assert current_context() is execution
                 entered.set()
-                await inspect_after_close.wait()
-                with pytest.raises(PlatformError):
-                    current_context()
+                await release_owner.wait()
+                assert current_context() is execution
 
         owner_task = asyncio.create_task(owner())
         await entered.wait()
-        await invocation.aclose()
-        inspect_after_close.set()
+        with pytest.raises(InvalidBinding, match="external shutdown"):
+            await invocation.aclose()
+        release_owner.set()
         await owner_task
+
+    asyncio.run(scenario())
+
+
+def test_external_disposal_cannot_close_resource_beneath_active_owner() -> None:
+    class Resource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    async def scenario() -> None:
+        root = Container()
+        root.bind(Resource, lambda _: Resource(), scope=Scope.INVOCATION)
+        invocation = root.application_scope().invocation_scope()
+        entered = asyncio.Event()
+        release_owner = asyncio.Event()
+        resource: Resource | None = None
+
+        async def owner() -> None:
+            nonlocal resource
+            async with invocation:
+                resource = invocation.resolve(Resource)
+                entered.set()
+                await release_owner.wait()
+                assert not resource.closed
+
+        owner_task = asyncio.create_task(owner())
+        await entered.wait()
+        assert resource is not None
+        with pytest.raises(InvalidBinding, match="external shutdown"):
+            await invocation.aclose()
+        assert not resource.closed
+        release_owner.set()
+        await owner_task
+        assert resource.closed
 
     asyncio.run(scenario())
 
@@ -696,7 +733,7 @@ def test_parent_retains_child_failures_when_child_cleanup_propagates_cancellatio
         invocation.resolve(CancelledResource)
 
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.create_task(root.aclose())
+            await root.aclose()
         with pytest.raises(asyncio.CancelledError):
             await invocation.__aexit__(None, None, None)
 
@@ -1182,13 +1219,12 @@ def test_async_close_cancels_owned_task_before_waiting_for_its_factory() -> None
         invocation.__enter__()
         resolving = invocation.create_task(invocation.resolve_async(Service))
         await entered.wait()
-        closing = asyncio.create_task(invocation.aclose())
         try:
-            await asyncio.wait_for(cancelled.wait(), timeout=0.5)
+            await invocation.aclose()
         finally:
             release.set()
-            await closing
             invocation.__exit__(None, None, None)
+        assert cancelled.is_set()
         assert resolving.cancelled()
 
     asyncio.run(scenario())

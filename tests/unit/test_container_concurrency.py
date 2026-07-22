@@ -4,7 +4,6 @@ import asyncio
 import gc
 import weakref
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
 from queue import Queue
 from threading import Barrier, Event, Lock, Thread, get_ident
 from time import monotonic, sleep
@@ -385,7 +384,7 @@ def test_parent_sync_close_defers_for_descendant_async_construction() -> None:
         await entered.wait()
         try:
             with pytest.raises(AsyncDisposalRequired):
-                await asyncio.to_thread(root.close)
+                root.close()
         finally:
             release.set()
 
@@ -531,12 +530,12 @@ def test_late_child_flight_retires_from_shared_resolution_graph() -> None:
         resolving = invocation.create_task(invocation.resolve_async(Service))
         await entered.wait()
         with pytest.raises(ScopeDisposalError):
-            await asyncio.create_task(root.aclose())
+            await root.aclose()
         release.set()
         outcomes = await asyncio.gather(resolving, return_exceptions=True)
         with pytest.raises(ScopeDisposalError):
-            await asyncio.create_task(invocation.aclose())
-        await resource_closed.wait()
+            await invocation.aclose()
+        assert resource_closed.is_set()
         with pytest.raises(ScopeDisposalError):
             await invocation.__aexit__(None, None, None)
 
@@ -570,7 +569,7 @@ def test_late_child_factory_releases_original_registry_guard_owner() -> None:
         resolving = invocation.create_task(invocation.resolve_async(Service))
         await entered.wait()
         with pytest.raises(ScopeDisposalError):
-            await asyncio.create_task(invocation.aclose())
+            await invocation.aclose()
         release.set()
         await asyncio.gather(resolving, return_exceptions=True)
         await asyncio.sleep(0)
@@ -682,6 +681,51 @@ def test_late_async_resource_waits_for_explicit_async_cleanup_handoff() -> None:
     assert not resource.closed
     with pytest.raises(ScopeDisposalError):
         asyncio.run(root.aclose())
+    assert resource.closed
+
+
+def test_immediate_late_cleanup_handoff_waits_for_unpublished_resource() -> None:
+    factory_entered = Event()
+    release_factory = Event()
+
+    class Resource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    resource = Resource()
+
+    def factory(_: Container) -> Resource:
+        factory_entered.set()
+        assert release_factory.wait(timeout=5)
+        return resource
+
+    root = Container(shutdown_timeout=0.2)
+    root.bind(Resource, factory)
+
+    def resolve() -> None:
+        with pytest.raises(ScopeDisposed):
+            root.resolve(Resource)
+
+    worker = Thread(target=resolve, daemon=True)
+    worker.start()
+    assert factory_entered.wait(timeout=5)
+    with pytest.raises(ScopeDisposalError):
+        root.close()
+
+    async def handoff() -> None:
+        cleanup = asyncio.create_task(root.aclose())
+        await asyncio.sleep(0.01)
+        assert not cleanup.done()
+        assert not resource.closed
+        release_factory.set()
+        await asyncio.to_thread(worker.join, 5)
+        with pytest.raises(ScopeDisposalError):
+            await cleanup
+
+    asyncio.run(handoff())
     assert resource.closed
 
 
@@ -1388,15 +1432,14 @@ def test_concurrent_parent_and_child_cleanup_share_earliest_deadline() -> None:
                 await asyncio.Event().wait()
 
         root = DelayedRoot(shutdown_timeout=0.05)
-        root.bind(Resource, lambda _: Resource(), scope=Scope.INVOCATION)
-        invocation = root.application_scope().invocation_scope()
-        await invocation.__aenter__()
-        invocation.resolve(Resource)
+        root.bind(Resource, lambda _: Resource(), scope=Scope.APPLICATION)
+        application = root.application_scope()
+        application.resolve(Resource)
         started = asyncio.get_running_loop().time()
         parent_cleanup = asyncio.create_task(root.aclose())
         await root_waiting.wait()
         await asyncio.sleep(0.03)
-        child_cleanup = asyncio.create_task(invocation.aclose())
+        child_cleanup = asyncio.create_task(application.aclose())
         release_root.set()
         outcomes = await asyncio.wait_for(
             asyncio.gather(parent_cleanup, child_cleanup, return_exceptions=True),
@@ -1405,8 +1448,6 @@ def test_concurrent_parent_and_child_cleanup_share_earliest_deadline() -> None:
 
         assert asyncio.get_running_loop().time() - started < 0.08
         assert all(isinstance(outcome, ScopeDisposalError) for outcome in outcomes)
-        with pytest.raises(ScopeDisposalError):
-            await invocation.__aexit__(None, None, None)
 
     asyncio.run(scenario())
 
@@ -1476,16 +1517,11 @@ def test_parent_sync_close_defers_when_descendant_reveals_async_cleanup() -> Non
         return resource
 
     root = Container()
-    root.bind(AsyncResource, factory, scope=Scope.INVOCATION)
-    invocation = root.application_scope().invocation_scope()
+    root.bind(AsyncResource, factory, scope=Scope.APPLICATION)
+    application = root.application_scope()
 
     def resolve() -> AsyncResource:
-        invocation.__enter__()
-        try:
-            return invocation.resolve(AsyncResource)
-        finally:
-            with suppress(BaseException):
-                invocation.__exit__(None, None, None)
+        return application.resolve(AsyncResource)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         resolving = executor.submit(resolve)
@@ -1522,20 +1558,14 @@ def test_parent_sync_preflight_does_not_partially_clean_siblings() -> None:
         return AsyncResource()
 
     root = Container()
-    root.bind(AsyncResource, async_resource_factory, scope=Scope.INVOCATION)
+    root.bind(AsyncResource, async_resource_factory, scope=Scope.APPLICATION)
     root.bind(GoodResource, lambda _: GoodResource(), scope=Scope.APPLICATION)
     target_application = root.application_scope()
-    target_invocation = target_application.invocation_scope()
     good_application = root.application_scope()
     good_application.resolve(GoodResource)
 
     def resolve_target() -> AsyncResource:
-        target_invocation.__enter__()
-        try:
-            return target_invocation.resolve(AsyncResource)
-        finally:
-            with suppress(BaseException):
-                target_invocation.__exit__(None, None, None)
+        return target_application.resolve(AsyncResource)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         resolving = executor.submit(resolve_target)
@@ -1580,16 +1610,14 @@ def test_descendant_cannot_publish_while_ancestor_shutdown_is_in_progress() -> N
         return target
 
     root = Container()
-    root.bind(TargetResource, target_factory, scope=Scope.INVOCATION)
+    root.bind(TargetResource, target_factory, scope=Scope.APPLICATION)
     root.bind(BlockingResource, lambda _: BlockingResource(), scope=Scope.APPLICATION)
     target_application = root.application_scope()
-    target_invocation = target_application.invocation_scope()
     blocking_application = root.application_scope()
     blocking_application.resolve(BlockingResource)
 
     def resolve_target() -> TargetResource:
-        target_invocation.__enter__()
-        return target_invocation.resolve(TargetResource)
+        return target_application.resolve(TargetResource)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         resolving = executor.submit(resolve_target)
@@ -1623,18 +1651,16 @@ def test_broader_lifetime_result_is_not_delivered_through_disposed_requester() -
         return Service()
 
     root = Container()
-    root.bind(Service, factory, scope=Scope.APPLICATION)
+    root.bind(Service, factory, scope=Scope.SINGLETON)
     application = root.application_scope()
-    invocation = application.invocation_scope()
 
     def resolve() -> Service:
-        invocation.__enter__()
-        return invocation.resolve(Service)
+        return application.resolve(Service)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         resolving = executor.submit(resolve)
         assert entered.wait(timeout=5)
-        closing = executor.submit(invocation.close)
+        closing = executor.submit(application.close)
         assert not closing.done()
         release.set()
         with pytest.raises(ScopeDisposed):
@@ -1664,7 +1690,7 @@ def test_invocation_aclose_cancels_resolution_owned_by_broader_cache() -> None:
         resolving = invocation.create_task(invocation.resolve_async(Service))
         await entered.wait()
 
-        await asyncio.create_task(invocation.aclose())
+        await invocation.aclose()
         assert resolving.cancelled()
         await invocation.__aexit__(None, None, None)
 
@@ -1715,10 +1741,9 @@ def test_concurrent_child_and_parent_close_share_one_cleanup_flight() -> None:
             assert release.wait(timeout=5)
 
     root = Container()
-    root.bind(Resource, lambda _: Resource(), scope=Scope.INVOCATION)
-    invocation = root.application_scope().invocation_scope()
-    invocation.__enter__()
-    invocation.resolve(Resource)
+    root.bind(Resource, lambda _: Resource(), scope=Scope.APPLICATION)
+    application = root.application_scope()
+    application.resolve(Resource)
 
     def close(scope: Container) -> None:
         try:
@@ -1728,7 +1753,7 @@ def test_concurrent_child_and_parent_close_share_one_cleanup_flight() -> None:
         else:
             outcomes.put(None)
 
-    child_closing = Thread(target=close, args=(invocation,), daemon=True)
+    child_closing = Thread(target=close, args=(application,), daemon=True)
     parent_closing = Thread(target=close, args=(root,), daemon=True)
     child_closing.start()
     assert entered.wait(timeout=5)
@@ -1746,7 +1771,6 @@ def test_concurrent_child_and_parent_close_share_one_cleanup_flight() -> None:
     assert calls == 1
     assert outcomes.get_nowait() is None
     assert outcomes.get_nowait() is None
-    invocation.__exit__(None, None, None)
 
 
 def test_concurrent_sync_and_async_close_share_one_cleanup_flight() -> None:
@@ -1933,7 +1957,7 @@ def test_scope_owned_task_cannot_await_its_own_scope_shutdown() -> None:
     assert outcomes.get_nowait() is None
 
 
-def test_owned_tasks_require_cleanup_on_their_own_event_loop() -> None:
+def test_entered_invocation_rejects_cleanup_from_foreign_event_loop() -> None:
     ready = Event()
     loop_queue: Queue[asyncio.AbstractEventLoop] = Queue()
     release_queue: Queue[asyncio.Event] = Queue()
@@ -1973,7 +1997,7 @@ def test_owned_tasks_require_cleanup_on_their_own_event_loop() -> None:
     release = release_queue.get_nowait()
     invocation = invocation_queue.get_nowait()
     try:
-        with pytest.raises(InvalidBinding, match="event loop"):
+        with pytest.raises(InvalidBinding, match="external shutdown"):
             asyncio.run(invocation.aclose())
     finally:
         loop.call_soon_threadsafe(release.set)

@@ -1476,6 +1476,8 @@ class Container:
                 retained_for_cleanup = publishable or self._hierarchy_accepts_cleanup_resource()
                 if retained_for_cleanup:
                     self._record_resource_locked(resource)
+                elif not publishable:
+                    self._dispose_unpublished_resource(resource)
             except BaseException:
                 self._active_constructions -= 1
                 self._condition.notify_all()
@@ -1483,8 +1485,6 @@ class Container:
             if release or not publishable:
                 self._release_construction_locked()
         if not publishable:
-            if not retained_for_cleanup:
-                self._dispose_unpublished_resource(resource)
             raise ScopeDisposed("container scope was disposed during resolution")
 
     def _dispose_unpublished_resource(self, resource: _ResourceRecord | None) -> None:
@@ -1716,6 +1716,7 @@ class Container:
         current_task = self._current_asyncio_task()
         if current_task is not None and self._owns_task_in_tree(current_task):
             raise InvalidBinding("scope-owned task cannot close its owning scope")
+        self._assert_no_external_entry_owner_in_tree(current_task, get_ident())
         with self._condition:
             if self._state == "disposed" or self._state == "disposing":
                 close_future = self._close_future
@@ -1840,13 +1841,18 @@ class Container:
         finally:
             self._shutdown_coordinator.leave()
 
-    async def _aclose_coordinated(self) -> None:
+    async def _aclose_from_parent(self) -> None:
+        await self._aclose_coordinated(entry_authorized=True)
+
+    async def _aclose_coordinated(self, *, entry_authorized: bool = False) -> None:
         self._assert_shutdown_outside_factory()
         if any(scope._shutdown_lock is self._shutdown_lock for scope in _DISPOSAL_STACK.get()):
             raise InvalidBinding("scope cannot close from its disposal hierarchy")
         current_task = asyncio.current_task()
         if current_task is not None and self._owns_task_in_tree(current_task):
             raise InvalidBinding("scope-owned task cannot close its owning scope")
+        if not entry_authorized:
+            self._assert_no_external_entry_owner_in_tree(current_task, get_ident())
         loop = asyncio.get_running_loop()
         await self._drain_late_async_resources(loop)
         self._assert_async_cleanup_loop(loop)
@@ -1981,7 +1987,7 @@ class Container:
             resources = tuple(reversed(self._resources))
         for child in children:
             child._adopt_shutdown_deadline(self._shutdown_deadline)
-            child_cleanup = asyncio.create_task(child.aclose())
+            child_cleanup = asyncio.create_task(child._aclose_from_parent())
             done_children, _ = await asyncio.wait(
                 {child_cleanup}, timeout=self._remaining_shutdown_time()
             )
@@ -2110,7 +2116,7 @@ class Container:
         while True:
             with self._condition:
                 wait_for_constructions = bool(
-                    self._late_async_resources
+                    (self._late_async_resources or self._state == "disposed")
                     and (
                         self._active_constructions
                         or self._active_resolutions
@@ -2291,6 +2297,23 @@ class Container:
                 return True
             children = tuple(self._children)
         return any(child._owns_task_in_tree(task) for child in children)
+
+    def _assert_no_external_entry_owner_in_tree(
+        self,
+        task: asyncio.Task[Any] | None,
+        thread_id: int,
+    ) -> None:
+        with self._condition:
+            entry_task = self._entry_task
+            external_entry = self._entered and (
+                (entry_task is not None and not entry_task.done() and entry_task is not task)
+                or (entry_task is None and self._entry_thread_id != thread_id)
+            )
+            children = tuple(self._children)
+        if external_entry:
+            raise InvalidBinding("entered invocation must exit before external shutdown")
+        for child in children:
+            child._assert_no_external_entry_owner_in_tree(task, thread_id)
 
     def _assert_async_cleanup_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._condition:
