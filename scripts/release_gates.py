@@ -434,13 +434,27 @@ def _inspect_wheel(root: Path, wheel: Path, *, identity: ProjectIdentity) -> Non
             distribution = (
                 f"{canonicalize_name(identity.name).replace('-', '_')}-{identity.version}.dist-info"
             )
+            license_prefix = f"{distribution}/licenses/"
+            license_members = {name for name in contents if name.startswith(license_prefix)}
+            if not license_members:
+                raise ArtifactError("wheel contains no license files")
+            for name in license_members:
+                relative = name.removeprefix(license_prefix)
+                source_license = root / relative
+                if (
+                    not relative
+                    or "/" in relative
+                    or source_license.is_symlink()
+                    or not source_license.is_file()
+                    or contents[name] != source_license.read_bytes()
+                ):
+                    raise ArtifactError(f"wheel contains unexpected license file: {name}")
             generated = {
                 f"{distribution}/METADATA",
                 f"{distribution}/WHEEL",
                 f"{distribution}/entry_points.txt",
                 f"{distribution}/RECORD",
-                f"{distribution}/licenses/LICENSE",
-            }
+            } | license_members
             source_files = _source_files(root)
             expected_package = {f"af/{name}" for name in source_files}
             expected = expected_package | generated
@@ -463,6 +477,10 @@ def _inspect_wheel(root: Path, wheel: Path, *, identity: ProjectIdentity) -> Non
                 raise ArtifactError("wheel version does not match pyproject.toml")
             if metadata.get("Requires-Python") != identity.requires_python:
                 raise ArtifactError("wheel Python requirement does not match pyproject.toml")
+            declared_licenses = {Path(value).name for value in metadata.get_all("License-File", [])}
+            packaged_licenses = {name.removeprefix(license_prefix) for name in license_members}
+            if declared_licenses != packaged_licenses:
+                raise ArtifactError("wheel license metadata does not match packaged files")
             if (
                 _normalize_requirements(metadata.get_all("Requires-Dist", []), "wheel dependencies")
                 != identity.dependencies

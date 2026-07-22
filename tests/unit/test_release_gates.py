@@ -176,6 +176,7 @@ def _write_distribution_fixture(
         f"Name: {project['name']}",
         f"Version: {version}",
         f"Requires-Python: {project['requires-python']}",
+        "License-File: LICENSE",
     ]
     if not omit_dependency_metadata:
         metadata_lines.extend(f"Requires-Dist: {item}" for item in project["dependencies"])
