@@ -1281,7 +1281,10 @@ class Container:
             )
             with mask:
                 try:
-                    value = await factory(factory_resolver)
+                    result = factory(factory_resolver)
+                    if not isawaitable(result):
+                        raise InvalidBinding("async factory must return an awaitable")
+                    value = await result
                 except BaseException:
                     owner._abandon_construction()
                     raise
@@ -2589,13 +2592,13 @@ class Container:
             raise InvalidBinding("binding factory must be callable")
         if not isinstance(scope, Scope):
             raise InvalidBinding("binding scope must be a Scope")
-        try:
-            call = type.__getattribute__(type(factory), "__call__")
-        except BaseException:
-            call = None
-        is_async = iscoroutinefunction(factory) or iscoroutinefunction(call)
-        if is_async is not expect_async:
-            raise InvalidBinding("factory async mode does not match binding API")
+        if not expect_async:
+            try:
+                call = type.__getattribute__(type(factory), "__call__")
+            except BaseException:
+                call = None
+            if iscoroutinefunction(factory) or iscoroutinefunction(call):
+                raise InvalidBinding("factory async mode does not match binding API")
 
     def _nearest_scope(self, scope: Scope) -> Container | None:
         current: Container | None = self

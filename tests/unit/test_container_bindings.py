@@ -356,12 +356,17 @@ def test_key_tag_and_freeze_validation_rejects_malformed_declarations() -> None:
     with pytest.raises(ServiceNotBound) as missing:
         container.resolve_token("private-token")
     assert "private-token" not in str(missing.value)
+    assert "string token" in str(missing.value)
     assert missing.value.__cause__ is None
     assert missing.value.__context__ is None
-    with pytest.raises(ServiceNotBound):
+    with pytest.raises(ServiceNotBound) as tag_miss:
         container.resolve_tagged("missing")
-    with pytest.raises(ServiceNotBound):
+    assert "tag" in str(tag_miss.value)
+    assert "missing" not in str(tag_miss.value)
+    with pytest.raises(ServiceNotBound) as async_tag_miss:
         asyncio.run(container.resolve_tagged_async("missing"))
+    assert "tag" in str(async_tag_miss.value)
+    assert "missing" not in str(async_tag_miss.value)
     with pytest.raises(InvalidBinding, match="tag name"):
         container.resolve_tagged([])  # type: ignore[arg-type]
     with pytest.raises(InvalidBinding, match="tag name"):
@@ -385,6 +390,37 @@ def test_missing_binding_error_does_not_execute_hostile_token_name() -> None:
         Container().resolve(SecretService)
 
     assert "private metaclass evidence" not in str(captured.value)
+
+
+def test_service_not_bound_message_is_informative_and_non_secret_bearing() -> None:
+    """Error messages distinguish categories without leaking token contents."""
+    container = Container()
+
+    # Tag miss: message says "tag", not the actual tag name
+    with pytest.raises(ServiceNotBound) as tag_err:
+        container.resolve_tagged("secret-tag-name")
+    tag_message = str(tag_err.value)
+    assert "tag" in tag_message
+    assert "secret-tag-name" not in tag_message
+
+    # Async tag miss: same guarantee
+    with pytest.raises(ServiceNotBound) as async_tag_err:
+        asyncio.run(container.resolve_tagged_async("another-secret-tag"))
+    async_tag_message = str(async_tag_err.value)
+    assert "tag" in async_tag_message
+    assert "another-secret-tag" not in async_tag_message
+
+    # Generic string token miss: message says "string token", not the value
+    with pytest.raises(ServiceNotBound) as str_err:
+        container.resolve_token("secret-service-name")
+    str_message = str(str_err.value)
+    assert "string token" in str_message
+    assert "secret-service-name" not in str_message
+
+    # Type token miss: still uses the type name (existing behaviour)
+    with pytest.raises(ServiceNotBound) as type_err:
+        container.resolve(Store)
+    assert "Store" in str(type_err.value)
 
 
 def test_registry_rejects_hostile_qualifier_and_service_key_subclasses() -> None:
@@ -444,18 +480,13 @@ def test_contextual_resolution_frames_do_not_cross_container_boundaries() -> Non
     assert consumer_container.resolve(Consumer).store is default
 
 
-def test_sync_and_async_factories_cannot_cross_resolution_modes() -> None:
+def test_sync_bind_rejects_coroutine_function_at_registration_time() -> None:
     async def async_factory(_: Container) -> Store:
-        return Store()
-
-    def sync_factory(_: Container) -> Store:
         return Store()
 
     container = Container()
     with pytest.raises(InvalidBinding, match="async"):
         container.bind(Store, async_factory)  # type: ignore[arg-type]
-    with pytest.raises(InvalidBinding, match="async"):
-        container.bind_async(Store, sync_factory)  # type: ignore[arg-type]
 
 
 def test_async_callable_object_is_a_valid_async_factory() -> None:
@@ -467,6 +498,52 @@ def test_async_callable_object_is_a_valid_async_factory() -> None:
     container.bind_async(Store, AsyncStoreFactory())
 
     assert isinstance(asyncio.run(container.resolve_async(Store)), Store)
+
+
+def test_bind_async_accepts_wrapper_returning_coroutine() -> None:
+    """A normal callable that wraps and returns a coroutine is a valid AsyncFactory."""
+
+    async def _inner(_: object) -> Store:
+        return Store()
+
+    def wrapper(resolver: object) -> object:
+        return _inner(resolver)
+
+    container = Container()
+    container.bind_async(Store, wrapper)
+
+    assert isinstance(asyncio.run(container.resolve_async(Store)), Store)
+
+
+def test_bind_async_accepts_callable_returning_asyncio_future() -> None:
+    """A normal callable returning an asyncio.Future satisfies the AsyncFactory contract."""
+
+    def future_factory(_: object) -> asyncio.Future[Store]:
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future[Store] = loop.create_future()
+        future.set_result(Store())
+        return future
+
+    async def scenario() -> Store:
+        container = Container()
+        container.bind_async(Store, future_factory)
+        return await container.resolve_async(Store)
+
+    assert isinstance(asyncio.run(scenario()), Store)
+
+
+def test_bind_async_non_awaitable_return_fails_at_invocation_not_registration() -> None:
+    """bind_async accepts any callable; a non-awaitable result fails at invocation."""
+
+    def non_awaitable_factory(_: object) -> Store:
+        return Store()
+
+    container = Container()
+    # Must not raise at registration time
+    container.bind_async(Store, non_awaitable_factory)
+
+    with pytest.raises(InvalidBinding, match="awaitable"):
+        asyncio.run(container.resolve_async(Store))
 
 
 def test_disposed_scopes_reject_empty_tags_and_override_forks_do_not_duplicate_ownership() -> None:

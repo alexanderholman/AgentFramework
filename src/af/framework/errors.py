@@ -150,6 +150,8 @@ class InvalidBinding(AFError):
 
 
 def _safe_type_label(value: object) -> str:
+    if type(value) is str:
+        return "tag" if value.startswith("tag:") else "string token"
     candidate = value if isinstance(value, type) else type(value)
     try:
         label = type.__getattribute__(candidate, "__name__")
