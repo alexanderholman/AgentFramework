@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
 from af.application.tasks import TaskController, TaskService
-from af.config import Settings
+from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
 from af.domain.agent_routing import DeterministicAgentRouter
 from af.domain.classifiers import (
     CharacterCountClassifier,
@@ -136,6 +136,7 @@ class _ApplicationProvider(ServiceProvider):
 @dataclass(frozen=True, slots=True)
 class AFApplication:
     settings: Settings
+    config: ConfigSnapshot
     container: Container
     agent: PipelineAgent
     tasks: TaskController
@@ -147,13 +148,23 @@ class AFApplication:
 def create_application(
     *,
     settings: Settings | None = None,
+    config: ConfigSnapshot | None = None,
     task_repository: TaskRepository | None = None,
     trace_repository: TraceRepository | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
 ) -> AFApplication:
     """Build an isolated application; tests and hosts can replace any provider."""
-    resolved_settings = settings or Settings.from_environment()
+    if settings is not None and config is not None:
+        raise ValueError("provide settings or config, not both")
+    resolved_config = (
+        config
+        if config is not None
+        else ConfigSnapshot.explicit(settings)
+        if settings is not None
+        else load_settings(EnvironmentConfigSource())
+    )
+    resolved_settings = resolved_config.settings
     selector_metadata = _resolve_selector_metadata(selector)
     selector_confidence_threshold = _resolve_selector_confidence_threshold(
         resolved_settings.selector_confidence_threshold
@@ -168,6 +179,7 @@ def create_application(
         )
     container = Container()
     container.instance(Settings, resolved_settings)
+    container.instance(ConfigSnapshot, resolved_config)
     providers: tuple[ServiceProvider, ...] = (
         _PersistenceProvider(resolved_settings, task_repository, trace_repository),
         _FrameworkProvider(
@@ -185,6 +197,7 @@ def create_application(
 
     return AFApplication(
         settings=resolved_settings,
+        config=resolved_config,
         container=container,
         agent=container.resolve(PipelineAgent),
         tasks=container.resolve(TaskController),
