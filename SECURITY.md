@@ -23,3 +23,9 @@ timing will be agreed according to severity and available capacity.
 
 Until the documented authentication and authorization work is complete, the MCP HTTP
 transport is for loopback development only and must not be exposed publicly.
+
+The same restriction applies to HTML, REST, GraphQL, and OpenAPI. Repository privacy,
+trusted-host checks, and allowed-origin checks do not authenticate a caller. See the
+[private production-MVP profile](docs/production-mvp.md) for the dedicated-account
+loopback/stdio trust boundary, required deployment evidence, and release-blocking security,
+recovery, and operations controls.
