@@ -142,6 +142,13 @@ _ENV_NAMES = {
     "AF_ALLOW_REMOTE_INFERENCE": "allow_remote_inference",
     "AF_SELECTOR_CONFIDENCE_THRESHOLD": "selector_confidence_threshold",
 }
+_NON_CONFIG_ENV_NAMES = frozenset(
+    {
+        "AF_APPEND_ONLY_BASE_REF",
+        "AF_APPEND_ONLY_HEAD_REF",
+        "AF_APPEND_ONLY_BASE_STRATEGY",
+    }
+)
 
 
 def load_settings(
@@ -158,7 +165,9 @@ def load_settings(
                 unknown_environment = {
                     name
                     for name in source.environ
-                    if name.startswith("AF_") and name not in _ENV_NAMES
+                    if name.startswith("AF_")
+                    and name not in _ENV_NAMES
+                    and name not in _NON_CONFIG_ENV_NAMES
                 }
                 if unknown_environment:
                     raise PlatformError(

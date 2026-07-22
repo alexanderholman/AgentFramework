@@ -116,6 +116,17 @@ def test_unknown_profile_and_malformed_environment_fail_closed() -> None:
     assert unknown_environment.value.reason is PlatformReason.CONFIGURATION_INVALID
     assert "secret-value" not in repr(unknown_environment.value)
 
+    operational = load_settings(
+        EnvironmentConfigSource(
+            {
+                "AF_APPEND_ONLY_BASE_REF": "base",
+                "AF_APPEND_ONLY_HEAD_REF": "head",
+                "AF_APPEND_ONLY_BASE_STRATEGY": "merge-base",
+            }
+        )
+    )
+    assert operational.settings == Settings()
+
 
 @pytest.mark.parametrize(
     "values",
