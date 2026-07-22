@@ -251,6 +251,7 @@ class ProjectIdentity:
     version: str
     requires_python: str
     dependencies: tuple[tuple[object, ...], ...]
+    extras: tuple[str, ...]
     scripts: tuple[tuple[str, str], ...]
 
 
@@ -308,13 +309,30 @@ def _identity_from_project_table(project: object, location: str) -> ProjectIdent
         )
     ):
         raise ArtifactError(f"{location} project scripts must be a non-empty mapping")
+    requirements = project.get("dependencies")
+    if not isinstance(requirements, list):
+        raise ArtifactError(f"{location} dependencies must be a list")
+    all_requirements = list(requirements)
+    optional = project.get("optional-dependencies", {})
+    if not isinstance(optional, dict):
+        raise ArtifactError(f"{location} optional dependencies must be a mapping")
+    for extra, extra_requirements in optional.items():
+        if not isinstance(extra, str) or not extra or not isinstance(extra_requirements, list):
+            raise ArtifactError(f"{location} optional dependencies are invalid")
+        for requirement in extra_requirements:
+            if not isinstance(requirement, str):
+                raise ArtifactError(f"{location} optional dependencies are invalid")
+            if ";" in requirement:
+                base, marker = requirement.split(";", maxsplit=1)
+                all_requirements.append(f"{base}; ({marker.strip()}) and extra == '{extra}'")
+            else:
+                all_requirements.append(f"{requirement}; extra == '{extra}'")
     return ProjectIdentity(
         name=name,
         version=version,
         requires_python=requires_python,
-        dependencies=_normalize_requirements(
-            project.get("dependencies"), f"{location} dependencies"
-        ),
+        dependencies=_normalize_requirements(all_requirements, f"{location} dependencies"),
+        extras=tuple(sorted(canonicalize_name(extra) for extra in optional)),
         scripts=tuple(sorted(scripts.items())),
     )
 
@@ -486,6 +504,11 @@ def _inspect_wheel(root: Path, wheel: Path, *, identity: ProjectIdentity) -> Non
                 != identity.dependencies
             ):
                 raise ArtifactError("wheel dependencies do not match pyproject.toml")
+            wheel_extras = tuple(
+                sorted(canonicalize_name(value) for value in metadata.get_all("Provides-Extra", []))
+            )
+            if wheel_extras != identity.extras:
+                raise ArtifactError("wheel extras do not match pyproject.toml")
 
             entry_points = configparser.ConfigParser(interpolation=None)
             entry_points.optionxform = str

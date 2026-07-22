@@ -154,6 +154,8 @@ def _write_distribution_fixture(
     duplicate_wheel_path: str | None = None,
     duplicate_sdist_path: str | None = None,
     omit_dependency_metadata: bool = False,
+    omit_optional_dependency_metadata: bool = False,
+    omit_extra_metadata: bool = False,
     omit_record: bool = False,
     tamper_sdist_path: str | None = None,
 ) -> tuple[Path, Path]:
@@ -178,8 +180,17 @@ def _write_distribution_fixture(
         f"Requires-Python: {project['requires-python']}",
         "License-File: LICENSE",
     ]
+    if not omit_extra_metadata:
+        metadata_lines.extend(
+            f"Provides-Extra: {extra}" for extra in project.get("optional-dependencies", {})
+        )
     if not omit_dependency_metadata:
         metadata_lines.extend(f"Requires-Dist: {item}" for item in project["dependencies"])
+        if not omit_optional_dependency_metadata:
+            for extra, requirements in project.get("optional-dependencies", {}).items():
+                metadata_lines.extend(
+                    f"Requires-Dist: {item}; extra == '{extra}'" for item in requirements
+                )
     wheel_files[f"{dist_info}/METADATA"] = ("\n".join(metadata_lines) + "\n").encode()
     wheel_files[f"{dist_info}/entry_points.txt"] = (
         "[console_scripts]\n"
@@ -423,6 +434,32 @@ def test_distribution_inspection_rejects_dependency_metadata_drift(tmp_path: Pat
         assert "wheel dependencies do not match pyproject.toml" in str(exc)
     else:
         raise AssertionError("wheel dependency drift was accepted")
+
+
+def test_distribution_inspection_rejects_optional_dependency_metadata_drift(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, omit_optional_dependency_metadata=True)
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "wheel dependencies do not match pyproject.toml" in str(exc)
+    else:
+        raise AssertionError("wheel optional dependency drift was accepted")
+
+
+def test_distribution_inspection_rejects_extra_metadata_drift(tmp_path: Path) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, omit_extra_metadata=True)
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "wheel extras do not match pyproject.toml" in str(exc)
+    else:
+        raise AssertionError("wheel extra metadata drift was accepted")
 
 
 def test_distribution_inspection_rejects_foreign_top_level_package(tmp_path: Path) -> None:
