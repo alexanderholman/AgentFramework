@@ -1705,3 +1705,67 @@ Ideon into that contract would lose type, revision, provenance, and non-closure 
 - Added: "src/af/interfaces/ideons.py"
 
 ---
+
+---
+
+## [DEC-031] Correction Pass: Provenance Separation, Temporal Model, and Inquiry Scope
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of the initial Ideon reference slice (DEC-030) identified six semantic errors:
+WILL naming embedded in temporal model; WHO spuriously material for all predicateless
+utterances; source ID/rights contaminating semantic graph canonical bytes; temporal future
+encoded as WHERN rather than as a qualification on propositions; constructed keys
+undocumented as identity codes; and inquiry coverage overclaimed.
+
+### Decision
+1. Rename `Tense.WILL` to `Tense.PROJECTED` throughout; temporal modality is
+   `WAS < IS > PROJECTED` attached to propositions/relations/context.
+2. Rename `WillKind` → `AuxiliaryKind`, `will_kind` → `auxiliary_kind`.
+3. Reclassify `will.future-auxiliary` dictionary sense from WHERN slot to WHEN slot.
+   WHERN remains for criterion-conditioned temporality only.
+4. Make WHO material-open only when at least one predicate (action/state/relation) is
+   present in viable candidates; otherwise NOT_APPLICABLE.
+5. Remove source ID and rights from semantic graph annotations and provenance.
+   They belong exclusively in `InterpretationRecord` (occurrence provenance).  A
+   regression test verifies that same semantics from different sources share a revision.
+6. Document constructed arbitrary-precision keys as canonical identity codes in
+   `numeric.py`; note that compact manifested registry addresses are future work.
+7. Update inquiry module docstring to state which attentions are implemented (seven)
+   and which are represented but not yet evaluated (four).
+
+### Alternatives Considered
+- **Preserve WILL as a question attention for future tense:** rejected per Alexander's
+  explicit instruction; temporality qualifies propositions, it is not an isolated inquiry.
+- **Keep source ID in graph annotations with a flag to exclude from canonical bytes:**
+  rejected; provenance and semantics must be separate layers with no coupling.
+- **Mark WHO as NOT_APPLICABLE instead of OPEN for all sentences without context.actor:**
+  rejected; WHO is genuinely open (and material) when a predicate requires an agent.
+
+### Consequences
+- Semantically identical utterances from different sources now share graph revisions.
+- Temporal perspective is uniformly represented as proposition qualification.
+- Inquiry coverage claims accurately match the implemented rules.
+- All seven implemented attentions allow OPEN/CONTESTED/SATISFIED/NOT_APPLICABLE.
+- WHY, HOW, COULD, and WOULD remain structurally present but output NOT_APPLICABLE until
+  their procedural rules are implemented.
+
+### Related Decisions
+- DEC-030 (Add Ideons as a Typed Bounded Context Before Neural Routes)
+
+### Related Specs
+- SPEC-016, SPEC-017
+
+### Output References
+- Modified: `src/af/domain/ideons/temporal.py`
+- Modified: `src/af/domain/ideons/inquiry.py`
+- Modified: `src/af/domain/ideons/numeric.py`
+- Modified: `src/af/application/ideons.py`
+- Modified: `src/af/infrastructure/ideon_reference.py`
+- Modified: `tests/unit/test_ideon_language.py`
+- Modified: `tests/unit/test_ideon_service.py`
+- Modified: `docs/prime-language-ideon-implementation.md`
+
+---

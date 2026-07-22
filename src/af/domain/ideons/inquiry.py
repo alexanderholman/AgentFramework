@@ -1,4 +1,10 @@
-"""Eleven-question inquiry state and deterministic ask/answer/stop rules."""
+"""Inquiry state and deterministic ask/answer/stop rules.
+
+Eleven questions are structurally present in every InquiryState.  Deterministic
+behaviour is implemented for WHO, WHAT, WHERE, WHEN, WHERN, IS, and SHOULD.
+WHY, HOW, COULD, and WOULD default to NOT_APPLICABLE until their respective
+procedural rules are added; they are represented but not yet evaluated.
+"""
 
 from __future__ import annotations
 
@@ -32,21 +38,42 @@ class InquiryEngine:
             question: InquiryResult(question, InquiryStatus.NOT_APPLICABLE)
             for question in QUESTIONS
         }
-        actor = context.get("actor")
-        results[Question.WHO] = InquiryResult(
-            Question.WHO,
-            InquiryStatus.SATISFIED if actor else InquiryStatus.OPEN,
-            role="actor",
-            required_information=None if actor else "the actor inherited by the utterance",
-            material=not bool(actor),
-            evidence=(f"context:actor={actor}",) if actor else ("missing:actor",),
-        )
 
         word_candidate_sets = tuple(
             candidate_set
             for index, candidate_set in enumerate(candidates)
             if forms.forms[index].form_type == "word-form"
         )
+
+        # Derive predicate presence from viable candidates before evaluating WHO.
+        has_predicate = any(
+            candidate.entry.semantic_type in {"action", "state", "relation"}
+            for candidate_set in word_candidate_sets
+            for candidate in candidate_set.viable
+        )
+
+        # WHO: only materially open when a predicate is present that requires an agent.
+        # Distinguish: agent present → SATISFIED; predicate present but no agent → OPEN
+        # (material); no predicate → NOT_APPLICABLE (nothing requires an actor).
+        actor = context.get("actor")
+        if actor:
+            results[Question.WHO] = InquiryResult(
+                Question.WHO,
+                InquiryStatus.SATISFIED,
+                role="actor",
+                evidence=(f"context:actor={actor}",),
+            )
+        elif has_predicate:
+            results[Question.WHO] = InquiryResult(
+                Question.WHO,
+                InquiryStatus.OPEN,
+                role="actor",
+                required_information="the actor inherited by the utterance",
+                material=True,
+                evidence=("missing:actor",),
+            )
+        # else: leave WHO as NOT_APPLICABLE (default)
+
         unknown = tuple(
             candidate_set for candidate_set in word_candidate_sets if not candidate_set.viable
         )
@@ -107,11 +134,6 @@ class InquiryEngine:
                 evidence=(f"context:criterion={context.get('criterion')}",),
             )
 
-        has_predicate = any(
-            candidate.entry.semantic_type in {"action", "state", "relation"}
-            for candidate_set in word_candidate_sets
-            for candidate in candidate_set.viable
-        )
         results[Question.IS] = InquiryResult(
             Question.IS,
             InquiryStatus.SATISFIED if has_predicate else InquiryStatus.OPEN,

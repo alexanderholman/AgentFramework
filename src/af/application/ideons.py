@@ -197,18 +197,17 @@ class IdeonService:
             context=identity_context,
             roots=tuple(roots),
         )
+        # Source ID and rights belong in InterpretationRecord (occurrence provenance), not in
+        # the semantic graph.  Including them here would create a new graph revision for every
+        # new source even when the semantic topology is identical.  The ``construct_graph``
+        # signature retains those parameters so callers can audit the split boundary, but they
+        # are not written into the graph.
         annotations = [
             Property("profile", self._profile.identifier),
             Property("selected-key-count", len(selected_keys)),
             Property("surface", forms.surface),
         ]
         provenance = ["language-profile:" + self._profile.identifier]
-        if source_id is not None:
-            annotations.append(Property("source-id", source_id))
-            provenance.append("source:" + source_id)
-        if rights is not None:
-            annotations.append(Property("rights", rights))
-            provenance.append("rights:" + rights)
         return IdeonGraph(
             identity=identity,
             nodes=tuple(nodes),

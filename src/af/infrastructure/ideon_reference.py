@@ -76,7 +76,7 @@ _SEED_SENSES = (
         29,
         ("will",),
         "relation",
-        Question.WHERN,
+        Question.WHEN,
         (("mode", "temporal"),),
     ),
     _SeedSense(

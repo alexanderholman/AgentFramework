@@ -1,4 +1,9 @@
-"""Pure Whern and temporal-perspective rules."""
+"""Pure Whern and temporal-perspective rules.
+
+Temporal modality attaches to propositions, relations, and context rather than being
+encoded as a privileged inquiry attention.  The three tense values map directly to the
+``WAS < IS > PROJECTED`` qualification axis: past, present, and future/projected states.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +13,45 @@ from enum import StrEnum
 
 
 class Tense(StrEnum):
+    """Temporal perspective relative to a declared reference Whern.
+
+    ``WAS`` and ``IS`` record attested states; ``PROJECTED`` represents a future or
+    projected state.  All three qualify propositions and relations in context rather
+    than serving as an isolated inquiry attention.
+    """
+
     WAS = "was"
     IS = "is"
-    WILL = "will"
+    PROJECTED = "projected"
 
 
-class WillKind(StrEnum):
+class AuxiliaryKind(StrEnum):
+    """Semantic category of a resolved auxiliary relation, not the surface token.
+
+    Use this to classify the *resolved* relation name (e.g. ``future-state``,
+    ``intends``) after dictionary disambiguation, not the ambiguous surface form.
+    """
+
     TEMPORAL = "temporal"
     VOLITIONAL = "volitional"
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalQualification:
+    """A tense qualification that attaches to a proposition or relation node.
+
+    Attach an instance of this to a graph node's context rather than treating
+    past/present/future modality as a separate inquiry question.
+    """
+
+    tense: Tense
+    whern: Whern
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tense, Tense):
+            raise TypeError("tense must be a Tense")
+        if not isinstance(self.whern, Whern):
+            raise TypeError("whern must be a Whern")
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +75,12 @@ class Whern:
 
 
 def render_tense(event: Whern, reference: Whern) -> Tense:
+    """Render the tense of *event* relative to a *reference* Whern.
+
+    Returns ``WAS`` when the event precedes the reference perspective, ``IS`` when
+    they coincide, and ``PROJECTED`` when the event follows it.  The result qualifies
+    the proposition or relation that the event Whern is attached to.
+    """
     event_time = event.temporal_anchor
     reference_time = reference.reference_perspective or reference.temporal_anchor
     if event_time is None or reference_time is None:
@@ -48,14 +90,18 @@ def render_tense(event: Whern, reference: Whern) -> Tense:
     if event_time < reference_time:
         return Tense.WAS
     if event_time > reference_time:
-        return Tense.WILL
+        return Tense.PROJECTED
     return Tense.IS
 
 
-def will_kind(relation: str) -> WillKind:
-    """Classify a resolved relation, not the ambiguous surface token ``will``."""
+def auxiliary_kind(relation: str) -> AuxiliaryKind:
+    """Classify a resolved relation, not the ambiguous surface token.
+
+    Pass the *resolved* relation name after dictionary disambiguation (e.g.
+    ``future-state`` or ``intends``), not the raw surface form.
+    """
     if relation in {"future-state", "future-event"}:
-        return WillKind.TEMPORAL
+        return AuxiliaryKind.TEMPORAL
     if relation in {"intends", "wants", "commits"}:
-        return WillKind.VOLITIONAL
-    raise ValueError(f"unresolved will relation: {relation!r}")
+        return AuxiliaryKind.VOLITIONAL
+    raise ValueError(f"unresolved auxiliary relation: {relation!r}")

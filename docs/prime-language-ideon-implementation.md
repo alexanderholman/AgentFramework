@@ -19,7 +19,7 @@ The slice includes:
 - deterministic canonical serialisation, order-sensitive composition, identity-bearing context, and graph revision derivation;
 - a registry that interns, deduplicates, and resolves Ideons without treating their numeric keys as their meanings;
 - a minimal, concrete, versioned English logical dictionary sufficient for the controlled acceptance fixtures, including both senses of `bank`;
-- construction of complete or open Ideons, all eleven inquiry fields, and deterministic ask/answer/stop decisions for declared fixtures;
+- construction of complete or open Ideons, all eleven inquiry fields (seven with deterministic behaviour; four represented but not yet evaluated), and deterministic ask/answer/stop decisions for declared fixtures;
 - exact structured records shared by the implemented REST and CLI adapters; and
 - an in-memory persistence adapter for unit and conformance testing.
 
@@ -29,7 +29,10 @@ The current AF generic procedure pipeline is string-oriented. It is not the auth
 
 - This is a controlled reference slice, not a general English parser, complete dictionary, or claim of language understanding.
 - Dictionary entries and equivalences are declared. Paraphrase identity is not inferred or learned.
-- All eleven inquiry slots can be represented, but this slice does not establish broad linguistic accuracy for any specialist attention.
+- Seven inquiry attentions (WHO, WHAT, WHERE, WHEN, WHERN, IS, SHOULD) have conservative deterministic behaviour in this slice; WHY, HOW, COULD, and WOULD are structurally represented but their procedural rules are not yet implemented (they default to NOT_APPLICABLE).
+- Temporal modality (`WAS < IS > PROJECTED`) attaches to propositions, relations, and context via the `Tense`/`TemporalQualification` values; it is not encoded as a privileged inquiry attention.  `WHERN` is reserved for criterion-conditioned temporality, not simple future anchoring.  The surface token `will` is classified into temporal (→ WHEN question slot) or volitional (→ WHAT) by contextual disambiguation after dictionary lookup.
+- Source ID, rights declaration, and original surface belong in `InterpretationRecord`; they must not create a new semantic graph revision when the topology and identity are unchanged.
+- Constructed non-prime keys are large injective integers that serve as canonical *identity codes*, not compact operational or database IDs.  Compact manifested registry addresses remain a follow-up concern.
 - Support for edge and relation-node forms does not yet imply that arbitrary instances of those forms are automatically semantically equivalent.
 - The in-memory registry uses a lock for atomic process-local operations, but it is not durable, distributed production storage. Its namespace is local to the configured registry snapshot.
 - Identity canonicalisation is schema- and ruleset-relative. Its constructed-key codec is injective, but that does not imply semantic correctness or universal identity; SHA-256 revision collisions are detected as explicit conflicts.
@@ -97,14 +100,16 @@ Given an interpretation request, the implemented application service performs th
 3. Request every matching controlled-dictionary sense in deterministic order.
 4. Run the eleven inquiry templates over those forms/candidates and supplied context.
 5. Decide `ask`, `answer`, `act`, `stop`, or `continue-reading`, recording rules, evidence, and the active SHOULD threshold policy.
-6. Construct the complete or open graph from forms, viable candidates, openings, context, source, and rights.
+6. Construct the complete or open semantic graph from forms, viable candidates, openings, and identity-bearing context.  Source ID and rights are **not** written into the graph; they remain in the occurrence-provenance layer (`InterpretationRecord`).
 7. Canonicalise, validate, and intern the graph, then emit its `(key, revision)` in the canonical runtime record.
+
+The semantic graph is source-independent: two requests carrying identical surface/context but different source IDs or rights declarations resolve to the **same** graph revision while producing distinct `InterpretationRecord` values.  This is verified by a dedicated regression test.
 
 Whern rendering, declared-equivalence construction, exact resolve/byte comparison, compact/reified relations, and semantic-island behavior are exercised by focused conformance tests, but `interpret()` does not yet invoke all of those helpers automatically.
 
-Every source of apparent nondeterminism must be an input: dictionary/ruleset version, registry snapshot, clock/reference Whern, locale, ordering, and policy thresholds. Operational timestamps and logs remain outside canonical semantic bytes. With those inputs fixed, repeated output records must be byte-identical.
+Every source of apparent nondeterminism must be an input: dictionary/ruleset version, registry snapshot, clock/reference Whern, locale, ordering, and policy thresholds. Operational timestamps, source IDs, and rights declarations remain outside canonical semantic bytes. With those inputs fixed, repeated output records must be byte-identical.
 
-For `sat on the bank`, absence of an actor creates a WHO opening and the declared river-edge and financial senses remain candidates unless context selects one. If the distinction matters to the closure contract, the result is an open Ideon with `decision = ask`; it must not guess.
+For `sat on the bank`, absence of an actor creates a WHO opening **only because a predicate (action `sat`) is present**.  An utterance with no action/state/relation leaves WHO as NOT_APPLICABLE rather than spuriously material.  The declared river-edge and financial senses remain candidates unless context selects one; the result is an open Ideon with `decision = ask` and it must not guess.
 
 ## Application API contract
 
@@ -158,8 +163,8 @@ unit/API suite. It does not establish broad linguistic accuracy beyond those fix
 |---:|---|---|---|
 | 1 | `sat on the bank`: absent actor and ambiguous bank | Verified in focused suite | WHO opening, both bank senses retained without context, and deterministic `ask` when material |
 | 2 | `the dictionary 2nd edition` vs reordered surface | Verified in focused suite | Preserved source order, different ordered graph structures, and different identity payloads |
-| 3 | One event rendered as was/is/will under three Wherns | Verified in focused suite | The pure temporal rule produces deterministic tense views for three explicit reference Wherns; full graph realisation is not claimed |
-| 4 | Temporal `will be` vs volitional `will/intends` | Verified in focused suite | The controlled rule and dictionary fixtures distinguish future auxiliary from intention; broad parsing is not claimed |
+| 3 | One event rendered as was/is/projected under three Wherns | Verified in focused suite | The pure temporal rule produces deterministic tense views (WAS/IS/PROJECTED) for three explicit reference Wherns; full graph realisation is not claimed |
+| 4 | Temporal `will be` vs volitional `will/intends` | Verified in focused suite | The controlled rule and dictionary fixtures classify the resolved relation into temporal (WHEN slot) or volitional (WHAT slot) after disambiguation; broad parsing is not claimed |
 | 5 | Prime dictionary Ideon reused in composites | Verified in focused suite | Several composites contain the same exact prime `IdeonRef`, not copied graphs |
 | 6 | `C[A,B] != C[B,A]` | Verified in focused suite | Different canonical identity bytes and stable keys |
 | 7 | Multiple semantic islands | Verified in focused suite | One valid bounded Ideon retains multiple disconnected components |
@@ -173,21 +178,14 @@ unit/API suite. It does not establish broad linguistic accuracy beyond those fix
 
 Tests for graph identity, revision history, exact-reference resolution, zero reservation, collision/conflict handling, and immutable return values are supporting conformance tests even where they do not correspond one-to-one with an item above.
 
-Executed verification for this slice:
+Executed verification for this slice (correction pass):
 
 ```text
-86 passed
-91% focused branch coverage across the new Ideon domain, application, infrastructure, and REST modules
-Ruff check: passed
-strict mypy: passed for all 45 source modules
-full reconstructed checkout: 374 passed, one history-dependent governance test unavailable
-full reconstructed checkout branch coverage: 91.00%
-Node route-gate tests: 9 passed
-governance content checks: 22 passed (append-only history check skipped without a Git checkout)
-wheel and source distribution build: passed
+88 passed (focused Ideon suite, +2 regression tests for provenance-separation and temporal qualification)
+strict mypy: no issues in 51 source files
+ruff check + format: passed
+full suite (excluding pre-existing yaml subprocess issue): 358 passed
 ```
-
-The complete repository gate remains the authority after the branch is evaluated in a genuine Git checkout; the one unavailable local test requires historical repository SHAs.
 
 ## Persistence evolution
 

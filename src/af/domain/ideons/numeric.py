@@ -1,4 +1,12 @@
-"""Limit-independent text encodings for arbitrary-precision Ideon numbers."""
+"""Limit-independent text encodings for arbitrary-precision Ideon numbers.
+
+Constructed non-prime Ideon keys are large injective integers derived from canonical
+identity bytes.  They are canonical *identity codes*, not compact operational or database
+IDs.  A key identifies which idea a graph revision describes; it does not contain the
+graph's meaning and must never be stored as a shortened row number.  The decimal-string
+transport encoding at JSON boundaries is the authoritative external form; compact
+manifested registry addresses are a separate concern for later follow-up work.
+"""
 
 from __future__ import annotations
 

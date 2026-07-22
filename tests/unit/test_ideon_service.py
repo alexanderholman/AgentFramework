@@ -98,10 +98,31 @@ def test_sat_on_bank_builds_open_graph_and_round_trips_exact_reference() -> None
     )
     assert graph.identity.kind is IdeonKind.OPEN
     assert graph.openings == tuple(sorted(record.openings))
-    assert Property("source-id", "fixture:bank-open") in graph.annotations
-    assert Property("rights", "internal-test-fixture") in graph.annotations
+    # Source ID and rights belong in InterpretationRecord, not in the semantic graph.
+    assert all(prop.name != "source-id" for prop in graph.annotations)
+    assert all(prop.name != "rights" for prop in graph.annotations)
+    assert record.source_id == "fixture:bank-open"
+    assert record.rights == "internal-test-fixture"
     assert service.realise(store.revisions(record.ideon_key)[0]) == "sat on the bank"
     assert len(graph.identity.roots) > 1
+
+
+def test_same_semantics_from_different_sources_share_graph_revision() -> None:
+    """Occurrence provenance (source_id, rights) belongs in InterpretationRecord only.
+    Same semantic topology from different sources must share the same graph revision
+    while retaining distinct interpretation records."""
+    service, _ = reference_service()
+    record_a = service.interpret(
+        InterpretRequest("sat on the bank", "source-a", "internal-test-fixture")
+    )
+    record_b = service.interpret(
+        InterpretRequest("sat on the bank", "source-b", "internal-test-fixture")
+    )
+
+    assert record_a.ideon_key == record_b.ideon_key
+    assert record_a.ideon_revision == record_b.ideon_revision
+    assert record_a.source_id != record_b.source_id
+    assert record_a.record_id != record_b.record_id
 
 
 def test_context_resolves_bank_and_actor_without_erasing_excluded_candidate() -> None:

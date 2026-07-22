@@ -942,3 +942,59 @@ must never be treated as its meaning.
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 
 ---
+
+---
+
+## [SPEC-017] Ideon Correction: Provenance Separation, Temporal Qualification, and Inquiry Scope
+**Date**: 2026-07-22
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Correction pass on the deterministic Prime Language reference slice.  Six semantic
+errors identified in review are addressed without changing the overall architecture.
+
+### Requirements
+- MUST rename `Tense.WILL` to `Tense.PROJECTED`; temporal perspective is expressed as
+  `WAS < IS > PROJECTED` attached to propositions/relations, not as a privileged inquiry
+  attention.
+- MUST classify the surface token "will" via dictionary disambiguation into temporal
+  (WHEN slot, resolved relation `future-state`/`future-event`) or volitional (WHAT slot,
+  resolved relation `intends`/`wants`/`commits`).  `WHERN` is reserved for
+  criterion-conditioned temporality, not simple future anchoring.
+- MUST rename `WillKind` to `AuxiliaryKind` and `will_kind()` to `auxiliary_kind()`.
+- MUST make WHO inquiry material-open only when a predicate (action/state/relation) is
+  present in viable candidates.  Utterances with no predicate leave WHO as NOT_APPLICABLE.
+- MUST NOT write source ID or rights declaration into semantic graph annotations or
+  provenance.  Both belong in `InterpretationRecord` only.  Requests with identical
+  semantics but different source IDs MUST resolve to the same graph revision.
+- MUST document constructed arbitrary-precision keys as canonical identity codes, not
+  compact operational or database IDs.
+- MUST accurately describe inquiry coverage: seven attentions (WHO, WHAT, WHERE, WHEN,
+  WHERN, IS, SHOULD) have conservative deterministic behaviour; WHY, HOW, COULD, and
+  WOULD are structurally represented but not yet evaluated.
+
+### Tests
+- **Test ID**: TEST-017-1
+  - **Description**: WHO not-applicable when no predicate present
+  - **Pass Criteria**: "the bank" (entity only, no action) yields WHO=NOT_APPLICABLE
+  - **Fail Criteria**: WHO is material-open despite no agent-requiring predicate
+- **Test ID**: TEST-017-2
+  - **Description**: Same semantics from different sources share graph revision
+  - **Pass Criteria**: Two requests with identical surface/context but different source_ids
+    produce the same ideon_key and ideon_revision while retaining distinct record_ids
+  - **Fail Criteria**: Source ID leaks into graph canonical bytes and changes the revision
+- **Test ID**: TEST-017-3
+  - **Description**: Temporal qualification attaches to proposition, not isolated inquiry
+  - **Pass Criteria**: WAS/IS/PROJECTED wraps a Whern in TemporalQualification; three
+    propositions under different temporal perspectives differ only in that qualification
+  - **Fail Criteria**: Temporal modality is encoded as a standalone inquiry question
+- **Test ID**: TEST-017-4
+  - **Description**: WHERN satisfied by criterion, not by temporal anchor
+  - **Pass Criteria**: Criterion-satisfied Whern renders IS without a datetime anchor
+  - **Fail Criteria**: WHERN is treated as equivalent to WHEN with a future anchor
+
+### Related Specs
+- SPEC-016 (Deterministic Prime Language and Ideon Reference Contract)
+
+---

@@ -853,3 +853,44 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+---
+
+## Run #017 — Ideon Correction Pass (Provenance, Temporal, WHO, Identity Codes)
+**Date**: 2026-07-22
+**Agent**: Copilot (correction pass on PR feat/ideons)
+**Status**: Completed
+
+### Inputs
+- Review comment by Alexander Holman on PR feat(ideons): six semantic corrections required
+- Existing implementation at commit 9748dc0
+
+### Outputs
+- Renamed `Tense.WILL` → `Tense.PROJECTED`; `WillKind` → `AuxiliaryKind`;
+  `will_kind` → `auxiliary_kind`; added `TemporalQualification` dataclass
+- Changed `will.future-auxiliary` dictionary sense slot from WHERN to WHEN
+- Fixed WHO inquiry: material-open only when predicate present; NOT_APPLICABLE otherwise
+- Removed source ID and rights from semantic graph annotations/provenance; verified that
+  same semantics from different sources share graph revision
+- Added docstring to `numeric.py` documenting constructed keys as canonical identity codes
+- Updated inquiry module docstring to accurately state which attentions are implemented
+- Added two regression tests (TEST-017-1, TEST-017-2) and two new focused tests
+  (temporal qualification on propositions, WHERN criterion vs anchor)
+- Updated `docs/prime-language-ideon-implementation.md` to reflect all corrections
+- Appended SPEC-017 and DEC-031
+
+### Verified Results
+- Focused Ideon suite: 88 passed (+2 from baseline)
+- Strict mypy: no issues in 51 source files
+- Ruff check + format: passed
+- Full suite (excluding pre-existing yaml subprocess issue): 358 passed
+
+### Issues Encountered
+- None; all corrections were surgical with no architectural change required
+
+### Related References
+- Implementation note: `docs/prime-language-ideon-implementation.md`
+- Spec: SPEC-017
+- Decision: DEC-031
+
+---

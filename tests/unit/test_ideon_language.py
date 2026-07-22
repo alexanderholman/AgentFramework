@@ -20,7 +20,14 @@ from af.domain.ideons.records import (
     SenseEntry,
     ShouldAssessment,
 )
-from af.domain.ideons.temporal import Tense, Whern, WillKind, render_tense, will_kind
+from af.domain.ideons.temporal import (
+    AuxiliaryKind,
+    TemporalQualification,
+    Tense,
+    Whern,
+    auxiliary_kind,
+    render_tense,
+)
 
 REVISION = "a" * 64
 PROFILE = LanguageProfileRef("en", "0.1", unicodedata.unidata_version, dialect="GB")
@@ -113,7 +120,9 @@ def test_bank_candidates_remain_open_until_context_materially_selects_a_set() ->
     assert river.candidates[1].status.value == "viable"
 
 
-def test_all_eleven_inquiries_are_actual_output_and_open_ideon_asks() -> None:
+def test_all_eleven_questions_are_represented_and_open_ideon_asks() -> None:
+    """All eleven questions appear in InquiryState; deterministic rules cover WHO, WHAT,
+    WHERE, IS; WHY/HOW/COULD/WOULD/WHEN/WHERN remain NOT_APPLICABLE until implemented."""
     forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
     candidates = reference_dictionary().candidates(forms, ContextGraph())
     inquiry = InquiryEngine().query(forms, candidates, ContextGraph())
@@ -149,6 +158,20 @@ def test_unknown_dictionary_form_does_not_receive_an_invented_sense() -> None:
     assert inquiry.get(Question.WHAT).status is InquiryStatus.OPEN
     assert inquiry.get(Question.WHAT).material is True
     assert DecisionEngine().decide(inquiry).decision is Decision.ASK
+
+
+def test_who_is_not_applicable_when_utterance_has_no_predicate() -> None:
+    """WHO must not be materially open for every utterance lacking context.actor.
+    When no action/state/relation is present nothing requires an agent."""
+    forms = LosslessFormEncoder().encode("the bank", PROFILE)
+    candidates = reference_dictionary().candidates(forms, ContextGraph())
+    inquiry = InquiryEngine().query(forms, candidates, ContextGraph())
+
+    # "the" is property, "bank" is entity — no predicate present.
+    assert inquiry.get(Question.IS).status is InquiryStatus.OPEN
+    assert inquiry.get(Question.IS).material is True
+    assert inquiry.get(Question.WHO).status is InquiryStatus.NOT_APPLICABLE
+    assert inquiry.get(Question.WHO).material is False
 
 
 def test_should_high_expected_harm_stops_or_explicitly_offers_safer_route() -> None:
@@ -190,19 +213,51 @@ def test_should_high_expected_harm_stops_or_explicitly_offers_safer_route() -> N
     assert lower_threshold.policy == (("should-stop-threshold", "0.20"),)
 
 
-def test_one_event_renders_as_was_is_or_will_by_reference_whern() -> None:
+def test_one_event_renders_as_was_is_or_projected_by_reference_whern() -> None:
+    """Temporal perspective uses WAS/IS/PROJECTED; future tense is PROJECTED."""
     event_time = datetime(2026, 7, 22, 12, tzinfo=UTC)
     event = Whern(event_time, None)
 
     assert render_tense(event, Whern(None, event_time + timedelta(hours=1))) is Tense.WAS
     assert render_tense(event, Whern(None, event_time)) is Tense.IS
-    assert render_tense(event, Whern(None, event_time - timedelta(hours=1))) is Tense.WILL
+    assert render_tense(event, Whern(None, event_time - timedelta(hours=1))) is Tense.PROJECTED
     with pytest.raises(ValueError, match="timezone-aware"):
         Whern(datetime(2026, 7, 22, 12), None)
 
 
-def test_temporal_will_and_volitional_will_are_distinct_resolved_relations() -> None:
-    assert will_kind("future-state") is WillKind.TEMPORAL
-    assert will_kind("intends") is WillKind.VOLITIONAL
-    with pytest.raises(ValueError, match="unresolved will"):
-        will_kind("will")
+def test_temporal_qualification_attaches_to_proposition_not_as_separate_inquiry() -> None:
+    """Past/present/projected qualification wraps a Whern and attaches to a proposition.
+    Equivalent propositions differ only in their TemporalQualification, not their form."""
+    anchor = datetime(2026, 1, 1, tzinfo=UTC)
+    ref = Whern(None, anchor)
+
+    past_event = Whern(anchor - timedelta(days=365), None)
+    present_event = Whern(anchor, None)
+    future_event = Whern(anchor + timedelta(days=365), None)
+
+    past_q = TemporalQualification(render_tense(past_event, ref), past_event)
+    present_q = TemporalQualification(render_tense(present_event, ref), present_event)
+    future_q = TemporalQualification(render_tense(future_event, ref), future_event)
+
+    assert past_q.tense is Tense.WAS
+    assert present_q.tense is Tense.IS
+    assert future_q.tense is Tense.PROJECTED
+    assert past_q != present_q != future_q
+
+
+def test_whern_criterion_is_distinct_from_ordinary_temporal_anchor() -> None:
+    """WHERN is criterion-conditioned temporality.  A criterion-satisfied Whern renders
+    IS without requiring a concrete datetime anchor."""
+    criterion = "task-complete"
+    criterion_whern = Whern(None, None, criterion=criterion, status="satisfied")
+    reference = Whern(None, None, criterion=criterion, status="satisfied")
+
+    assert render_tense(criterion_whern, reference) is Tense.IS
+
+
+def test_temporal_and_volitional_auxiliary_relations_are_classified_separately() -> None:
+    """The resolved relation (not the surface token) determines the auxiliary kind."""
+    assert auxiliary_kind("future-state") is AuxiliaryKind.TEMPORAL
+    assert auxiliary_kind("intends") is AuxiliaryKind.VOLITIONAL
+    with pytest.raises(ValueError, match="unresolved auxiliary relation"):
+        auxiliary_kind("will")
