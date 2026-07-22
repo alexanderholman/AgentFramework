@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -39,7 +39,21 @@ af-mcp = "af.interfaces.mcp:main"
 packages = ["src/af"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/af", "tests", "README.md", "LICENSE", "pyproject.toml"]
+include = [
+  ".python-version",
+  "CHANGELOG.md",
+  "INSTALL.md",
+  "LICENSE",
+  "README.md",
+  "SECURITY.md",
+  "docs",
+  "pyproject.toml",
+  "release",
+  "scripts",
+  "src/af",
+  "tests",
+  "uv.lock",
+]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers -ra"

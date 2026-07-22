@@ -27,12 +27,38 @@ ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
     "typecheck": (("uv", "run", "mypy", "src"),),
     "legacy": (("./validate_agents.sh",),),
     "opencode-integration": (("node", "--test", "tests/opencode/route-gate.test.mjs"),),
+    "release-validate": (
+        ("uv", "run", "python", "scripts/release_gates.py", "--action", "validate"),
+    ),
+    "release-report": (("uv", "run", "python", "scripts/release_gates.py", "--action", "report"),),
+    "release-check": (("uv", "run", "python", "scripts/release_gates.py", "--action", "check"),),
+    "package": (
+        (
+            "uv",
+            "run",
+            "python",
+            "scripts/release_gates.py",
+            "--action",
+            "package",
+            "--execute",
+        ),
+    ),
     "check": (
+        ("uv", "run", "python", "scripts/release_gates.py", "--action", "validate"),
         ("uv", "run", "ruff", "format", "--check", "src/af", "tests", "scripts"),
         ("uv", "run", "ruff", "check", "src/af", "tests", "scripts"),
         ("uv", "run", "mypy", "src"),
         ("uv", "run", "pytest", "--cov=af", "--cov-report=term-missing", "--cov-fail-under=90"),
         ("node", "--test", "tests/opencode/route-gate.test.mjs"),
+        (
+            "uv",
+            "run",
+            "python",
+            "scripts/release_gates.py",
+            "--action",
+            "package",
+            "--execute",
+        ),
         ("./validate_agents.sh",),
     ),
 }

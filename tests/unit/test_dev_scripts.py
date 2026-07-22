@@ -11,6 +11,7 @@ import yaml
 REPO_ROOT = Path(__file__).parents[2]
 AF_DEV = REPO_ROOT / "scripts" / "af_dev.py"
 ROUTE_AND_RUN = REPO_ROOT / "scripts" / "route_and_run.py"
+SCRIPT_REGISTRY = REPO_ROOT / "scripts" / "registry.yaml"
 
 
 def test_af_dev_sync_preview_uses_locked_lockfile() -> None:
@@ -39,6 +40,32 @@ def test_af_dev_check_preview_lints_all_maintained_python_scripts() -> None:
     assert "uv run ruff format --check src/af tests scripts" in completed.stdout
     assert "uv run ruff check src/af tests scripts" in completed.stdout
     assert "node --test tests/opencode/route-gate.test.mjs" in completed.stdout
+
+
+def test_af_dev_check_preview_validates_release_manifest_and_package() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(AF_DEV), "--action", "check"],
+        capture_output=True,
+        check=False,
+        cwd=REPO_ROOT,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "uv run python scripts/release_gates.py --action validate" in completed.stdout
+    assert "uv run python scripts/release_gates.py --action package --execute" in completed.stdout
+
+
+def test_release_gate_workflow_is_registered() -> None:
+    registry = yaml.safe_load(SCRIPT_REGISTRY.read_text(encoding="utf-8"))
+    release_gate = next(script for script in registry["scripts"] if script["id"] == "release-gates")
+
+    assert release_gate["command"] == ("python3 scripts/release_gates.py --action '<action>'")
+    assert set(release_gate["capabilities"]) >= {
+        "production-readiness-report",
+        "release-enforcement",
+        "package-validation",
+    }
 
 
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:
