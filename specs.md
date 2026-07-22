@@ -718,3 +718,156 @@ node executes.
 - SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
 
 ---
+
+## [SPEC-015] Application Platform Lifecycle and Extension Contracts
+**Date**: 2026-07-22
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+AF is a Python-native, Laravel-inspired application platform. Providers, packages, managers,
+drivers, kernels, and units of work share explicit lifecycle, ownership, context, error,
+capability, data, and delivery contracts.
+
+### Requirements
+
+#### Sync, async, and lifecycle
+- MUST declare public operations as synchronous or asynchronous and MUST NOT start hidden
+  event loops or block an active event loop
+- MUST make external I/O, broker, remote-data, worker, streaming, boot, and shutdown contracts
+  asynchronous by default while preserving deterministic synchronous functions behind
+  explicit adapters
+- MUST permit one sync-to-async bridge only at an owning process entry point
+- MUST propagate cancellation and shutdown rather than sanitize or retry them as normal errors
+- MUST use `construct → register all → boot all → serve → drain → shutdown` ordering
+- MUST make provider registration declaration-only: no external I/O, service resolution,
+  construction, or side effects beyond recording bindings and metadata
+- MUST topologically validate provider dependencies, freeze the validated graph, and boot in
+  topological dependency order
+- MUST require the currently booting provider to register acquired resources transactionally
+  as they are acquired so its own partial failure can be cleaned before earlier providers
+- MUST roll back partial boot and dispose the failing provider plus previously booted providers
+  and resources exactly once in reverse order
+- MUST make shutdown idempotent and cancellation-safe: bounded protected cleanup continues
+  after cancellation or one cleanup failure, aggregates evidence, then re-raises the original
+  cancellation after unwinding
+
+#### Lifetimes, context, and errors
+- MUST distinguish container singleton, application, invocation, and transient lifetimes
+- MUST type invocation scopes as request, message, command, job, event, schedule,
+  notification, or interaction turn while retaining common ownership rules
+- MUST create and dispose one fresh invocation scope per unit of work
+- MUST reject resolution or context access through a disposed scope
+- MUST own tasks spawned by an invocation and join or cancel them before scope disposal;
+  explicitly detached work receives a newly derived context and no scoped dependencies
+- MUST carry immutable principal, tenant, requested/effective acceptance scope, correlation,
+  causation, trace, deadline, locale, and cancellation through context-local state
+- MUST NOT retain invocation context, transactions, authentication state, or mutable driver
+  state in singleton/application services
+- MUST distinguish configuration, resolution, capability, validation, authorization,
+  transport, transient, permanent, integrity, cancellation, and shutdown failures internally
+- MUST expose stable sanitized reason codes while retaining typed protected evidence
+
+#### Providers, managers, drivers, and packages
+- MUST use constructor/factory injection as the canonical dependency mechanism
+- MUST keep static facades and service-location convenience APIs optional and outside domain
+  code
+- MUST discover inert package metadata without importing provider/package modules
+- MUST let reviewable metadata declare providers, compatibility, dependencies, configuration,
+  resources, migrations, commands, routes, events, and claimed capabilities
+- MUST let consumers disable discovery and MUST verify compatibility and explicit approval
+  before importing or instantiating package code
+- MUST bind package approval, manifests, probes, and conformance evidence to the immutable
+  artifact digest, version, dependency-graph digest, configuration digest, deployment profile,
+  policy version, evidence timestamp, expiry, and revocation state
+- MUST revalidate package/driver evidence before import and use when identity, configuration,
+  dependencies, profile, policy, expiry, revocation, or probed runtime state changes
+- MUST resolve replaceable subsystems through `Manager → named connection → Driver` contracts
+- MUST validate typed configuration and capabilities before use through trusted static
+  manifests plus independent runtime probes and conformance evidence; driver self-report alone
+  MUST NOT authorize safety-, tenancy-, durability-, or consistency-critical semantics
+- MUST represent optional transactions, locks, tags, delay, priorities, replay, aliases,
+  vectors, signed URLs, and streaming as capabilities rather than vendor-name checks
+- MUST NOT silently fall back to a weaker/local production driver; explicit composite
+  fallback/failover/load-balancing policy retains visible degradation evidence
+
+#### Data and delivery semantics
+- MUST define capability-specific relational, document, graph, search, vector, cache, blob,
+  event, and time-series contracts rather than one false universal query abstraction
+- MUST gate native extensions explicitly and preserve stable identity, provenance, tenancy,
+  policy, and authoritative-source references across projections
+- MUST limit ACID claims to one supporting connection and use outbox/inbox, idempotent
+  projection, or explicit saga/compensation across stores
+- MUST persist an outbox record atomically in the same authoritative transaction as its state
+  change before a post-commit relay publishes it
+- MUST commit a consumer's business state plus inbox/deduplication state atomically when they
+  share a transaction; external effects require a durable transactional intent/outbox before
+  acknowledgement
+- MUST distinguish jobs, domain/application events, integration events, broker pub-sub,
+  client broadcast, and notification intents
+- MUST treat queue handlers and durable consumers as at-least-once unless explicitly weaker
+- MUST NOT claim exactly-once execution/delivery; exactly-once business effects require a
+  declared idempotency and deduplication boundary
+- MUST acknowledge work after required durable effects and publish observable work only after
+  the authoritative transaction commits
+- MUST document ordering, replay, retention, consumer groups, acknowledgement, durability,
+  and loss semantics per driver; ephemeral pub-sub is never an authoritative event log
+
+### Tests
+- **Test ID**: TEST-015-1
+  - **Description**: Validate lifecycle ordering and rollback
+  - **Pass Criteria**: Declaration-only registration precedes topological boot; partial failure
+    cleans the failing and prior providers once in reverse with cancellation-safe unwinding
+  - **Fail Criteria**: Registration resolves/constructs, boot order violates dependencies, or
+    cleanup leaks, doubles, or stops on cancellation
+- **Test ID**: TEST-015-2
+  - **Description**: Validate lifetime, context, and cancellation isolation
+  - **Pass Criteria**: Identity, cleanup, context, owned-child-task, detached-context, and
+    cancellation contracts hold concurrently
+  - **Fail Criteria**: State/tasks leak, detached work retains scoped dependencies, disposed
+    scopes resolve, or cancellation becomes a normal error
+- **Test ID**: TEST-015-3
+  - **Description**: Validate providers, inert packages, managers, drivers, and capabilities
+  - **Pass Criteria**: Package metadata is checked before import and only independently verified,
+    compatible, approved, capability-satisfying named drivers resolve; evidence is bound to
+    artifact/dependency/configuration/profile/policy identity and rejected after expiry,
+    revocation, stale probes, or any bound-value change
+  - **Fail Criteria**: Discovery imports early, self-report is trusted alone, capabilities are
+    assumed, stale/mismatched evidence authorizes use, or fallback silently changes semantics
+- **Test ID**: TEST-015-4
+  - **Description**: Validate heterogeneous data boundaries
+  - **Pass Criteria**: Specialized contracts and explicit native extensions preserve semantics
+  - **Fail Criteria**: A universal query silently approximates unsupported behavior
+- **Test ID**: TEST-015-5
+  - **Description**: Validate delivery and commit ordering
+  - **Pass Criteria**: Producer state/outbox and consumer business-state/inbox each commit
+    atomically where co-located; external effects persist transactional intents before ack;
+    duplicate/redelivery, idempotency, relay, replay, and ephemeral loss are tested
+  - **Fail Criteria**: Outbox/inbox/intent insertion can be lost, consumer effects separate
+    from dedup state, AF claims exactly once, acknowledges early, or publishes pre-commit
+- **Test ID**: TEST-015-6
+  - **Description**: Validate error taxonomy and policy evidence
+  - **Pass Criteria**: Every internal failure class retains lifecycle stage and protected cause
+    while untrusted interfaces receive stable sanitized reason codes
+  - **Fail Criteria**: Cancellation is misclassified, policy evidence is absent, or secrets leak
+- **Test ID**: TEST-015-7
+  - **Description**: Validate extension and composition restrictions
+  - **Pass Criteria**: Constructor/factory injection is canonical; domain code has no service
+    locator/static facade dependency; discovery controls and package metadata are enforced
+  - **Fail Criteria**: Domain code resolves global services or packages bypass approval
+- **Test ID**: TEST-015-8
+  - **Description**: Validate explicit sync/async boundaries
+  - **Pass Criteria**: Public contract metadata identifies sync/async behavior, I/O contracts
+    are async-first, only the process entry point bridges, and active loops remain unblocked
+  - **Fail Criteria**: A library starts a hidden/nested loop, blocks active I/O, creates another
+    bridge, or converts cancellation into a retryable/normal result
+
+### Related Specs
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+- SPEC-014 (Planner Side-Effect Authorization)
+
+---

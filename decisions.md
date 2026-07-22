@@ -1503,3 +1503,143 @@ planner support must not weaken that boundary.
 - Appended: `specs.md`, `decisions.md`
 
 ---
+
+## [DEC-028] Adopt an Async-Capable Application and Provider Lifecycle
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon architecture review
+
+### Context
+AF is expanding from one synchronous vertical slice into a platform with web/API/CLI/TUI
+kernels, workers, schedulers, messaging, communications, and local/remote data drivers.
+Implicit event-loop bridges, process-global request state, and undefined provider teardown
+would create deadlocks, leaks, and cross-request authority failures.
+
+### Decision
+1. Use `construct → register all → boot all → serve → drain → shutdown` lifecycle ordering.
+2. Keep registration synchronous and free of external I/O; permit bounded asynchronous boot
+   and shutdown.
+3. Make I/O and long-running contracts async-first while preserving deterministic sync
+   functions and the existing AF pipeline through explicit adapters.
+4. Permit a sync-to-async bridge only at an owning process entry point; libraries do not
+   create hidden or nested event loops.
+5. Propagate cancellation and shutdown rather than converting them to ordinary failures.
+6. Distinguish singleton, application, typed invocation, and transient scopes; dispose owned
+   resources once in reverse creation order.
+7. Store invocation context in immutable context-local state and prohibit request/message
+   state in long-lived services.
+8. Topologically validate provider dependencies and roll back partial boot in reverse order.
+
+### Alternatives Considered
+- **Synchronous-only core:** rejected because remote stores, brokers, and concurrent kernels
+  would block or require hidden behavior.
+- **Async-only rewrite:** rejected because deterministic CPU-only functions gain no safety.
+- **Implicit bridges:** rejected because nested loops and cancellation loss are unsafe.
+
+### Consequences
+- Every kernel shares one application runtime and ownership model.
+- Long-lived workers cannot retain principal, tenant, transaction, or trace state by design.
+- Sync/async behavior, cancellation, ownership, and cleanup are testable contracts.
+- Existing deterministic procedures remain valid.
+- Providers/resources require lifecycle metadata and partial startup/shutdown rollback logic.
+- Sync adapters and async drivers cannot be mixed through convenience magic.
+
+### Implementation Notes
+- Registration is declaration-only and resolution-disabled until the provider graph is
+  validated and frozen.
+- Boot follows topological dependency order and transactionally records resources as acquired.
+- Rollback cleans the currently failing provider before earlier providers.
+- Invocation-created tasks are joined/cancelled; detached work receives a new context and no
+  scoped dependencies.
+- Cleanup is bounded and protected from cancellation, then the original cancellation is
+  re-raised after complete reverse-order unwinding.
+- Contract metadata and tests identify every sync/async operation; only process entry points
+  own bridges and active event loops are never blocked by hidden synchronous I/O.
+
+### Related Decisions
+- DEC-022 (Adopt the AF Python Vertical Slice and MCP-First ChatGPT Boundary)
+- DEC-024 (Remove Direct Generative Answers from the Active AF Runtime)
+- DEC-028 is complemented by DEC-029 (providers, drivers, and delivery semantics)
+
+### Related Specs
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+
+### Output References
+- Added: `docs/application-platform.md`
+- Tracks: GitHub issue #7
+
+---
+
+## [DEC-029] Use Providers, Managers, Named Drivers, and Honest Delivery Semantics
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon architecture review
+
+### Context
+AF must support selectable databases, search engines, caches, queues, pub-sub systems,
+graph/document stores, filesystems, and communications. Treating one engine as mandatory
+would constrain deployments; pretending all engines are interchangeable would silently
+weaken transactions, ordering, durability, search, or policy enforcement.
+
+### Decision
+1. Use constructor/factory injection and ordered service providers as canonical composition.
+2. Resolve replaceable subsystems through `Manager → named connection → Driver` contracts.
+3. Verify capabilities such as transactions, locks, delay, replay, aliases, vectors, and
+   signed URLs instead of branching on vendor names.
+4. Define specialized relational, document, graph, search/vector, cache, blob, event, and
+   time-series contracts rather than a false universal query language.
+5. Make native extensions explicit, capability-gated, observable, and policy-controlled.
+6. Keep transaction claims local to one supporting connection; use outbox/inbox, idempotent
+   projectors, or explicit sagas across stores.
+7. Treat queues and durable consumers as at-least-once by default and never claim exactly-once
+   delivery; exactly-once business effects require a declared idempotency boundary.
+8. Keep jobs, events, pub-sub, broadcasts, and notifications as separate contracts.
+9. Prohibit silent production fallback; explicit failover/fallback retains reason,
+   capability, and degradation evidence.
+10. Require package compatibility metadata and consumer control over discovery.
+
+### Alternatives Considered
+- **One engine per subsystem:** rejected because AF must fit local and distributed profiles.
+- **Lowest-common-denominator API:** rejected because it erases important semantics.
+- **Automatic fallback:** rejected because it can change privacy, durability, and correctness.
+
+### Consequences
+- PostgreSQL/MySQL/MariaDB/SQLite, OpenSearch/Elasticsearch, Redis/Memcached,
+  RabbitMQ/Redis/database/SQS queues, and future providers coexist behind stable contracts.
+- Application services depend on capabilities rather than vendor SDKs.
+- Driver differences remain honest, testable, and visible.
+- Packages extend AF without editing trusted core.
+- Every driver needs typed config, health, lifecycle, independently verified capability and
+  conformance evidence, plus a compatibility matrix.
+- Some workflows require backend-specific query objects or explicit native APIs.
+- Cross-store consistency is explicitly eventual and operational.
+
+### Implementation Notes
+- Discover inert package metadata before importing provider code; require compatibility and
+  policy approval before import or construction.
+- Validate critical driver claims through trusted manifests, runtime probes, and conformance
+  evidence rather than self-report alone.
+- Bind approval/evidence to artifact, dependency graph, configuration, deployment profile,
+  policy, expiry, and revocation; revalidate on change or staleness.
+- Persist state plus outbox atomically in one authoritative transaction, then relay after
+  commit to idempotent inbox-backed consumers.
+- Atomically commit consumer business state plus inbox where possible; represent external
+  effects as durable transactional intents before acknowledgement.
+- Managers resolve named drivers only after typed configuration and capability validation.
+
+### Related Decisions
+- DEC-018 (Adopt Script-First "Only Write Once" Execution Policy)
+- DEC-025 (Adopt the Capability Ladder and Scoped Reviewed Generation)
+- DEC-028 (Adopt an Async-Capable Application and Provider Lifecycle)
+
+### Related Specs
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-013 (Acceptance Authority, Derivation Taint, and Ladder Selection)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+
+### Output References
+- Added: `docs/application-platform.md`
+- Tracks: GitHub epic #35 and issue #7
+
+---
