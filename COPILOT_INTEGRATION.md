@@ -27,11 +27,11 @@ outside the stated scope.
 
 ### Environment – `copilot-setup-steps.yml`
 
-The Copilot cloud agent runs inside the environment defined by
+The declared setup steps for the Copilot cloud agent are defined in
 [`.github/workflows/copilot-setup-steps.yml`](.github/workflows/copilot-setup-steps.yml).
-That workflow:
+That workflow declares:
 
-1. Checks out the repository with full history (`fetch-depth: 0`).
+1. Checks out the repository.
 2. Sets up **Python 3.12** via `actions/setup-python`.
 3. Installs **uv 0.11.28** via `astral-sh/setup-uv`.
 4. Installs the locked development environment:
@@ -39,8 +39,9 @@ That workflow:
    uv sync --locked --extra dev
    ```
 
-All Copilot work assumes this environment. Do not rely on system-installed
-Python or unpinned package versions.
+If any setup step fails, the run must be inspected and the failure resolved
+before proceeding. Do not rely on system-installed Python or unpinned package
+versions.
 
 ### Authoritative validation
 
@@ -55,17 +56,21 @@ This command runs, in order:
 - **Ruff** formatting and lint checks
 - **mypy** in strict mode
 - **pytest** (unit, integration, and feature tests)
+- **`node --test tests/opencode/route-gate.test.mjs`** (opencode integration gate)
 - The legacy **`validate_agents.sh`** governance suite
 
 All checks must pass. Copilot must not weaken, skip, or work around any
 check to make a change pass.
 
-### Human review requirement
+### Human review and CI approval
 
 Copilot pull requests require independent human review before merging.
 Specifically:
 
 - The repository's CI pipeline (`AF Python` workflow) must pass on the PR.
+  GitHub Actions runs triggered by Copilot may require a maintainer to select
+  **Approve and run workflows** before CI executes, depending on the
+  repository's workflow approval setting.
 - At least one human reviewer must approve the pull request.
 - **Copilot-authored changes must never be merged without a passing quality
   gate and explicit human approval**, regardless of how straightforward the
@@ -73,6 +78,16 @@ Specifically:
 
 This policy ensures that Copilot output is verified against the repository's
 correctness and governance standards before it reaches the main branch.
+
+---
+
+> **Archival snapshot – AgentFactory / Copilot Workspace (2026-01-28).** The
+> sections below are a historical record of how GitHub Copilot Workspace was
+> used with the AgentFactory definition layer. Statements such as "Copilot will
+> automatically" describe the intended behaviour at that time and are not
+> current guarantees. For current AgentFramework instructions and commands, see
+> the [Current AgentFramework section](#current-agentframework--github-copilot-cloud-agent-workflow)
+> above.
 
 ## Overview
 This document explains how AgentFactory integrates with GitHub Copilot and GitHub Copilot Workspace to provide enhanced AI agent capabilities.
