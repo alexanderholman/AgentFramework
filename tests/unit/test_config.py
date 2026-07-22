@@ -122,6 +122,7 @@ def test_unknown_profile_and_malformed_environment_fail_closed() -> None:
                 "AF_APPEND_ONLY_BASE_REF": "base",
                 "AF_APPEND_ONLY_HEAD_REF": "head",
                 "AF_APPEND_ONLY_BASE_STRATEGY": "merge-base",
+                "AF_ROUTER_CLI": "/isolated/af",
             }
         )
     )

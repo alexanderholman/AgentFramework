@@ -147,6 +147,7 @@ _NON_CONFIG_ENV_NAMES = frozenset(
         "AF_APPEND_ONLY_BASE_REF",
         "AF_APPEND_ONLY_HEAD_REF",
         "AF_APPEND_ONLY_BASE_STRATEGY",
+        "AF_ROUTER_CLI",
     }
 )
 
