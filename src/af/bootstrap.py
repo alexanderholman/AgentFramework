@@ -8,6 +8,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
+from af.application.bus import ApplicationBus
+from af.application.dispatch import build_application_endpoints
 from af.application.ideons import IdeonController, IdeonService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
@@ -267,6 +269,7 @@ class AFApplication:
     config: ConfigSnapshot
     container: Container
     agent: PipelineAgent
+    bus: ApplicationBus
     tasks: TaskController
     traces: TraceRepository
     verifier: DeterministicVerifier
@@ -425,16 +428,22 @@ def _shutdown_lifecycle_at_sync_boundary(lifecycle: Application) -> None:
 
 def _assemble_application(build: _ApplicationBuild) -> AFApplication:
     container = build.lifecycle.container
+    endpoints = build_application_endpoints(
+        container.resolve(TaskController),
+        container.resolve(AgentRoutingController),
+        container.resolve(IdeonController),
+    )
     return AFApplication(
         settings=build.settings,
         config=build.config,
         container=container,
         agent=container.resolve(PipelineAgent),
-        tasks=container.resolve(TaskController),
+        bus=endpoints.bus,
+        tasks=endpoints.tasks,
         traces=container.resolve_token(TraceRepository),
         verifier=container.resolve(DeterministicVerifier),
-        agent_routes=container.resolve(AgentRoutingController),
-        ideons=container.resolve(IdeonController),
+        agent_routes=endpoints.agent_routes,
+        ideons=endpoints.ideons,
         lifecycle=build.lifecycle,
     )
 
