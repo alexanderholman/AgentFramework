@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -199,21 +200,53 @@ def create_http_app(
     bind_host: str | None = None,
     allowed_hosts: Sequence[str] | None = None,
 ) -> FastAPI:
+    owns_application = application is None
     resolved = application or create_application()
     resolved_bind_host = bind_host or resolved.settings.host
     resolved_allowed_hosts = (
         tuple(allowed_hosts) if allowed_hosts is not None else resolved.settings.allowed_hosts
     )
+    try:
+        return _assemble_http_app(
+            resolved,
+            owns_application=owns_application,
+            bind_host=resolved_bind_host,
+            allowed_hosts=resolved_allowed_hosts,
+        )
+    except BaseException:
+        if owns_application:
+            with suppress(BaseException):
+                resolved.shutdown()
+        raise
+
+
+def _assemble_http_app(
+    resolved: AFApplication,
+    *,
+    owns_application: bool,
+    bind_host: str,
+    allowed_hosts: Sequence[str],
+) -> FastAPI:
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            if owns_application:
+                await resolved.ashutdown()
+
     app = FastAPI(
         title=resolved.settings.app_name,
         version=__version__,
         description="Classification-heavy, inference-light AF reference application",
+        lifespan=lifespan,
     )
     app.state.af = resolved
     app.add_middleware(_BoundedBodyMiddleware)
     app.add_middleware(
         _TrustedHostMiddleware,
-        allowed_hosts=_trusted_hosts_for(resolved_bind_host, resolved_allowed_hosts),
+        allowed_hosts=_trusted_hosts_for(bind_host, allowed_hosts),
     )
     app.include_router(create_web_router(resolved.tasks))
     app.include_router(create_rest_router(resolved.tasks))
