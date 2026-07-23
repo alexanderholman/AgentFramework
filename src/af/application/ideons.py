@@ -18,7 +18,7 @@ from af.domain.ideons import (
 )
 from af.domain.ideons.dictionary import LogicDictionary
 from af.domain.ideons.forms import LosslessFormEncoder
-from af.domain.ideons.inquiry import DecisionEngine, InquiryEngine, _parse_when_expression
+from af.domain.ideons.inquiry import DecisionEngine, InquiryEngine
 from af.domain.ideons.principia import SetStack
 from af.domain.ideons.records import (
     CandidateSet,
@@ -36,6 +36,7 @@ from af.domain.ideons.temporal import (
     Tense,
     WhenCondition,
     WhenKind,
+    parse_when_expression,
     render_tense,
 )
 
@@ -45,7 +46,8 @@ def _make_when_condition_from_context(context: ContextGraph) -> WhenCondition | 
 
     Priority:
     1. ``context.time`` — validated as a timezone-aware ISO 8601 timestamp.
-    2. ``context.when`` — validated as a ``kind:expression`` string.
+    2. ``context.when`` — validated as a ``kind:expression`` string via
+       ``parse_when_expression``.
 
     Returns ``None`` when neither field is valid.
     """
@@ -61,7 +63,7 @@ def _make_when_condition_from_context(context: ContextGraph) -> WhenCondition | 
             pass
     when_val = context.get("when")
     if when_val is not None:
-        return _parse_when_expression(when_val)
+        return parse_when_expression(when_val)
     return None
 
 
@@ -89,9 +91,7 @@ class InterpretRequest:
             raise ValueError("source id must not be empty")
         if not self.rights:
             raise ValueError("rights declaration must not be empty")
-        if self.reference_when is not None and not isinstance(
-            self.reference_when, WhenCondition
-        ):
+        if self.reference_when is not None and not isinstance(self.reference_when, WhenCondition):
             raise TypeError("reference_when must be a WhenCondition or None")
 
 
@@ -247,17 +247,32 @@ class IdeonService:
         # Add a typed temporal-qualification node when WHEN is satisfied.
         # The node carries ``when-kind``, ``when-value``, and ``tense`` properties,
         # and is linked to every predicate SENSE node via a ``qualifies-predicate`` edge.
+        #
+        # Tense resolution rules:
+        # - When ``reference_when`` is supplied and kinds are comparable, ``render_tense``
+        #   determines the tense (WAS / IS / PROJECTED).
+        # - When ``reference_when`` is None, the tense defaults to ``IS`` (observational
+        #   perspective with no temporal standpoint declared).
+        # - When ``reference_when`` is supplied but the kinds are incompatible (e.g.
+        #   TIMESTAMP event vs CRITERION reference, or INTERVAL vs TIMESTAMP), the tense
+        #   is left as ``"contested"`` — the qualification is present but the standpoint
+        #   cannot be computed.  The graph node is still emitted so the temporal fact is
+        #   not silently lost; callers must treat a ``tense="contested"`` property as
+        #   unresolved rather than as present-tense IS.
         when_result = inquiry.get(Question.WHEN)
         if when_result.status is InquiryStatus.SATISFIED:
             event_when = _make_when_condition_from_context(context)
             if event_when is not None:
-                import contextlib
-
                 # Determine tense: compare against reference_when if available.
-                tense = Tense.IS
-                if reference_when is not None:
-                    with contextlib.suppress(ValueError):
-                        tense = render_tense(event_when, reference_when)
+                tense_value: str
+                if reference_when is None:
+                    tense_value = Tense.IS.value
+                else:
+                    try:
+                        tense_value = render_tense(event_when, reference_when).value
+                    except ValueError:
+                        # Incompatible or uncomparable kinds — do not silently default to IS.
+                        tense_value = "contested"
 
                 # Build the WhenCondition representation for graph properties.
                 when_value: str
@@ -265,15 +280,9 @@ class IdeonService:
                     when_value = event_when.instant.isoformat() if event_when.instant else ""
                 elif event_when.kind is WhenKind.INTERVAL:
                     start = (
-                        event_when.interval_start.isoformat()
-                        if event_when.interval_start
-                        else ""
+                        event_when.interval_start.isoformat() if event_when.interval_start else ""
                     )
-                    end = (
-                        event_when.interval_end.isoformat()
-                        if event_when.interval_end
-                        else ""
-                    )
+                    end = event_when.interval_end.isoformat() if event_when.interval_end else ""
                     when_value = f"{start},{end}"
                 else:
                     when_value = event_when.expression or ""
@@ -284,7 +293,7 @@ class IdeonService:
                         tq_node_id,
                         NodeKind.VALUE,
                         properties=(
-                            Property("tense", tense.value),
+                            Property("tense", tense_value),
                             Property("when-kind", event_when.kind.value),
                             Property("when-value", when_value),
                         ),

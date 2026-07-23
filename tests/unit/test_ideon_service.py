@@ -409,7 +409,8 @@ def test_temporal_qualification_node_in_graph_when_when_is_satisfied() -> None:
     # The graph with a valid time includes a temporal-qualification node
     graph_with = store.resolve(
         next(
-            r for r in store.revisions(record_time.ideon_key)
+            r
+            for r in store.revisions(record_time.ideon_key)
             if r.revision == record_time.ideon_revision
         )
     )
@@ -426,7 +427,8 @@ def test_temporal_qualification_node_in_graph_when_when_is_satisfied() -> None:
     # Graph without timestamp has no temporal-qualification node
     graph_without = store.resolve(
         next(
-            r for r in store.revisions(record_no_time.ideon_key)
+            r
+            for r in store.revisions(record_no_time.ideon_key)
             if r.revision == record_no_time.ideon_revision
         )
     )
@@ -435,7 +437,8 @@ def test_temporal_qualification_node_in_graph_when_when_is_satisfied() -> None:
     # Invalid timestamp: WHEN fails closed → no temporal-qualification node
     graph_invalid = store.resolve(
         next(
-            r for r in store.revisions(record_invalid.ideon_key)
+            r
+            for r in store.revisions(record_invalid.ideon_key)
             if r.revision == record_invalid.ideon_revision
         )
     )
@@ -499,7 +502,8 @@ def test_temporal_qualification_linked_to_predicate_via_edge() -> None:
 
     # Must have at least one 'qualifies-predicate' edge from temporal-qualification
     tq_edges = [
-        e for e in graph.edges
+        e
+        for e in graph.edges
         if e.source == "temporal-qualification" and e.relation == "qualifies-predicate"
     ]
     assert tq_edges, "temporal-qualification must be linked to at least one predicate node"
@@ -594,3 +598,119 @@ def test_temporal_qualification_absent_when_invalid_context_when() -> None:
     )
     assert not any(n.node_id == "temporal-qualification" for n in graph.nodes)
     assert not any(e.relation == "qualifies-predicate" for e in graph.edges)
+
+
+def test_incompatible_reference_when_yields_contested_tense_not_is() -> None:
+    """Regression: when reference_when is provided but kinds are incompatible with
+    the event WhenCondition, construct_graph must NOT silently default to tense=IS.
+    The temporal-qualification node must carry tense='contested', proving the
+    unresolved comparison is explicit rather than hidden.
+
+    Cases tested:
+    - TIMESTAMP event with CRITERION reference (incompatible kinds)
+    - CRITERION event with TIMESTAMP reference (incompatible kinds)
+    """
+    from datetime import UTC, datetime
+
+    from af.domain.ideons.temporal import WhenCondition, WhenKind
+
+    service, store = reference_service()
+    ctx = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-06-01T00:00:00Z"}
+    )
+    # reference_when is CRITERION — incompatible with TIMESTAMP event
+    criterion_reference = WhenCondition(
+        WhenKind.CRITERION, expression="task-complete", status="satisfied"
+    )
+
+    record = service.interpret(
+        InterpretRequest(
+            "sat on the bank",
+            "fixture:contested-tense",
+            "internal-test-fixture",
+            ctx,
+            reference_when=criterion_reference,
+        )
+    )
+    graph = store.resolve(
+        next(r for r in store.revisions(record.ideon_key) if r.revision == record.ideon_revision)
+    )
+    tq_node = next((n for n in graph.nodes if n.node_id == "temporal-qualification"), None)
+    assert tq_node is not None, "temporal-qualification node must be present when WHEN is satisfied"
+    prop_by_name = {p.name: p.value for p in tq_node.properties}
+    # Must NOT silently default to 'is'; incompatible kinds yield 'contested'
+    assert prop_by_name["tense"] == "contested", (
+        f"expected tense='contested' for incompatible kinds, got tense={prop_by_name['tense']!r}"
+    )
+
+    # Inverted case: event is CRITERION, reference is TIMESTAMP
+    ctx_criterion = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "when": "criterion:task-complete"}
+    )
+    timestamp_reference = WhenCondition(
+        WhenKind.TIMESTAMP, instant=datetime(2026, 6, 1, tzinfo=UTC)
+    )
+    record_inv = service.interpret(
+        InterpretRequest(
+            "sat on the bank",
+            "fixture:contested-tense-inv",
+            "internal-test-fixture",
+            ctx_criterion,
+            reference_when=timestamp_reference,
+        )
+    )
+    graph_inv = store.resolve(
+        next(
+            r
+            for r in store.revisions(record_inv.ideon_key)
+            if r.revision == record_inv.ideon_revision
+        )
+    )
+    tq_inv = next((n for n in graph_inv.nodes if n.node_id == "temporal-qualification"), None)
+    assert tq_inv is not None
+    prop_inv = {p.name: p.value for p in tq_inv.properties}
+    assert prop_inv["tense"] == "contested", (
+        f"expected tense='contested' for inverted incompatible kinds, got {prop_inv['tense']!r}"
+    )
+
+
+def test_uncomparable_event_interval_with_timestamp_reference_yields_contested() -> None:
+    """Regression: an INTERVAL event condition compared against a TIMESTAMP reference
+    must also yield tense='contested' (not 'is').  Validates that the fail-closed
+    behaviour covers all uncomparable kind pairs, not only criterion↔timestamp."""
+    from datetime import UTC, datetime
+
+    from af.domain.ideons.temporal import WhenCondition, WhenKind
+
+    service, store = reference_service()
+    # Event is an interval; reference is a timestamp — uncomparable
+    ctx = ContextGraph.from_dict(
+        {
+            "actor": "alice",
+            "domain": "river",
+            "when": "interval:2026-01-01T00:00:00Z,2026-12-31T00:00:00Z",
+        }
+    )
+    timestamp_reference = WhenCondition(
+        WhenKind.TIMESTAMP, instant=datetime(2026, 6, 1, tzinfo=UTC)
+    )
+    record = service.interpret(
+        InterpretRequest(
+            "sat on the bank",
+            "fixture:interval-contested",
+            "internal-test-fixture",
+            ctx,
+            reference_when=timestamp_reference,
+        )
+    )
+    graph = store.resolve(
+        next(r for r in store.revisions(record.ideon_key) if r.revision == record.ideon_revision)
+    )
+    tq_node = next((n for n in graph.nodes if n.node_id == "temporal-qualification"), None)
+    assert tq_node is not None
+    prop_by_name = {p.name: p.value for p in tq_node.properties}
+    assert prop_by_name["tense"] == "contested", (
+        "INTERVAL event vs TIMESTAMP reference must yield tense='contested', "
+        f"got {prop_by_name['tense']!r}"
+    )
+    assert prop_by_name["when-kind"] == "interval"

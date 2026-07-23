@@ -290,17 +290,13 @@ def test_whern_is_composite_of_where_and_when_components() -> None:
 
     # Both WHERE (context.where) and WHEN (criterion format) provided: WHERN SATISFIED
     ctx_both = ContextGraph.from_dict({"when": "criterion:task-complete", "where": "london"})
-    inquiry_both = InquiryEngine().query(
-        forms, dictionary.candidates(forms, ctx_both), ctx_both
-    )
+    inquiry_both = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_both), ctx_both)
     assert inquiry_both.get(Question.WHEN).status is InquiryStatus.SATISFIED
     assert inquiry_both.get(Question.WHERN).status is InquiryStatus.SATISFIED
 
     # Arbitrary string for context.when fails closed: WHEN NOT_APPLICABLE
     ctx_plain = ContextGraph.from_dict({"when": "task-complete", "where": "london"})
-    inquiry_plain = InquiryEngine().query(
-        forms, dictionary.candidates(forms, ctx_plain), ctx_plain
-    )
+    inquiry_plain = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_plain), ctx_plain)
     assert inquiry_plain.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
 
     # Only WHEN (criterion) provided with contested location candidates:
@@ -365,7 +361,11 @@ def test_who_not_applicable_for_impersonal_state_predicate() -> None:
     """WHO must be NOT_APPLICABLE when a predicate is present but carries no who-typed
     roles.  An impersonal state (semantic_roles=()) does not require an agent."""
     impersonal_state = entry(
-        "rain.intransitive", 13, "rains", "state", Question.IS,
+        "rain.intransitive",
+        13,
+        "rains",
+        "state",
+        Question.IS,
         semantic_roles=(),
     )
     dictionary = LogicDictionary((impersonal_state,))
@@ -451,16 +451,12 @@ def test_invalid_time_string_does_not_satisfy_when() -> None:
 
     # Timezone-naive datetime string → WHEN NOT_APPLICABLE (fail closed)
     ctx_naive = ContextGraph.from_dict({"time": "2026-01-01T00:00:00"})
-    inquiry_naive = InquiryEngine().query(
-        forms, dictionary.candidates(forms, ctx_naive), ctx_naive
-    )
+    inquiry_naive = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_naive), ctx_naive)
     assert inquiry_naive.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
 
     # Valid timezone-aware ISO timestamp → WHEN SATISFIED
     ctx_valid = ContextGraph.from_dict({"time": "2026-01-01T00:00:00Z"})
-    inquiry_valid = InquiryEngine().query(
-        forms, dictionary.candidates(forms, ctx_valid), ctx_valid
-    )
+    inquiry_valid = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_valid), ctx_valid)
     assert inquiry_valid.get(Question.WHEN).status is InquiryStatus.SATISFIED
 
 
@@ -540,9 +536,7 @@ def test_whern_complete_state_matrix() -> None:
 
     # WHERE SATISFIED + WHEN NOT_APPLICABLE → WHERN OPEN (missing:when)
     ctx_sat_na = ContextGraph.from_dict({"actor": "alice", "domain": "river"})
-    inq_sat_na = InquiryEngine().query(
-        forms, dictionary.candidates(forms, ctx_sat_na), ctx_sat_na
-    )
+    inq_sat_na = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_sat_na), ctx_sat_na)
     assert inq_sat_na.get(Question.WHERE).status is InquiryStatus.SATISFIED
     assert inq_sat_na.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
     assert inq_sat_na.get(Question.WHERN).status is InquiryStatus.OPEN
@@ -551,9 +545,7 @@ def test_whern_complete_state_matrix() -> None:
 
     # WHERE CONTESTED + WHEN NOT_APPLICABLE → WHERN OPEN (where:contested, missing:when)
     ctx_con_na = ContextGraph.from_dict({})
-    inq_con_na = InquiryEngine().query(
-        forms, dictionary.candidates(forms, ctx_con_na), ctx_con_na
-    )
+    inq_con_na = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_con_na), ctx_con_na)
     assert inq_con_na.get(Question.WHERE).status is InquiryStatus.CONTESTED
     assert inq_con_na.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
     assert inq_con_na.get(Question.WHERN).status is InquiryStatus.OPEN
@@ -591,7 +583,11 @@ def test_who_satisfied_by_non_agent_role() -> None:
     An experiencer role is satisfied by context.experiencer; the emitted role name
     is the actual context field, not always 'actor'."""
     experiencer_entry = entry(
-        "feel.state", 17, "feels", "state", Question.IS,
+        "feel.state",
+        17,
+        "feels",
+        "state",
+        Question.IS,
         semantic_roles=("experiencer",),
     )
     dictionary = LogicDictionary((experiencer_entry,))
@@ -619,40 +615,50 @@ def test_who_satisfied_by_non_agent_role() -> None:
 
 
 def test_parse_when_expression_valid_and_fail_closed() -> None:
-    """_parse_when_expression validates bounded kind:expression format.
-    Valid forms return a WhenCondition; arbitrary strings fail closed (return None)."""
-    from af.domain.ideons.inquiry import _parse_when_expression
+    """parse_when_expression validates bounded kind:expression format.
+    Valid forms return a WhenCondition; arbitrary strings fail closed (return None).
+    parse_when_expression is a public function in af.domain.ideons.temporal."""
+    from af.domain.ideons.temporal import parse_when_expression
 
     # Event kind
-    cond = _parse_when_expression("event:door-opened")
+    cond = parse_when_expression("event:door-opened")
     assert cond is not None
     assert cond.kind is WhenKind.EVENT
     assert cond.expression == "door-opened"
 
     # Criterion kind
-    cond = _parse_when_expression("criterion:task-complete")
+    cond = parse_when_expression("criterion:task-complete")
     assert cond is not None
     assert cond.kind is WhenKind.CRITERION
     assert cond.expression == "task-complete"
 
+    # Ordering kind
+    cond = parse_when_expression("ordering:before:release-v1")
+    assert cond is not None
+    assert cond.kind is WhenKind.ORDERING
+    assert cond.expression == "before:release-v1"
+
     # Interval kind (half-open: only start)
-    cond = _parse_when_expression("interval:2026-01-01T00:00:00Z,")
+    cond = parse_when_expression("interval:2026-01-01T00:00:00Z,")
     assert cond is not None
     assert cond.kind is WhenKind.INTERVAL
     assert cond.interval_start is not None
     assert cond.interval_end is None
 
     # Arbitrary string — fail closed
-    assert _parse_when_expression("task-complete") is None
-    assert _parse_when_expression("") is None
-    assert _parse_when_expression("unknown:value") is None
+    assert parse_when_expression("task-complete") is None
+    assert parse_when_expression("") is None
+    assert parse_when_expression("unknown:value") is None
     # Timezone-naive interval — fail closed
-    assert _parse_when_expression("interval:2026-01-01T00:00:00,") is None
+    assert parse_when_expression("interval:2026-01-01T00:00:00,") is None
     # Empty expression — fail closed
-    assert _parse_when_expression("event:") is None
-    assert _parse_when_expression("criterion:") is None
+    assert parse_when_expression("event:") is None
+    assert parse_when_expression("criterion:") is None
+    assert parse_when_expression("ordering:") is None
     # Fully open interval (both ends empty) — fail closed
-    assert _parse_when_expression("interval:,") is None
+    assert parse_when_expression("interval:,") is None
+    # Inverted interval (start > end) — fail closed
+    assert parse_when_expression("interval:2026-06-01T00:00:00Z,2026-01-01T00:00:00Z") is None
 
 
 def test_who_remains_open_when_only_some_required_roles_satisfied() -> None:
@@ -719,3 +725,90 @@ def test_when_satisfied_by_event_expression_without_timestamp() -> None:
     ctx_plain = ContextGraph.from_dict({"when": "approval-granted"})
     inq_plain = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_plain), ctx_plain)
     assert inq_plain.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+
+
+def test_when_satisfied_by_ordering_expression() -> None:
+    """WHEN supports ordering relations (before/after/during a named anchor).
+    An ordering:expression satisfies WHEN without any datetime.
+    An empty ordering expression fails closed."""
+    forms = LosslessFormEncoder().encode("sat", PROFILE)
+    dictionary = reference_dictionary()
+
+    # ordering: prefix → WHEN SATISFIED
+    ctx_order = ContextGraph.from_dict({"when": "ordering:before:release-v1"})
+    inq_order = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_order), ctx_order)
+    assert inq_order.get(Question.WHEN).status is InquiryStatus.SATISFIED
+
+    # after variant
+    ctx_after = ContextGraph.from_dict({"when": "ordering:after:deployment-complete"})
+    inq_after = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_after), ctx_after)
+    assert inq_after.get(Question.WHEN).status is InquiryStatus.SATISFIED
+
+    # during variant
+    ctx_during = ContextGraph.from_dict({"when": "ordering:during:sprint-3"})
+    inq_during = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_during), ctx_during)
+    assert inq_during.get(Question.WHEN).status is InquiryStatus.SATISFIED
+
+    # Empty ordering expression → fail closed
+    ctx_empty = ContextGraph.from_dict({"when": "ordering:"})
+    inq_empty = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_empty), ctx_empty)
+    assert inq_empty.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+
+
+def test_when_condition_interval_invariants_enforced_by_domain() -> None:
+    """WhenCondition(INTERVAL) domain invariants must be enforced in __post_init__,
+    not only by the parser.  Both bounds absent must raise ValueError.
+    Start after end must raise ValueError."""
+    from datetime import UTC, datetime
+
+    from af.domain.ideons.temporal import WhenCondition, WhenKind
+
+    tz = UTC
+    start = datetime(2026, 1, 1, tzinfo=tz)
+    end = datetime(2026, 6, 1, tzinfo=tz)
+
+    # Valid: only start
+    cond = WhenCondition(WhenKind.INTERVAL, interval_start=start)
+    assert cond.interval_start == start
+    assert cond.interval_end is None
+
+    # Valid: only end
+    cond = WhenCondition(WhenKind.INTERVAL, interval_end=end)
+    assert cond.interval_end == end
+    assert cond.interval_start is None
+
+    # Valid: both bounds, start before end
+    cond = WhenCondition(WhenKind.INTERVAL, interval_start=start, interval_end=end)
+    assert cond.interval_start == start
+    assert cond.interval_end == end
+
+    # Invalid: both bounds absent
+    import pytest
+
+    with pytest.raises(ValueError, match="at least one bound"):
+        WhenCondition(WhenKind.INTERVAL)
+
+    # Invalid: start exceeds end
+    with pytest.raises(ValueError, match="must not exceed"):
+        WhenCondition(WhenKind.INTERVAL, interval_start=end, interval_end=start)
+
+
+def test_ordering_when_condition_domain_validation() -> None:
+    """WhenCondition(ORDERING) requires a non-empty expression.
+    Empty expression raises ValueError."""
+    import pytest
+
+    from af.domain.ideons.temporal import WhenCondition, WhenKind
+
+    # Valid ordering condition
+    cond = WhenCondition(WhenKind.ORDERING, expression="before:release-v1")
+    assert cond.kind is WhenKind.ORDERING
+    assert cond.expression == "before:release-v1"
+
+    # Empty expression — fail closed
+    with pytest.raises(ValueError, match="non-empty expression"):
+        WhenCondition(WhenKind.ORDERING, expression="")
+
+    # None expression — fail closed
+    with pytest.raises(ValueError, match="non-empty expression"):
+        WhenCondition(WhenKind.ORDERING)

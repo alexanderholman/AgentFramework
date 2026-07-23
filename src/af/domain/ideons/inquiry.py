@@ -16,8 +16,9 @@ evidence-driven deterministic behaviour:
 - WHEN  — satisfied when a valid temporal or conditional anchor is declared:
           context.time must be a parseable, timezone-aware ISO 8601 timestamp;
           context.when must follow the bounded ``kind:expression`` format where kind is
-          one of ``event``, ``criterion``, or ``interval``.  Both fields fail closed:
-          an invalid or arbitrarily-formed string does not satisfy WHEN.
+          one of ``event``, ``criterion``, ``interval``, or ``ordering``.  All fields
+          fail closed: an invalid or arbitrarily-formed string does not satisfy WHEN.
+          Parsing is delegated to ``temporal.parse_when_expression`` (public API).
 - WHERN — composite WHERE + WHEN.  Satisfied only when WHERE is fully satisfied and
           WHEN is satisfied.  Contested when WHERE is contested and WHEN is satisfied.
           Open (non-material) with missing role identified when exactly one component
@@ -54,13 +55,11 @@ from af.domain.ideons.records import (
     Question,
     ShouldAssessment,
 )
-from af.domain.ideons.temporal import WhenCondition, WhenKind
+from af.domain.ideons.temporal import parse_when_expression
 
 _WHO_TYPED_ROLES: frozenset[str] = frozenset(
     {"agent", "subject", "experiencer", "source", "possessor", "affected"}
 )
-
-_WHEN_EXPRESSION_KINDS: frozenset[str] = frozenset({"event", "criterion", "interval"})
 
 # Maps semantic role names (from SenseEntry.semantic_roles) to the context field
 # that satisfies them.  Only roles present in this map participate in WHO resolution.
@@ -85,62 +84,6 @@ def _is_valid_time_string(value: str) -> bool:
         return dt.tzinfo is not None
     except (ValueError, OverflowError):
         return False
-
-
-def _parse_when_expression(value: str) -> WhenCondition | None:
-    """Parse a bounded ``kind:expression`` string into a ``WhenCondition``.
-
-    Accepted formats:
-    - ``event:<expression>``     — an event or state predicate label
-    - ``criterion:<expression>`` — a condition clause or transition expression
-    - ``interval:<start>,<end>`` — an interval with optional open ends (empty = open)
-
-    Fail-closed: any string that does not match one of these patterns, or has an empty
-    expression after the prefix, returns ``None`` so that WHEN is not satisfied merely
-    because ``context.when`` is a non-empty arbitrary string.
-    """
-    sep = value.find(":")
-    if sep < 1:
-        return None
-    kind_str = value[:sep]
-    payload = value[sep + 1:]
-    if kind_str not in _WHEN_EXPRESSION_KINDS:
-        return None
-    if kind_str in {"event", "criterion"}:
-        if not payload:
-            return None
-        return WhenCondition(WhenKind(kind_str), expression=payload)
-    # interval: "<start>,<end>" where either may be empty (open end)
-    comma = payload.find(",")
-    if comma < 0:
-        return None
-    raw_start = payload[:comma]
-    raw_end = payload[comma + 1:]
-    interval_start: datetime | None = None
-    interval_end: datetime | None = None
-    if raw_start:
-        try:
-            parsed = datetime.fromisoformat(raw_start)
-        except (ValueError, OverflowError):
-            return None
-        if parsed.tzinfo is None:
-            return None
-        interval_start = parsed
-    if raw_end:
-        try:
-            parsed = datetime.fromisoformat(raw_end)
-        except (ValueError, OverflowError):
-            return None
-        if parsed.tzinfo is None:
-            return None
-        interval_end = parsed
-    if interval_start is None and interval_end is None:
-        return None  # both open — not a valid bounded interval
-    return WhenCondition(
-        WhenKind.INTERVAL,
-        interval_start=interval_start,
-        interval_end=interval_end,
-    )
 
 
 class InquiryEngine:
@@ -207,9 +150,7 @@ class InquiryEngine:
                     Question.WHO,
                     InquiryStatus.SATISFIED,
                     role=primary_field,
-                    evidence=tuple(
-                        f"context:{field}={val}" for field, val in who_satisfied_pairs
-                    ),
+                    evidence=tuple(f"context:{field}={val}" for field, val in who_satisfied_pairs),
                 )
             else:
                 # One or more required who-typed roles are missing.
@@ -271,14 +212,15 @@ class InquiryEngine:
                 evidence=(f"selected:{location_candidates[0].entry.entry_id}",),
             )
 
-        # WHEN: condition-bearing temporal relation (timestamp, interval, event, criterion).
+        # WHEN: condition-bearing temporal relation (timestamp, interval, event, criterion,
+        # ordering).
         # context.time must be a parseable, timezone-aware ISO timestamp — fail-closed.
         # context.when must follow the bounded ``kind:expression`` format — fail-closed.
         # Arbitrary non-empty strings do not satisfy WHEN.
         time_val = context.get("time")
         when_val = context.get("when")
         time_valid = time_val is not None and _is_valid_time_string(time_val)
-        when_condition = when_val is not None and _parse_when_expression(when_val) is not None
+        when_condition = when_val is not None and parse_when_expression(when_val) is not None
         when_satisfied = time_valid or when_condition
         t_ev: tuple[str, ...] = tuple(
             v

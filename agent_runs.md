@@ -1001,3 +1001,67 @@ interpretation graph contract documentation, and stale terminology removal.
 - PR review comment: #5052915940
 
 ---
+
+---
+
+## Run #020 — Ideon Final Correction Pass (SPEC-020 / DEC-034)
+**Date**: 2026-07-23
+**Status**: Completed
+
+### Objective
+Address the four remaining integration blockers identified in the PR review
+comment #5053551914:
+1. `construct_graph()` silent `Tense.IS` default for incompatible reference_when.
+2. `WhenKind` missing ORDERING form despite documentation claiming ordering support.
+3. `WhenCondition(INTERVAL)` domain invariants not self-enforcing.
+4. Private `_parse_when_expression` coupled from application layer to domain internals.
+5. Stale PR/governance claims about WILL and "eleven implemented attentions."
+
+### Actions Taken
+- `src/af/domain/ideons/temporal.py`:
+  - Added `WhenKind.ORDERING = "ordering"` with expression validation in `__post_init__`.
+  - Tightened `WhenCondition(INTERVAL)` validation: both-absent raises ValueError;
+    start > end raises ValueError.
+  - Added public `parse_when_expression(value: str) -> WhenCondition | None` as the
+    authoritative bounded ``kind:expression`` parser.  Moved `_WHEN_EXPRESSION_KINDS`
+    constant here.  Updated module docstring.
+- `src/af/domain/ideons/inquiry.py`:
+  - Removed private `_parse_when_expression` and `_WHEN_EXPRESSION_KINDS`.
+  - Imports `parse_when_expression` from `temporal`; uses it for WHEN validation.
+  - Updated module docstring to mention `ordering` kind and public parser location.
+- `src/af/application/ideons.py`:
+  - Replaced `from af.domain.ideons.inquiry import _parse_when_expression` with
+    `from af.domain.ideons.temporal import parse_when_expression`.
+  - Removed `contextlib.suppress(ValueError)` in `construct_graph()`.  Incompatible
+    or uncomparable `reference_when` kinds now yield `tense_value = "contested"`.
+  - Updated docstring with explicit fail-closed tense contract.
+- `tests/unit/test_ideon_language.py`:
+  - Updated `test_parse_when_expression_valid_and_fail_closed` to import from `temporal`
+    and cover ORDERING kind and inverted-interval fail-closed case.
+  - Added `test_when_satisfied_by_ordering_expression`.
+  - Added `test_when_condition_interval_invariants_enforced_by_domain`.
+  - Added `test_ordering_when_condition_domain_validation`.
+- `tests/unit/test_ideon_service.py`:
+  - Added `test_incompatible_reference_when_yields_contested_tense_not_is`.
+  - Added `test_uncomparable_event_interval_with_timestamp_reference_yields_contested`.
+- `specs.md`: Appended SPEC-020.
+- `decisions.md`: Appended DEC-034 (includes governance supersession of WILL/eleven-attentions
+  claims in SPEC-016/DEC-030).
+- `agent_runs.md`: Appended Run #020.
+
+### Verified Results
+- `ruff check src tests`: passed
+- `strict mypy src` (3 modified files): no issues
+- Unit + integration tests: 559 passed, 1 pre-existing git-topology failure (CI authoritative)
+- All 9 new regression tests pass (TEST-020-1 through TEST-020-9)
+
+### Issues Encountered
+- Pre-existing: `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone).  GitHub CI is authoritative.
+
+### Related References
+- Spec: SPEC-020
+- Decision: DEC-034
+- PR review comment: #5053551914
+
+---

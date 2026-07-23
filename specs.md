@@ -1107,3 +1107,60 @@ six integration blockers identified in review of SPEC-018.
 - SPEC-016, SPEC-017, SPEC-018
 
 ---
+
+---
+
+## [SPEC-020] Ideon Correction: Fail-Closed Tense, WhenKind.ORDERING, INTERVAL Invariants, Public parse_when_expression
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Fourth and final correction pass on the deterministic Prime Language reference slice.
+Four remaining integration blockers identified in review of SPEC-019 are resolved.
+
+### Requirements
+- MUST NOT silently default to `Tense.IS` when `reference_when` is provided but
+  `render_tense()` raises `ValueError` due to incompatible or uncomparable
+  `WhenCondition` kinds.  An incompatible or unresolved comparison must yield a
+  `tense="contested"` property in the temporal-qualification node rather than
+  silently asserting present-tense IS.
+- MUST add `WhenKind.ORDERING` — a bounded ordering relation (before, after, during)
+  relative to a named event or anchor.  `WhenCondition(ORDERING)` requires a non-empty
+  expression.  `parse_when_expression` and `InquiryEngine` accept the ``ordering:``
+  prefix.  This closes the gap between the documentation claim "WHEN supports orderings"
+  and the absence of an ordering form in `WhenKind`.
+- MUST enforce `WhenCondition(INTERVAL)` domain invariants in `__post_init__` directly:
+  both bounds absent must raise `ValueError`; `interval_start > interval_end` (when both
+  present) must raise `ValueError`.  The parser may provide early protection, but the
+  domain value must enforce its own invariant unconditionally.
+- MUST move WHEN-expression parsing from a private `_parse_when_expression` helper in
+  `inquiry.py` into a public `parse_when_expression` function in
+  `af.domain.ideons.temporal`.  Both `InquiryEngine` and `construct_graph()` must
+  consume this single authoritative parser; no private copy or application-to-private-
+  domain coupling is permitted.
+- The PR description and governance records must not claim `WILL` as a privileged inquiry
+  attention or assert "eleven implemented attentions" unless true.  The corrected model
+  is: eleven questions are structurally represented; seven have conservative deterministic
+  procedures (WHO, WHAT, WHERE, WHEN, WHERN, IS, SHOULD); four are open/non-material
+  by evidence (WHY, HOW, COULD, WOULD).  Global tense qualification follows the
+  ``WAS < IS > PROJECTED`` axis attached to propositions/relations, not a standalone WILL.
+
+### Tests
+- **TEST-020-1**: `tense="contested"` when TIMESTAMP event vs CRITERION reference (end-to-end
+  through `interpret()` and `resolve()`)
+- **TEST-020-2**: `tense="contested"` when CRITERION event vs TIMESTAMP reference
+- **TEST-020-3**: `tense="contested"` when INTERVAL event vs TIMESTAMP reference
+- **TEST-020-4**: `WhenKind.ORDERING` parsed by `parse_when_expression`; WHEN satisfied
+  by `ordering:before:X`, `ordering:after:X`, `ordering:during:X`
+- **TEST-020-5**: Empty `ordering:` expression fails closed (WHEN NOT_APPLICABLE)
+- **TEST-020-6**: `WhenCondition(INTERVAL)` with both bounds absent raises ValueError
+- **TEST-020-7**: `WhenCondition(INTERVAL)` with `interval_start > interval_end` raises ValueError
+- **TEST-020-8**: `WhenCondition(ORDERING)` with empty expression raises ValueError
+- **TEST-020-9**: `parse_when_expression` is importable from `af.domain.ideons.temporal`
+  (public API); `ordering:before:release-v1` and inverted interval fail closed
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019
+
+---

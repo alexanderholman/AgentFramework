@@ -1924,3 +1924,94 @@ Review of SPEC-018 (DEC-032) identified six remaining integration blockers:
 - Modified: `tests/unit/test_ideon_service.py`
 
 ---
+
+---
+
+## [DEC-034] Ideon Correction: Fail-Closed Tense, ORDERING Kind, INTERVAL Invariants, Public Parser
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-019 (DEC-033) identified four remaining integration blockers:
+1. `construct_graph()` initialised `tense = Tense.IS` and used `contextlib.suppress(ValueError)`
+   to swallow `render_tense()` failures.  An incompatible `reference_when` (e.g. CRITERION
+   reference vs TIMESTAMP event) silently produced `tense="is"`, which is semantically wrong.
+2. The module docstring and earlier Alexander guidance stated WHEN supports "orderings", but
+   `WhenKind` had no ORDERING form.  The documentation claim was unsupported by the type.
+3. `WhenCondition(INTERVAL)` with both bounds absent was only rejected by `parse_when_expression`
+   (parser path), not by the domain value itself.  Similarly, start > end was not validated by
+   `__post_init__`.  Domain invariants must be self-enforcing.
+4. `application.ideons` imported the private `_parse_when_expression` from `inquiry.py`,
+   creating an application-to-private-domain coupling.  Both `InquiryEngine` and
+   `construct_graph()` need one authoritative canonical parser with a public API boundary.
+
+### Decision
+1. **Fail-closed tense**: remove `contextlib.suppress(ValueError)` from `construct_graph()`.
+   When `reference_when` is None: tense defaults to `"is"` (observational perspective).
+   When `reference_when` is provided and `render_tense()` raises `ValueError`: tense is set
+   to `"contested"` (explicit, not silently coerced to IS).  The temporal-qualification node
+   is still emitted so the temporal fact is not lost; callers must treat `tense="contested"`
+   as unresolved.
+2. **ORDERING WhenKind**: add `WhenKind.ORDERING = "ordering"` with `expression` required.
+   `parse_when_expression` and `InquiryEngine` accept `ordering:<expression>`.  Typical
+   expressions: `before:X`, `after:X`, `during:X`.  Any non-empty expression is valid.
+3. **INTERVAL domain invariants**: enforce in `WhenCondition.__post_init__`:
+   both-absent raises `ValueError("at least one bound")`; start > end raises
+   `ValueError("must not exceed")`.  `parse_when_expression` also enforces start > end at
+   parse time (returns None), providing a second layer of protection.
+4. **Public parser**: move WHEN-expression parsing to `parse_when_expression` in
+   `af.domain.ideons.temporal` (public, documented).  Remove the private
+   `_parse_when_expression` copy from `inquiry.py`.  `_WHEN_EXPRESSION_KINDS` is also
+   moved to `temporal.py` (private constant within the module).  Both `InquiryEngine` and
+   `_make_when_condition_from_context` in `application.ideons` import and use the same
+   function.
+
+### Governance Supersession
+The phrase "eleven implemented attentions" that appears in SPEC-016 TEST-016-2 and DEC-030
+and the phrase "WILL" as a temporal inquiry attention in SPEC-016 TEST-016-4 and DEC-030 are
+superseded by the corrected model established in SPEC-017/DEC-031 and refined through
+SPEC-018/DEC-032, SPEC-019/DEC-033, and this DEC-034.  The corrected claims:
+- Eleven questions are **structurally represented** in every InquiryState.
+- Seven have **conservative deterministic procedures** (WHO, WHAT, WHERE, WHEN, WHERN, IS,
+  SHOULD).
+- Four are **open/non-material by evidence** (WHY, HOW, COULD, WOULD) — not "not yet
+  evaluated schema placeholders."
+- Global tense qualification uses the ``WAS < IS > PROJECTED`` axis; `WILL` is a surface
+  token disambiguated through the dictionary, not a privileged inquiry attention.
+- `WhenKind` now includes TIMESTAMP, INTERVAL, EVENT, CRITERION, and ORDERING.
+
+Prior governed wording in SPEC-016 and DEC-030 is preserved in the append-only history.
+This entry and SPEC-020 are the authoritative current statements.
+
+### Alternatives Considered
+- **Emit no temporal-qualification node when tense is contested**: would silently lose the
+  temporal fact.  Chosen instead to emit the node with `tense="contested"` so the information
+  is preserved and the unresolved state is inspectable.
+- **Allow ordering expression to be a structured object**: would require a new field or
+  sub-type.  The current string-expression approach is consistent with EVENT and CRITERION.
+
+### Consequences
+- `construct_graph()` never silently asserts IS for an incompatible reference standpoint.
+- `WhenKind.ORDERING` closes the documentation gap; temporal ordering relations are now
+  a supported and tested WHEN condition form.
+- `WhenCondition` is self-validating; callers cannot construct a both-open INTERVAL or an
+  inverted interval without an explicit exception.
+- The parser API boundary is clean: one public function in the temporal domain, no
+  application-layer coupling to private domain internals.
+- 9 new regression tests added (TEST-020-1 through TEST-020-9).
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020
+
+### Output References
+- Modified: `src/af/domain/ideons/temporal.py` (ORDERING, INTERVAL invariants, parse_when_expression)
+- Modified: `src/af/domain/ideons/inquiry.py` (remove private parser, use public parse_when_expression)
+- Modified: `src/af/application/ideons.py` (import public parser, fail-closed tense)
+- Modified: `tests/unit/test_ideon_language.py` (new ORDERING, INTERVAL, parse tests)
+- Modified: `tests/unit/test_ideon_service.py` (new contested-tense regression tests)
+
+---
