@@ -157,8 +157,10 @@ class WhenCondition:
                     "INTERVAL WhenCondition interval_start must not exceed interval_end"
                 )
         elif self.kind in {WhenKind.EVENT, WhenKind.CRITERION}:
-            if not self.expression:
-                raise ValueError(f"{self.kind} WhenCondition requires a non-empty expression")
+            if not self.expression or not self.expression.strip():
+                raise ValueError(
+                    f"{self.kind} WhenCondition requires a non-empty, non-whitespace expression"
+                )
         elif self.kind is WhenKind.ORDERING:
             if not self.expression:
                 raise ValueError(f"{self.kind} WhenCondition requires a non-empty expression")
@@ -200,6 +202,78 @@ class TemporalQualification:
             raise TypeError("tense must be a Tense")
         if not isinstance(self.when, WhenCondition):
             raise TypeError("when must be a WhenCondition")
+
+
+class TemporalPerspectiveStatus(StrEnum):
+    """Resolution status of a temporal perspective attached to a proposition or relation.
+
+    Separates *whether* a standpoint was determined from *which* tense it resolved to.
+    ``RESOLVED`` means a definite tense (``WAS``, ``IS``, or ``PROJECTED``) was computed
+    by ``render_tense``.  ``UNANCHORED`` means the WHEN condition is structurally present
+    but no reference perspective was declared, so no tense standpoint can be asserted.
+    ``CONTESTED`` means a reference was supplied but the kinds were incompatible or
+    uncomparable, leaving the standpoint unresolvable.
+
+    Invariant: ``RESOLVED`` requires a non-None ``tense`` field; ``UNANCHORED`` and
+    ``CONTESTED`` must not carry a ``tense``.
+    """
+
+    RESOLVED = "resolved"
+    UNANCHORED = "unanchored"
+    CONTESTED = "contested"
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalPerspective:
+    """Typed temporal perspective for graph construction, covering all three resolution states.
+
+    Use this in application code instead of raw strings when the tense status is not yet
+    fully resolved.  Exactly one of the following is true:
+    - ``status=RESOLVED`` and ``tense`` is one of ``WAS``, ``IS``, ``PROJECTED``.
+    - ``status=UNANCHORED`` and ``tense`` is ``None`` (no reference declared).
+    - ``status=CONTESTED`` and ``tense`` is ``None`` (reference incompatible or uncomparable).
+
+    ``when`` is always the ``WhenCondition`` that satisfied WHEN.  Only serialize the
+    validated finite projection (``tense_label`` and ``status_label``) into graph
+    properties; do not pass raw strings from outside the domain.
+    """
+
+    status: TemporalPerspectiveStatus
+    when: WhenCondition
+    tense: Tense | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, TemporalPerspectiveStatus):
+            raise TypeError("status must be a TemporalPerspectiveStatus")
+        if not isinstance(self.when, WhenCondition):
+            raise TypeError("when must be a WhenCondition")
+        if self.status is TemporalPerspectiveStatus.RESOLVED:
+            if self.tense is None:
+                raise ValueError("RESOLVED TemporalPerspective requires a non-None tense")
+            if not isinstance(self.tense, Tense):
+                raise TypeError("tense must be a Tense when status is RESOLVED")
+        else:
+            if self.tense is not None:
+                raise ValueError(
+                    f"{self.status.value} TemporalPerspective must not carry a tense "
+                    "(only RESOLVED perspectives carry a resolved tense)"
+                )
+
+    @property
+    def tense_label(self) -> str:
+        """Serialisable tense label for graph properties.
+
+        For ``RESOLVED`` perspectives returns the tense value (``"was"``, ``"is"``,
+        ``"projected"``).  For unresolved perspectives returns the status value
+        (``"unanchored"`` or ``"contested"``), giving a single finite property that
+        carries the complete standpoint representation.
+        """
+        return self.tense.value if self.tense is not None else self.status.value
+
+    @property
+    def status_label(self) -> str:
+        """Serialisable resolution-status label for graph properties (``tense-status``)."""
+        return self.status.value
 
 
 def render_tense(event: WhenCondition, reference: WhenCondition) -> Tense:
@@ -276,7 +350,7 @@ def parse_when_expression(value: str) -> WhenCondition | None:
     if kind_str not in _WHEN_EXPRESSION_KINDS:
         return None
     if kind_str in {"event", "criterion"}:
-        if not payload:
+        if not payload or not payload.strip():
             return None
         return WhenCondition(WhenKind(kind_str), expression=payload)
     if kind_str == "ordering":

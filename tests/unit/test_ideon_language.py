@@ -22,6 +22,8 @@ from af.domain.ideons.records import (
 )
 from af.domain.ideons.temporal import (
     AuxiliaryKind,
+    TemporalPerspective,
+    TemporalPerspectiveStatus,
     TemporalQualification,
     Tense,
     WhenCondition,
@@ -1063,3 +1065,122 @@ def test_whern_where_open_when_absent_propagates_missing_location_and_when() -> 
     # Both constituent signals must appear in WHERN evidence
     assert "missing:location" in whern_result.evidence
     assert "missing:when" in whern_result.evidence
+
+
+# ---------------------------------------------------------------------------
+# TemporalPerspective — typed perspective model
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_perspective_resolved_requires_tense() -> None:
+    """RESOLVED TemporalPerspective requires a non-None Tense; omitting it raises ValueError."""
+    when = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 1, 1, tzinfo=UTC))
+    # Valid resolved perspective
+    p = TemporalPerspective(status=TemporalPerspectiveStatus.RESOLVED, when=when, tense=Tense.WAS)
+    assert p.tense is Tense.WAS
+    assert p.tense_label == "was"
+    assert p.status_label == "resolved"
+
+    # RESOLVED without tense must raise
+    with pytest.raises(ValueError, match="RESOLVED"):
+        TemporalPerspective(status=TemporalPerspectiveStatus.RESOLVED, when=when)
+
+
+def test_temporal_perspective_unresolved_forbids_tense() -> None:
+    """UNANCHORED and CONTESTED perspectives must not carry a tense; doing so raises ValueError."""
+    when = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 1, 1, tzinfo=UTC))
+    # Valid unanchored perspective
+    p_unanchored = TemporalPerspective(status=TemporalPerspectiveStatus.UNANCHORED, when=when)
+    assert p_unanchored.tense is None
+    assert p_unanchored.tense_label == "unanchored"
+    assert p_unanchored.status_label == "unanchored"
+
+    # Valid contested perspective
+    p_contested = TemporalPerspective(status=TemporalPerspectiveStatus.CONTESTED, when=when)
+    assert p_contested.tense is None
+    assert p_contested.tense_label == "contested"
+    assert p_contested.status_label == "contested"
+
+    # UNANCHORED + tense must raise
+    with pytest.raises(ValueError, match="unanchored"):
+        TemporalPerspective(status=TemporalPerspectiveStatus.UNANCHORED, when=when, tense=Tense.IS)
+
+    # CONTESTED + tense must raise
+    with pytest.raises(ValueError, match="contested"):
+        TemporalPerspective(status=TemporalPerspectiveStatus.CONTESTED, when=when, tense=Tense.WAS)
+
+
+def test_temporal_perspective_tense_label_all_resolved_values() -> None:
+    """RESOLVED perspective exposes correct tense_label for all three Tense values."""
+    when = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 1, 1, tzinfo=UTC))
+    for tense, expected in [(Tense.WAS, "was"), (Tense.IS, "is"), (Tense.PROJECTED, "projected")]:
+        p = TemporalPerspective(status=TemporalPerspectiveStatus.RESOLVED, when=when, tense=tense)
+        assert p.tense_label == expected
+        assert p.status_label == "resolved"
+
+
+def test_temporal_perspective_requires_valid_types() -> None:
+    """TemporalPerspective rejects non-TemporalPerspectiveStatus and non-WhenCondition inputs."""
+    when = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 1, 1, tzinfo=UTC))
+    with pytest.raises(TypeError, match="TemporalPerspectiveStatus"):
+        TemporalPerspective(status="resolved", when=when)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="WhenCondition"):
+        TemporalPerspective(status=TemporalPerspectiveStatus.UNANCHORED, when="now")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Whitespace-only rejection for EVENT and CRITERION
+# ---------------------------------------------------------------------------
+
+
+def test_when_condition_event_rejects_whitespace_only_expression() -> None:
+    """WhenCondition(EVENT) must reject whitespace-only expressions, not just empty ones."""
+    # Valid
+    cond = WhenCondition(WhenKind.EVENT, expression="door-opened")
+    assert cond.expression == "door-opened"
+
+    # Empty string — already rejected
+    with pytest.raises(ValueError, match="non-empty"):
+        WhenCondition(WhenKind.EVENT, expression="")
+
+    # Whitespace-only — must also be rejected (fail-closed)
+    with pytest.raises(ValueError, match="non-empty"):
+        WhenCondition(WhenKind.EVENT, expression="   ")
+
+    with pytest.raises(ValueError, match="non-empty"):
+        WhenCondition(WhenKind.EVENT, expression="\t\n")
+
+
+def test_when_condition_criterion_rejects_whitespace_only_expression() -> None:
+    """WhenCondition(CRITERION) must reject whitespace-only expressions, not just empty ones."""
+    # Valid
+    cond = WhenCondition(WhenKind.CRITERION, expression="task-approved")
+    assert cond.expression == "task-approved"
+
+    # Empty string — already rejected
+    with pytest.raises(ValueError, match="non-empty"):
+        WhenCondition(WhenKind.CRITERION, expression="")
+
+    # Whitespace-only — must also be rejected (fail-closed)
+    with pytest.raises(ValueError, match="non-empty"):
+        WhenCondition(WhenKind.CRITERION, expression="   ")
+
+    with pytest.raises(ValueError, match="non-empty"):
+        WhenCondition(WhenKind.CRITERION, expression=" \t ")
+
+
+def test_parse_when_expression_rejects_whitespace_only_event_and_criterion() -> None:
+    """parse_when_expression must return None for event/criterion with whitespace-only payloads."""
+    from af.domain.ideons.temporal import parse_when_expression
+
+    # Valid forms still accepted
+    assert parse_when_expression("event:door-opened") is not None
+    assert parse_when_expression("criterion:task-approved") is not None
+
+    # Whitespace-only payloads must fail closed
+    assert parse_when_expression("event:   ") is None
+    assert parse_when_expression("event: ") is None
+    assert parse_when_expression("event:\t") is None
+    assert parse_when_expression("criterion:   ") is None
+    assert parse_when_expression("criterion: ") is None
+    assert parse_when_expression("criterion:\t\n") is None

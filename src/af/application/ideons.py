@@ -33,6 +33,8 @@ from af.domain.ideons.records import (
     ShouldAssessment,
 )
 from af.domain.ideons.temporal import (
+    TemporalPerspective,
+    TemporalPerspectiveStatus,
     WhenCondition,
     WhenKind,
     parse_when_expression,
@@ -270,22 +272,25 @@ class IdeonService:
         if when_result.status is InquiryStatus.SATISFIED:
             event_when = _make_when_condition_from_context(context)
             if event_when is not None:
-                # Determine tense: compare against reference_when if available.
-                tense_value: str
+                # Build a typed TemporalPerspective so the resolution status is validated
+                # before serialisation into graph properties.
                 if reference_when is None:
-                    # No reference perspective declared: the WHEN condition is structurally
-                    # present but the tense is unanchored.  IS is reserved for a justified
-                    # present/equal standpoint confirmed by render_tense; event:, criterion:,
-                    # interval:, and ordering: conditions do not imply present tense by
-                    # themselves, and even a plain timestamp has no standpoint without a
-                    # declared reference.
-                    tense_value = "unanchored"
+                    perspective = TemporalPerspective(
+                        status=TemporalPerspectiveStatus.UNANCHORED, when=event_when
+                    )
                 else:
                     try:
-                        tense_value = render_tense(event_when, reference_when).value
+                        resolved_tense = render_tense(event_when, reference_when)
+                        perspective = TemporalPerspective(
+                            status=TemporalPerspectiveStatus.RESOLVED,
+                            when=event_when,
+                            tense=resolved_tense,
+                        )
                     except ValueError:
                         # Incompatible or uncomparable kinds — do not silently default to IS.
-                        tense_value = "contested"
+                        perspective = TemporalPerspective(
+                            status=TemporalPerspectiveStatus.CONTESTED, when=event_when
+                        )
 
                 # Build the WhenCondition representation for graph properties.
                 when_value: str
@@ -306,7 +311,13 @@ class IdeonService:
                         tq_node_id,
                         NodeKind.VALUE,
                         properties=(
-                            Property("tense", tense_value),
+                            # tense: full standpoint (was/is/projected for resolved;
+                            # unanchored/contested for unresolved) — serialised from the
+                            # validated TemporalPerspective domain value.
+                            Property("tense", perspective.tense_label),
+                            # tense-status: explicit resolution status (resolved/unanchored/
+                            # contested); always present for clear downstream interpretation.
+                            Property("tense-status", perspective.status_label),
                             Property("when-kind", event_when.kind.value),
                             Property("when-value", when_value),
                         ),

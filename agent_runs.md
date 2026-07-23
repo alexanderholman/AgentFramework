@@ -1125,3 +1125,33 @@ Two merge blockers in the PR's deterministic reference slice:
 - PR review comment: #5053882042
 
 ---
+
+## Run #022 — Ideon Correction: Typed Temporal Perspective and Fail-Closed Whitespace Conditions
+**Date**: 2026-07-23
+**Agent**: Copilot
+**Status**: Complete
+
+### Actions Taken
+1. Added ``TemporalPerspectiveStatus`` (``RESOLVED | UNANCHORED | CONTESTED``) and
+   ``TemporalPerspective`` typed domain value to ``af.domain.ideons.temporal``.
+   Invariant: RESOLVED requires a non-None ``Tense``; UNANCHORED/CONTESTED forbid one.
+   Properties ``tense_label`` and ``status_label`` expose validated serialisable values.
+2. Updated ``WhenCondition.__post_init__`` EVENT/CRITERION guard to use
+   ``not self.expression or not self.expression.strip()``.
+3. Updated ``parse_when_expression`` event/criterion guard to use
+   ``not payload or not payload.strip()``.
+4. Updated ``IdeonService.construct_graph`` to build a ``TemporalPerspective`` typed
+   value and serialise both ``tense`` (full label) and ``tense-status`` (resolution
+   status) graph properties.
+5. Added 7 unit/integration tests covering all new invariants (TEST-022-1 to -7).
+6. Appended SPEC-022 and DEC-036 to governance files.
+
+### Verification
+- ``uv run ruff check src/af/domain/ideons/temporal.py src/af/application/ideons.py tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: all checks passed
+- ``uv run mypy src/af/domain/ideons/temporal.py src/af/application/ideons.py``: no issues
+- ``uv run pytest tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: 62 passed
+- Spec: SPEC-022
+- Decision: DEC-036
+- PR review comment: #5055123973
+
+---

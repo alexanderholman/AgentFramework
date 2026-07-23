@@ -2118,3 +2118,93 @@ and SPEC-021 are the authoritative current statements.
 - Modified: `agent_runs.md` (appended Run #021)
 
 ---
+
+## [DEC-036] Ideon Correction: Typed Temporal Perspective and Fail-Closed Whitespace Conditions
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-021 (DEC-035) identified two remaining blockers:
+
+1. **The authoritative graph state was not representable by the declared typed domain
+   model.**  ``TemporalQualification`` required ``tense: Tense`` permitting only
+   ``WAS``, ``IS``, and ``PROJECTED``.  ``construct_graph`` nevertheless emitted two
+   additional free-string values, ``"unanchored"`` and ``"contested"``, as the ``tense``
+   graph property.  These are valid epistemic states that belong in the domain model, but
+   they must not be added to the ``Tense`` axis itself.
+
+2. **``event:`` and ``criterion:`` accepted whitespace-only expressions.**
+   ``WhenCondition.__post_init__`` and ``parse_when_expression`` tested truthiness
+   (``if not payload`` / ``if not self.expression``) but not ``str.strip()``, so
+   payloads like ``event:   `` and ``criterion: \t`` were treated as valid.
+
+### Decision
+
+**1 — Typed temporal perspective**
+
+Introduce ``TemporalPerspectiveStatus`` (``StrEnum``: ``RESOLVED``, ``UNANCHORED``,
+``CONTESTED``) and ``TemporalPerspective`` (``frozen dataclass``:
+``status: TemporalPerspectiveStatus``, ``when: WhenCondition``,
+``tense: Tense | None = None``) in ``af.domain.ideons.temporal``.
+
+Invariant enforced in ``__post_init__``:
+- ``RESOLVED`` requires ``tense is not None``; a ``ValueError`` is raised otherwise.
+- ``UNANCHORED`` and ``CONTESTED`` must not carry a ``tense``; a ``ValueError`` is
+  raised if one is supplied.
+
+``TemporalPerspective.tense_label`` exposes the full serialisable representation
+(``was | is | projected | unanchored | contested``) so callers receive a consistent
+surface.  ``TemporalPerspective.status_label`` exposes the resolution status
+(``resolved | unanchored | contested``) for separate downstream use.
+
+``construct_graph`` builds a ``TemporalPerspective`` typed value and emits:
+- ``tense``: ``perspective.tense_label`` (full representation, backward-compatible).
+- ``tense-status``: ``perspective.status_label`` (explicit resolution status, new).
+
+``TemporalQualification`` is retained unchanged for resolved tense attachment to
+propositions; ``TemporalPerspective`` serves the broader graph-construction path that
+includes unresolved states.
+
+**2 — Fail-closed whitespace for EVENT/CRITERION**
+
+``WhenCondition.__post_init__``: change the EVENT/CRITERION guard to
+``if not self.expression or not self.expression.strip()``.
+
+``parse_when_expression``: change the ``event``/``criterion`` guard to
+``if not payload or not payload.strip()``.
+
+Both layers now independently reject whitespace-only expressions.
+
+### Alternatives Considered
+- **Add ``UNANCHORED`` and ``CONTESTED`` to ``Tense``**: rejected — the comment
+  explicitly requires "do not solve this by adding unresolved epistemic states to the
+  tense axis itself".
+- **Keep free-string ``tense_value`` and add a separate runtime assertion**: rejected —
+  the domain model must be self-validating; an assertion is not a typed domain
+  invariant.
+
+### Consequences
+- The authoritative graph state is now fully representable by the typed domain model.
+- ``tense-status`` provides explicit downstream resolution-status without changing the
+  existing ``tense`` property contract.
+- Whitespace-only EVENT/CRITERION expressions are fail-closed at both domain and parser
+  layers.
+- Seven new focused tests added (TEST-022-1 through TEST-022-7).
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033, DEC-034, DEC-035
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021, SPEC-022
+
+### Output References
+- Modified: ``src/af/domain/ideons/temporal.py`` (new types, whitespace fix)
+- Modified: ``src/af/application/ideons.py`` (TemporalPerspective in construct_graph)
+- Modified: ``tests/unit/test_ideon_language.py`` (7 new tests)
+- Modified: ``tests/unit/test_ideon_service.py`` (1 new end-to-end test)
+- Modified: ``specs.md`` (appended SPEC-022)
+- Modified: ``decisions.md`` (appended DEC-036)
+- Modified: ``agent_runs.md`` (appended Run #022)
+
+---

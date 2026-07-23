@@ -1219,3 +1219,51 @@ remaining blockers identified in review of SPEC-020 are resolved.
 - SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020
 
 ---
+
+## [SPEC-022] Ideon Correction: Typed Temporal Perspective and Fail-Closed Whitespace Conditions
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Sixth correction pass on the deterministic Prime Language reference slice.  Two
+remaining blockers identified in review of SPEC-021 are resolved.
+
+### Requirements
+- MUST introduce a finite typed representation that separates resolution status from
+  resolved tense.  Add ``TemporalPerspectiveStatus`` (``RESOLVED | UNANCHORED |
+  CONTESTED``) and ``TemporalPerspective`` (``status``, ``when: WhenCondition``,
+  ``tense: Tense | None``) to ``af.domain.ideons.temporal``.  Invariant: ``RESOLVED``
+  requires a non-None ``Tense``; ``UNANCHORED`` and ``CONTESTED`` must not carry a
+  tense.  Construct the typed value in ``IdeonService.construct_graph`` and serialize
+  only its validated finite projection into graph properties.  The graph node must carry
+  both a ``tense`` property (full label: ``was | is | projected | unanchored |
+  contested``) and a ``tense-status`` property (resolution status:
+  ``resolved | unanchored | contested``).  Do not add unresolved states to the ``Tense``
+  axis itself.
+- MUST reject whitespace-only expressions for ``WhenKind.EVENT`` and
+  ``WhenKind.CRITERION`` in both ``WhenCondition.__post_init__`` and
+  ``parse_when_expression``.  Test truthiness AND ``str.strip()`` in both layers.
+  A payload of ``event:   `` or ``criterion: \t`` must fail closed.
+
+### Tests
+- **TEST-022-1**: ``TemporalPerspective(RESOLVED)`` requires non-None ``Tense``; missing
+  tense raises ``ValueError``.
+- **TEST-022-2**: ``TemporalPerspective(UNANCHORED/CONTESTED)`` must not carry a tense;
+  supplying one raises ``ValueError``.
+- **TEST-022-3**: ``TemporalPerspective.tense_label`` returns ``was | is | projected``
+  for RESOLVED and ``unanchored | contested`` for unresolved.
+- **TEST-022-4**: Invalid ``status`` / ``when`` types raise ``TypeError``.
+- **TEST-022-5**: ``WhenCondition(EVENT/CRITERION, expression="   ")`` raises
+  ``ValueError`` (whitespace-only, direct constructor).
+- **TEST-022-6**: ``parse_when_expression("event:   ")`` returns ``None``; likewise for
+  ``criterion:   `` (fail-closed at parser layer).
+- **TEST-022-7**: End-to-end graph carries ``tense-status="resolved"`` +
+  ``tense="was"`` for a compatible timestamp reference; ``tense-status="unanchored"`` +
+  ``tense="unanchored"`` with no reference; ``tense-status="contested"`` + ``tense=
+  "contested"`` with incompatible kinds.
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021
+
+---

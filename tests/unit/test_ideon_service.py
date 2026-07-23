@@ -785,3 +785,52 @@ def test_no_reference_when_yields_unanchored_tense_for_all_when_kinds() -> None:
     assert tense_timestamp == "unanchored", (
         f"TIMESTAMP with no reference must yield tense='unanchored', got {tense_timestamp!r}"
     )
+
+
+def test_temporal_perspective_tense_status_property_in_graph() -> None:
+    """End-to-end: the temporal-qualification node carries a 'tense-status' property
+    with values 'resolved', 'unanchored', or 'contested' depending on the resolution path.
+
+    Resolves: RESOLVED (reference supplied + compatible kinds), UNANCHORED (no reference),
+    CONTESTED (reference supplied + incompatible kinds).  Validates that 'tense-status'
+    is always present alongside 'tense' in the resolved graph."""
+    from datetime import UTC, datetime
+
+    from af.domain.ideons.temporal import WhenCondition, WhenKind
+
+    service, store = reference_service()
+
+    def get_props(
+        ctx: ContextGraph, source_id: str, ref: WhenCondition | None = None
+    ) -> dict[str, str]:
+        rec = service.interpret(
+            InterpretRequest(
+                "sat on the bank", source_id, "internal-test-fixture", ctx, reference_when=ref
+            )
+        )
+        g = store.resolve(
+            next(r for r in store.revisions(rec.ideon_key) if r.revision == rec.ideon_revision)
+        )
+        tq = next((n for n in g.nodes if n.node_id == "temporal-qualification"), None)
+        assert tq is not None, f"temporal-qualification missing for source={source_id!r}"
+        return {p.name: p.value for p in tq.properties}
+
+    # RESOLVED: timestamp event + timestamp reference → tense-status='resolved', tense='was'
+    ctx_ts = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-06-01T00:00:00Z"}
+    )
+    ref_ts = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 7, 1, tzinfo=UTC))
+    props_resolved = get_props(ctx_ts, "fixture:status-resolved", ref_ts)
+    assert props_resolved["tense-status"] == "resolved"
+    assert props_resolved["tense"] == "was"
+
+    # UNANCHORED: timestamp event, no reference → tense-status='unanchored', tense='unanchored'
+    props_unanchored = get_props(ctx_ts, "fixture:status-unanchored")
+    assert props_unanchored["tense-status"] == "unanchored"
+    assert props_unanchored["tense"] == "unanchored"
+
+    # CONTESTED: timestamp event + criterion reference (incompatible kinds)
+    criterion_ref = WhenCondition(WhenKind.CRITERION, expression="x", status="satisfied")
+    props_contested = get_props(ctx_ts, "fixture:status-contested", criterion_ref)
+    assert props_contested["tense-status"] == "contested"
+    assert props_contested["tense"] == "contested"
