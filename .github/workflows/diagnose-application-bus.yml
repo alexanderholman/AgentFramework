@@ -13,6 +13,12 @@ jobs:
     name: Isolated quality checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
+      AF_APPEND_ONLY_HEAD_REF: ${{ github.sha }}
+      AF_APPEND_ONLY_BASE_STRATEGY: merge-base
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
     steps:
       - name: Check out exact head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -35,6 +41,10 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
+      - name: Release declaration validation
+        continue-on-error: true
+        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action validate
+
       - name: Format check
         continue-on-error: true
         run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff format --check src/af tests scripts
@@ -50,3 +60,19 @@ jobs:
       - name: Focused tests
         continue-on-error: true
         run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev pytest -q tests/unit/test_application_bus.py tests/unit/test_application_middleware.py
+
+      - name: Full coverage suite
+        continue-on-error: true
+        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev pytest --cov=af --cov-report=term-missing --cov-fail-under=90
+
+      - name: Node route gate
+        continue-on-error: true
+        run: node --test tests/opencode/route-gate.test.mjs
+
+      - name: Package gate
+        continue-on-error: true
+        run: python scripts/af_dev.py --action package --execute
+
+      - name: Legacy validation
+        continue-on-error: true
+        run: ./validate_agents.sh
