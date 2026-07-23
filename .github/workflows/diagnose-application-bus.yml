@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   diagnose:
-    name: Isolated quality checks
+    name: Exact check-environment commands
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
       AF_APPEND_ONLY_HEAD_REF: ${{ github.sha }}
@@ -41,38 +41,57 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Release declaration validation
+      - &exact-command
+        name: Exact command 0 - release validation
         continue-on-error: true
-        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action validate
+        env:
+          COMMAND_INDEX: "0"
+        run: |
+          python - <<'PY'
+          import os, runpy, subprocess
+          namespace = runpy.run_path("scripts/af_dev.py")
+          commands = namespace["ACTIONS"]["check"]
+          git = namespace["resolve_locked_git_executable"]()
+          commands = namespace["pin_locked_release_tools"](
+              commands,
+              namespace["resolve_locked_uv_executable"](),
+              git,
+          )
+          command = commands[int(os.environ["COMMAND_INDEX"])]
+          raise SystemExit(subprocess.run(command, env=namespace["execution_environment"]("check")).returncode)
+          PY
 
-      - name: Format check
-        continue-on-error: true
-        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff format --check src/af tests scripts
+      - <<: *exact-command
+        name: Exact command 1 - format
+        env:
+          COMMAND_INDEX: "1"
 
-      - name: Lint check
-        continue-on-error: true
-        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff check src/af tests scripts
+      - <<: *exact-command
+        name: Exact command 2 - lint
+        env:
+          COMMAND_INDEX: "2"
 
-      - name: Type check
-        continue-on-error: true
-        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev mypy src
+      - <<: *exact-command
+        name: Exact command 3 - type check
+        env:
+          COMMAND_INDEX: "3"
 
-      - name: Focused tests
-        continue-on-error: true
-        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev pytest -q tests/unit/test_application_bus.py tests/unit/test_application_middleware.py
+      - <<: *exact-command
+        name: Exact command 4 - full coverage
+        env:
+          COMMAND_INDEX: "4"
 
-      - name: Full coverage suite
-        continue-on-error: true
-        run: uv run --no-config --no-env-file --offline --locked --no-sources --extra dev pytest --cov=af --cov-report=term-missing --cov-fail-under=90
+      - <<: *exact-command
+        name: Exact command 5 - node route gate
+        env:
+          COMMAND_INDEX: "5"
 
-      - name: Node route gate
-        continue-on-error: true
-        run: node --test tests/opencode/route-gate.test.mjs
+      - <<: *exact-command
+        name: Exact command 6 - package
+        env:
+          COMMAND_INDEX: "6"
 
-      - name: Package gate
-        continue-on-error: true
-        run: python scripts/af_dev.py --action package --execute
-
-      - name: Legacy validation
-        continue-on-error: true
-        run: ./validate_agents.sh
+      - <<: *exact-command
+        name: Exact command 7 - legacy validation
+        env:
+          COMMAND_INDEX: "7"
