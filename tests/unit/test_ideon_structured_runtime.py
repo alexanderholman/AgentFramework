@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from af.application.ideons import InterpretRequest
 from af.application.structured_ideons import structure_inquiries
 from af.domain.ideons.models import IdeonNode, IdeonRef
 from af.domain.ideons.questions import QGroup, QLeaf, QOperator
 from af.domain.ideons.records import ContextGraph, InquiryStatus, Question
 from af.domain.ideons.structured import StructuredInquiryResult
+from af.domain.ideons.temporal import WhenCondition, WhenKind
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 
 
@@ -86,6 +89,45 @@ def test_reference_runtime_carries_recursive_questions_through_transport_and_gra
     assert "inquiry-expression-whern" in identity_context
     assert "inquiry-when" in graph.identity.roots
     assert "inquiry-whern" in graph.identity.roots
+
+
+def test_single_when_leaf_retains_global_temporal_perspective() -> None:
+    runtime = create_reference_ideon_runtime()
+    record = runtime.controller.interpret(
+        InterpretRequest(
+            surface="sat on the bank",
+            source_id="structured:single-mark",
+            rights="project-authored",
+            context=ContextGraph.from_dict(
+                {
+                    "actor": "alice",
+                    "domain": "river",
+                    "time": "2026-07-23T10:00:00+00:00",
+                    "where": "river-bank",
+                }
+            ),
+            reference_when=WhenCondition(
+                WhenKind.TIMESTAMP,
+                instant=datetime(2026, 7, 24, 10, tzinfo=UTC),
+            ),
+        )
+    )
+
+    when = record.inquiries.get(Question.WHEN)
+    assert isinstance(when, StructuredInquiryResult)
+    assert isinstance(when.expression, QLeaf)
+
+    graph = runtime.service.resolve(IdeonRef(record.ideon_key, record.ideon_revision))
+    node_by_id = {node.node_id: node for node in graph.nodes}
+    perspective = _properties(node_by_id["temporal-qualification"])
+    assert perspective["temporal-perspective-status"] == "resolved"
+    assert perspective["resolved-tense"] == "was"
+    assert any(
+        edge.source == "inquiry-when"
+        and edge.relation == "qualifies-predicate"
+        and edge.target == "sense-0-0"
+        for edge in graph.edges
+    )
 
 
 def test_explicit_when_operator_is_preserved() -> None:
