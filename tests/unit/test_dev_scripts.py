@@ -320,6 +320,7 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
     scripts_dir.mkdir()
     release_gates = scripts_dir / "release_gates.py"
     nested_uv_log = tmp_path / "nested-uv.log"
+    nested_uv_log_literal = repr(str(nested_uv_log))
     release_gates.write_text(
         "from __future__ import annotations\n"
         "import argparse\n"
@@ -338,7 +339,7 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
         "        return 10\n"
         "    if '.venv' in uv_path.parts:\n"
         "        return 11\n"
-        f"    with Path({str(nested_uv_log)!r}).open('a', encoding='utf-8') as handle:\n"
+        f"    with Path({nested_uv_log_literal}).open('a', encoding='utf-8') as handle:\n"
         "        handle.write(str(uv_path) + '\\n')\n"
         "    for command in (\n"
         "        [str(uv_path), 'build', '--sdist'],\n"

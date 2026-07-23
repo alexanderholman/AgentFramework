@@ -120,19 +120,23 @@ def resolve_locked_uv_executable() -> str:
 
 def _is_nested_release_package_command(command: Sequence[str]) -> bool:
     """Return true when argv represents the nested release package invocation."""
+    if len(command) < len(LOCKED_RUN):
+        return False
+    if tuple(command[1 : len(LOCKED_RUN)]) != LOCKED_RUN[1:]:
+        return False
+    try:
+        script_index = command.index("scripts/release_gates.py")
+    except ValueError:
+        return False
+    if script_index < 1 or command[script_index - 1] != "python":
+        return False
+    tail = command[script_index + 1 :]
+    try:
+        action_index = tail.index("--action")
+    except ValueError:
+        return False
     return (
-        len(command) >= 7
-        and command[1] == "run"
-        and command[2] == "--no-config"
-        and command[3] == "--no-env-file"
-        and command[4] == "--offline"
-        and command[5] == "--locked"
-        and command[6] == "--no-sources"
-        and "python" in command
-        and "scripts/release_gates.py" in command
-        and "--action" in command
-        and "package" in command
-        and "--execute" in command
+        action_index + 1 < len(tail) and tail[action_index + 1] == "package" and "--execute" in tail
     )
 
 
