@@ -172,6 +172,7 @@ def _write_distribution_fixture(
     omit_record_member: bool = False,
     tamper_sdist_path: str | None = None,
     fifo_sdist_path: str | None = None,
+    contiguous_sdist_path: str | None = None,
     dot_sdist_member: bool = False,
 ) -> tuple[Path, Path]:
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
@@ -321,6 +322,13 @@ def _write_distribution_fixture(
             info.type = tarfile.FIFOTYPE
             info.mode = 0o644
             archive.addfile(info)
+        if contiguous_sdist_path is not None:
+            payload = b"invalid\n"
+            info = tarfile.TarInfo(f"{root}/{contiguous_sdist_path}")
+            info.type = tarfile.CONTTYPE
+            info.size = len(payload)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(payload))
         if dot_sdist_member:
             payload = b"invalid\n"
             info = tarfile.TarInfo(".")
@@ -534,6 +542,18 @@ def test_distribution_inspection_rejects_sdist_fifo(tmp_path: Path) -> None:
         assert "sdist contains unsupported member" in str(exc)
     else:
         raise AssertionError("sdist FIFO was accepted")
+
+
+def test_distribution_inspection_rejects_contiguous_sdist_member(tmp_path: Path) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, contiguous_sdist_path="contiguous")
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "sdist contains unsupported member" in str(exc)
+    else:
+        raise AssertionError("contiguous sdist member was accepted")
 
 
 def test_distribution_inspection_rejects_dot_sdist_member(tmp_path: Path) -> None:

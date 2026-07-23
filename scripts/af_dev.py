@@ -23,7 +23,14 @@ LOCKED_RUN = (
     "dev",
 )
 LOCKED_ACTIONS = frozenset(
-    {"check", "package", "release-check", "release-report", "release-validate"}
+    {
+        "check",
+        "package",
+        "release-check",
+        "release-report",
+        "release-report-json",
+        "release-validate",
+    }
 )
 
 ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -47,6 +54,9 @@ ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
         (*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "validate"),
     ),
     "release-report": ((*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "report"),),
+    "release-report-json": (
+        (*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "report", "--json"),
+    ),
     "release-check": ((*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "check"),),
     "package": (
         (

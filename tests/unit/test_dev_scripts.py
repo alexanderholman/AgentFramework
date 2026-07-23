@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -87,19 +88,13 @@ def test_release_gate_workflow_is_registered() -> None:
         script for script in registry["scripts"] if script["id"] == "release-package"
     )
 
-    assert release_gate["command"] == (
-        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
-        "python scripts/release_gates.py --action '<action>'"
-    )
+    assert release_gate["command"] == ("python3 scripts/af_dev.py --action '<action>' --execute")
     assert set(release_gate["capabilities"]) >= {
         "production-readiness-report",
         "release-declaration-validation",
     }
     assert release_gate["parameters"] == ["action"]
-    assert release_package["command"] == (
-        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
-        "python scripts/release_gates.py --action package --execute"
-    )
+    assert release_package["command"] == ("python3 scripts/af_dev.py --action package --execute")
     assert "package-validation" in release_package["capabilities"]
 
 
@@ -111,7 +106,9 @@ def test_locked_release_environment_rejects_inherited_tool_overrides(
     monkeypatch.setenv("PIP_INDEX_URL", "https://user:secret@example.invalid/simple")
     monkeypatch.setenv("UV_CONFIG_FILE", "/tmp/untrusted-uv.toml")
     monkeypatch.setenv("UV_INDEX_URL", "https://user:secret@example.invalid/simple")
+    monkeypatch.setenv("UV_NO_SYNC", "1")
     monkeypatch.setenv("UV_PYTHON", "/tmp/untrusted-python")
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/tmp/untrusted-environment")
     monkeypatch.setenv("AF_APPEND_ONLY_BASE_REF", "origin/master")
 
     environment = module.execution_environment("check")
@@ -124,6 +121,50 @@ def test_locked_release_environment_rejects_inherited_tool_overrides(
     assert "PIP_INDEX_URL" not in environment
     assert "UV_CONFIG_FILE" not in environment
     assert "UV_INDEX_URL" not in environment
+    assert "UV_NO_SYNC" not in environment
+    assert "UV_PROJECT_ENVIRONMENT" not in environment
+
+
+def test_release_report_json_uses_the_sanitized_locked_launcher() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(AF_DEV), "--action", "release-report-json"],
+        capture_output=True,
+        check=False,
+        cwd=REPO_ROOT,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert (
+        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
+        "python scripts/release_gates.py --action report --json"
+    ) in completed.stdout
+
+
+def test_locked_release_launcher_ignores_inherited_uv_environment(tmp_path: Path) -> None:
+    invalid_environment = tmp_path / "not-a-virtual-environment"
+    invalid_environment.write_text("invalid\n", encoding="utf-8")
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "UV_CONFIG_FILE": str(tmp_path / "missing-uv.toml"),
+            "UV_NO_SYNC": "1",
+            "UV_PYTHON": str(tmp_path / "missing-python"),
+            "UV_PROJECT_ENVIRONMENT": str(invalid_environment),
+        }
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(AF_DEV), "--action", "release-validate", "--execute"],
+        capture_output=True,
+        check=False,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "production certification not performed" in completed.stdout
 
 
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:

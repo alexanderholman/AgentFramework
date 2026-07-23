@@ -141,8 +141,8 @@ Inspect canonical policy declarations separately; a complete declaration report 
 not verify evidence or authorize production deployment:
 
 ```bash
-uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report
-uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action check
+python3 scripts/af_dev.py --action release-report --execute
+python3 scripts/af_dev.py --action release-check --execute
 ```
 
 ## Repository governance

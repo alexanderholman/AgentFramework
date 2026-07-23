@@ -34,8 +34,8 @@ The expected outputs are `Hello, world!` and `3`.
 Validate the source and wheel packaging path:
 
 ```bash
-uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package
-uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package --execute
+python3 scripts/af_dev.py --action package
+python3 scripts/af_dev.py --action package --execute
 ```
 
 The executed package action snapshots the clean Git commit into temporary directories, builds
@@ -81,9 +81,9 @@ release blockers, artifact requirements, backup/restore evidence, and rollback e
 are defined in [Private production MVP](docs/production-mvp.md).
 
 ```bash
-uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action validate
-uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report
-uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action check
+python3 scripts/af_dev.py --action release-validate --execute
+python3 scripts/af_dev.py --action release-report --execute
+python3 scripts/af_dev.py --action release-check --execute
 ```
 
 The final command intentionally exits `1` while any blocking declaration remains unmet or

@@ -464,6 +464,14 @@ def _forbidden_archive_path(name: str, *, wheel: bool) -> bool:
     )
 
 
+def _is_regular_tar_member(member: tarfile.TarInfo) -> bool:
+    return member.type in (tarfile.REGTYPE, tarfile.AREGTYPE)
+
+
+def _is_directory_tar_member(member: tarfile.TarInfo) -> bool:
+    return member.type == tarfile.DIRTYPE
+
+
 def _source_files(root: Path) -> dict[str, Path]:
     source_root = root / "src/af"
     return {
@@ -637,7 +645,7 @@ def _inspect_sdist(root: Path, sdist: Path, *, identity: ProjectIdentity) -> Non
             members = archive.getmembers()
             if len(members) > MAX_ARCHIVE_MEMBERS:
                 raise ArtifactError("sdist contains too many members")
-            expanded_size = sum(member.size for member in members if member.isfile())
+            expanded_size = sum(member.size for member in members if _is_regular_tar_member(member))
             if expanded_size > MAX_ARCHIVE_EXPANDED_BYTES:
                 raise ArtifactError("sdist exceeds the expanded-size limit")
             roots: set[str] = set()
@@ -645,7 +653,7 @@ def _inspect_sdist(root: Path, sdist: Path, *, identity: ProjectIdentity) -> Non
             member_names: set[str] = set()
             for member in members:
                 path = _validate_archive_name(member.name, "sdist")
-                if not member.isfile() and not member.isdir():
+                if not _is_regular_tar_member(member) and not _is_directory_tar_member(member):
                     raise ArtifactError(f"sdist contains unsupported member: {member.name}")
                 if not path.parts:
                     continue
@@ -659,9 +667,9 @@ def _inspect_sdist(root: Path, sdist: Path, *, identity: ProjectIdentity) -> Non
                     )
                     raise ArtifactError(f"sdist contains duplicate member: {duplicate}")
                 member_names.add(normalized)
-                if len(path.parts) == 1 and not member.isdir():
+                if len(path.parts) == 1 and not _is_directory_tar_member(member):
                     raise ArtifactError(f"sdist contains unsupported member: {member.name}")
-                if len(path.parts) > 1 and member.isfile():
+                if len(path.parts) > 1 and _is_regular_tar_member(member):
                     relative = PurePosixPath(*path.parts[1:]).as_posix()
                     if member.size > MAX_ARCHIVE_FILE_BYTES:
                         raise ArtifactError(f"sdist member exceeds the size limit: {relative}")
@@ -800,7 +808,7 @@ def _extract_source_snapshot(archive_path: Path, destination: Path) -> None:
             members = archive.getmembers()
             if len(members) > MAX_ARCHIVE_MEMBERS:
                 raise ArtifactError("source snapshot contains too many members")
-            expanded_size = sum(member.size for member in members if member.isfile())
+            expanded_size = sum(member.size for member in members if _is_regular_tar_member(member))
             if expanded_size > MAX_ARCHIVE_EXPANDED_BYTES:
                 raise ArtifactError("source snapshot exceeds the expanded-size limit")
             seen: set[str] = set()
@@ -811,10 +819,10 @@ def _extract_source_snapshot(archive_path: Path, destination: Path) -> None:
                     raise ArtifactError(f"source snapshot contains duplicate member: {normalized}")
                 seen.add(normalized)
                 target = destination.joinpath(*path.parts)
-                if member.isdir():
+                if _is_directory_tar_member(member):
                     target.mkdir(parents=True, exist_ok=True)
                     continue
-                if not member.isfile() or member.size > MAX_ARCHIVE_FILE_BYTES:
+                if not _is_regular_tar_member(member) or member.size > MAX_ARCHIVE_FILE_BYTES:
                     raise ArtifactError(
                         f"source snapshot contains unsupported member: {member.name}"
                     )
