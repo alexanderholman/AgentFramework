@@ -729,6 +729,363 @@ def test_immediate_late_cleanup_handoff_waits_for_unpublished_resource() -> None
     assert resource.closed
 
 
+def test_parent_late_cleanup_waits_for_detached_child_construction() -> None:
+    factory_entered = Event()
+    release_factory = Event()
+
+    class Resource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    resource = Resource()
+
+    def factory(_: Container) -> Resource:
+        factory_entered.set()
+        assert release_factory.wait(timeout=5)
+        return resource
+
+    root = Container(shutdown_timeout=0.2)
+    root.bind(Resource, factory, scope=Scope.APPLICATION)
+    application = root.application_scope()
+
+    def resolve() -> None:
+        with pytest.raises(ScopeDisposed):
+            application.resolve(Resource)
+
+    worker = Thread(target=resolve, daemon=True)
+    worker.start()
+    assert factory_entered.wait(timeout=5)
+    with pytest.raises(ScopeDisposalError):
+        root.close()
+
+    async def handoff() -> None:
+        cleanup = asyncio.create_task(root.aclose())
+        await asyncio.sleep(0.01)
+        assert not cleanup.done()
+        assert not resource.closed
+        release_factory.set()
+        await asyncio.to_thread(worker.join, 5)
+        with pytest.raises(ScopeDisposalError):
+            await cleanup
+
+    asyncio.run(handoff())
+    assert resource.closed
+    assert application not in root._children  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("mode", ["value", "failure"])
+def test_parent_releases_child_after_non_resource_construction_retires(mode: str) -> None:
+    factory_entered = Event()
+    release_factory = Event()
+
+    def factory(_: Container) -> object:
+        factory_entered.set()
+        assert release_factory.wait(timeout=5)
+        if mode == "failure":
+            raise RuntimeError("private construction failure")
+        return object()
+
+    root = Container(shutdown_timeout=0.05)
+    root.bind("service", factory, scope=Scope.APPLICATION)
+    application = root.application_scope()
+
+    def resolve() -> None:
+        with pytest.raises((ScopeDisposed, RuntimeError)):
+            application.resolve_token("service")
+
+    worker = Thread(target=resolve, daemon=True)
+    worker.start()
+    assert factory_entered.wait(timeout=5)
+    with pytest.raises(ScopeDisposalError):
+        root.close()
+    release_factory.set()
+    worker.join(timeout=5)
+
+    with pytest.raises(ScopeDisposalError):
+        asyncio.run(root.aclose())
+    assert application not in root._children  # type: ignore[attr-defined]
+
+
+def test_parent_releases_child_after_late_async_factory_failure() -> None:
+    class Service:
+        pass
+
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def factory(_: Container) -> Service:
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            raise RuntimeError("private late factory failure")
+
+        root = Container(shutdown_timeout=0.03)
+        root.bind_async(Service, factory, scope=Scope.APPLICATION)
+        application = root.application_scope()
+        resolving = asyncio.create_task(application.resolve_async(Service))
+        await entered.wait()
+
+        with pytest.raises(ScopeDisposalError):
+            await root.aclose()
+        release.set()
+        await asyncio.gather(resolving, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert application not in root._children  # type: ignore[attr-defined]
+
+    asyncio.run(scenario())
+
+
+def test_parent_releases_child_after_late_async_publication_rejection() -> None:
+    class Service:
+        pass
+
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def factory(_: Container) -> Service:
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            return Service()
+
+        root = Container(shutdown_timeout=0.03)
+        root.bind_async(Service, factory, scope=Scope.APPLICATION)
+        application = root.application_scope()
+        resolving = asyncio.create_task(application.resolve_async(Service))
+        await entered.wait()
+
+        with pytest.raises(ScopeDisposalError):
+            await root.aclose()
+        release.set()
+        await asyncio.gather(resolving, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert application not in root._children  # type: ignore[attr-defined]
+
+    asyncio.run(scenario())
+
+
+def test_parent_late_cleanup_aggregates_child_failure() -> None:
+    factory_entered = Event()
+    release_factory = Event()
+
+    class Resource:
+        async def aclose(self) -> None:
+            raise ValueError("private child cleanup failure")
+
+    def factory(_: Container) -> Resource:
+        factory_entered.set()
+        assert release_factory.wait(timeout=5)
+        return Resource()
+
+    root = Container(shutdown_timeout=0.05)
+    root.bind(Resource, factory, scope=Scope.APPLICATION)
+    application = root.application_scope()
+
+    def resolve() -> None:
+        with pytest.raises(ScopeDisposed):
+            application.resolve(Resource)
+
+    worker = Thread(target=resolve)
+    worker.start()
+    assert factory_entered.wait(timeout=5)
+    with pytest.raises(ScopeDisposalError):
+        root.close()
+    release_factory.set()
+    worker.join(timeout=5)
+
+    with pytest.raises(ScopeDisposalError) as captured:
+        asyncio.run(root.aclose())
+    assert any(isinstance(error, ValueError) for error in captured.value.failures)
+
+
+def test_child_late_cancellation_does_not_skip_older_sibling() -> None:
+    entered = [Event(), Event()]
+    releases = [Event(), Event()]
+    older_closed = Event()
+
+    class OlderResource:
+        async def aclose(self) -> None:
+            older_closed.set()
+
+    class NewerResource:
+        async def aclose(self) -> None:
+            raise asyncio.CancelledError
+
+    root = Container(shutdown_timeout=0.05)
+    values = (OlderResource(), NewerResource())
+    for index, value in enumerate(values):
+
+        def factory(
+            _: Container,
+            current: int = index,
+            result: OlderResource | NewerResource = value,
+        ) -> OlderResource | NewerResource:
+            entered[current].set()
+            assert releases[current].wait(timeout=5)
+            return result
+
+        root.bind(f"resource-{index}", factory, scope=Scope.APPLICATION)
+
+    applications = [root.application_scope(), root.application_scope()]
+
+    def resolve(index: int) -> None:
+        with pytest.raises(ScopeDisposed):
+            applications[index].resolve_token(f"resource-{index}")
+
+    workers = [Thread(target=resolve, args=(index,), daemon=True) for index in range(2)]
+    for worker in workers:
+        worker.start()
+    assert all(signal.wait(timeout=5) for signal in entered)
+    with pytest.raises(ScopeDisposalError):
+        root.close()
+    for release, worker in zip(releases, workers, strict=True):
+        release.set()
+        worker.join(timeout=5)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(root.aclose())
+    assert older_closed.is_set()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(root.aclose())
+
+
+def test_parent_async_cleanup_joins_active_child_sync_cleanup() -> None:
+    calls = 0
+    sync_cleanup_entered = Event()
+    release_sync_cleanup = Event()
+    close_outcomes: Queue[BaseException | None] = Queue()
+
+    class DelayedRoot(Container):
+        def __init__(self) -> None:
+            super().__init__()
+            self.parent_waiting = asyncio.Event()
+            self.release_parent = asyncio.Event()
+
+        async def _wait_for_constructions_async(self) -> bool:
+            self.parent_waiting.set()
+            await self.release_parent.wait()
+            return True
+
+    class Resource:
+        def close(self) -> None:
+            nonlocal calls
+            calls += 1
+            sync_cleanup_entered.set()
+            assert release_sync_cleanup.wait(timeout=5)
+
+    root = DelayedRoot()
+    root.bind(Resource, lambda _: Resource(), scope=Scope.APPLICATION)
+    application = root.application_scope()
+    application.resolve(Resource)
+
+    def close_child() -> None:
+        try:
+            application.close()
+        except BaseException as error:
+            close_outcomes.put(error)
+        else:
+            close_outcomes.put(None)
+
+    async def scenario() -> None:
+        parent_cleanup = asyncio.create_task(root.aclose())
+        await root.parent_waiting.wait()
+        child_cleanup = Thread(target=close_child, daemon=True)
+        child_cleanup.start()
+        assert await asyncio.to_thread(sync_cleanup_entered.wait, 5)
+        root.release_parent.set()
+        await asyncio.sleep(0.01)
+        assert calls == 1
+        assert not parent_cleanup.done()
+        release_sync_cleanup.set()
+        await asyncio.to_thread(child_cleanup.join, 5)
+        await parent_cleanup
+
+    asyncio.run(scenario())
+    assert calls == 1
+    assert close_outcomes.get_nowait() is None
+
+
+@pytest.mark.parametrize("cancel_parent", [False, True])
+def test_parent_async_cleanup_takes_over_relinquished_child_preflight(
+    cancel_parent: bool,
+) -> None:
+    factory_entered = Event()
+    release_factory = Event()
+    child_close_outcomes: Queue[BaseException | None] = Queue()
+
+    class Resource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    resource = Resource()
+
+    def factory(_: Container) -> Resource:
+        factory_entered.set()
+        assert release_factory.wait(timeout=5)
+        return resource
+
+    root = Container()
+    root.bind(Resource, factory, scope=Scope.APPLICATION)
+    application = root.application_scope()
+
+    def resolve() -> None:
+        with pytest.raises(ScopeDisposed):
+            application.resolve(Resource)
+
+    resolver = Thread(target=resolve, daemon=True)
+    resolver.start()
+    assert factory_entered.wait(timeout=5)
+
+    def close_child() -> None:
+        try:
+            application.close()
+        except BaseException as error:
+            child_close_outcomes.put(error)
+        else:
+            child_close_outcomes.put(None)
+
+    async def scenario() -> None:
+        child_cleanup = Thread(target=close_child, daemon=True)
+        child_cleanup.start()
+        deadline = monotonic() + 5
+        while not application._sync_cleanup_active and monotonic() < deadline:  # type: ignore[attr-defined]
+            await asyncio.sleep(0.001)
+        assert application._sync_cleanup_active  # type: ignore[attr-defined]
+        parent_cleanup = asyncio.create_task(application._aclose_from_parent())  # type: ignore[attr-defined]
+        await asyncio.sleep(0.01)
+        assert not parent_cleanup.done()
+        if cancel_parent:
+            parent_cleanup.cancel()
+            await asyncio.sleep(0.01)
+            assert not parent_cleanup.done()
+        release_factory.set()
+        await asyncio.to_thread(resolver.join, 5)
+        await asyncio.to_thread(child_cleanup.join, 5)
+        if cancel_parent:
+            with pytest.raises(asyncio.CancelledError):
+                await parent_cleanup
+        else:
+            await asyncio.wait_for(parent_cleanup, timeout=1)
+
+    asyncio.run(scenario())
+    assert isinstance(child_close_outcomes.get_nowait(), AsyncDisposalRequired)
+    assert resource.closed
+
+
 @pytest.mark.parametrize("mode", ["failure", "timeout"])
 def test_late_async_cleanup_handoff_records_protected_outcome(mode: str) -> None:
     factory_entered = Event()
@@ -2588,33 +2945,167 @@ def test_invocation_scope_rejects_concurrent_context_manager_entry() -> None:
 
 
 def test_context_manager_entry_rechecks_state_after_concurrent_close() -> None:
-    checked = Event()
-    continue_entry = Event()
-    outcomes: Queue[BaseException | object] = Queue()
+    validated = Event()
+    resume_shutdown = Event()
+    entry_started = Event()
+    entry_outcomes: Queue[BaseException | None] = Queue()
+    close_outcomes: Queue[BaseException | None] = Queue()
 
     class RacingContainer(Container):
-        def _assert_active(self) -> None:
-            super()._assert_active()
-            checked.set()
-            assert continue_entry.wait(timeout=5)
+        def _assert_no_external_entry_owner_in_tree(
+            self,
+            task: asyncio.Task[object] | None,
+            thread_id: int,
+        ) -> None:
+            super()._assert_no_external_entry_owner_in_tree(task, thread_id)
+            validated.set()
+            assert resume_shutdown.wait(timeout=5)
 
-    container = RacingContainer()
+    root = RacingContainer()
+    invocation = root.application_scope().invocation_scope()
+
+    def close() -> None:
+        try:
+            root.close()
+        except BaseException as error:
+            close_outcomes.put(error)
+        else:
+            close_outcomes.put(None)
 
     def enter() -> None:
+        entry_started.set()
         try:
-            outcomes.put(container.__enter__())
+            invocation.__enter__()
         except BaseException as error:
-            outcomes.put(error)
+            entry_outcomes.put(error)
+        else:
+            entry_outcomes.put(None)
 
-    entering = Thread(target=enter, daemon=True)
-    entering.start()
-    assert checked.wait(timeout=5)
-    container.close()
-    continue_entry.set()
-    entering.join(timeout=5)
+    closer = Thread(target=close, daemon=True)
+    entrant = Thread(target=enter, daemon=True)
+    closer.start()
+    assert validated.wait(timeout=5)
+    entrant.start()
+    assert entry_started.wait(timeout=5)
+    sleep(0.01)
+    assert entrant.is_alive()
+    resume_shutdown.set()
+    closer.join(timeout=5)
+    entrant.join(timeout=5)
 
-    assert not entering.is_alive()
-    assert isinstance(outcomes.get_nowait(), ScopeDisposed)
+    assert not closer.is_alive()
+    assert not entrant.is_alive()
+    assert close_outcomes.get_nowait() is None
+    assert isinstance(entry_outcomes.get_nowait(), ScopeDisposed)
+
+
+def test_async_shutdown_revalidates_owner_after_await_boundary() -> None:
+    class GatedContainer(Container):
+        def __init__(self) -> None:
+            super().__init__()
+            self.drain_reached = asyncio.Event()
+            self.resume_drain = asyncio.Event()
+
+        async def _drain_late_async_resources(self, loop: asyncio.AbstractEventLoop) -> None:
+            self.drain_reached.set()
+            await self.resume_drain.wait()
+            await super()._drain_late_async_resources(loop)
+
+    async def scenario() -> None:
+        root = GatedContainer()
+        invocation = root.application_scope().invocation_scope()
+        cleanup = asyncio.create_task(root.aclose())
+        await root.drain_reached.wait()
+        await invocation.__aenter__()
+        root.resume_drain.set()
+
+        with pytest.raises(InvalidBinding, match="external shutdown"):
+            await cleanup
+        await invocation.__aexit__(None, None, None)
+        root.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_invocation_entry_does_not_block_loop_during_sync_shutdown() -> None:
+    cleanup_entered = Event()
+    release_cleanup = Event()
+
+    class Resource:
+        def close(self) -> None:
+            cleanup_entered.set()
+            assert release_cleanup.wait(timeout=5)
+
+    root = Container(shutdown_timeout=0.2)
+    root.instance(Resource, Resource(), owned=True)
+    invocation = root.application_scope().invocation_scope()
+    closer = Thread(target=root.close, daemon=True)
+    closer.start()
+    assert cleanup_entered.wait(timeout=5)
+
+    async def scenario() -> None:
+        loop_progressed = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.01, loop_progressed.set)
+        loop.call_later(0.05, release_cleanup.set)
+        with pytest.raises(ScopeDisposed):
+            await invocation.__aenter__()
+        await asyncio.wait_for(loop_progressed.wait(), timeout=0.1)
+
+    asyncio.run(scenario())
+    closer.join(timeout=5)
+    assert not closer.is_alive()
+
+
+def test_async_shutdown_lock_wait_is_bounded_by_hierarchy_deadline() -> None:
+    lock_acquired = Event()
+    release_lock = Event()
+    root = Container(shutdown_timeout=0.02)
+
+    def hold_lock() -> None:
+        with root._shutdown_lock:  # type: ignore[attr-defined]
+            lock_acquired.set()
+            assert release_lock.wait(timeout=5)
+
+    holder = Thread(target=hold_lock, daemon=True)
+    holder.start()
+    assert lock_acquired.wait(timeout=5)
+    try:
+        with pytest.raises(ScopeDisposalError) as captured:
+            asyncio.run(root.aclose())
+    finally:
+        release_lock.set()
+        holder.join(timeout=5)
+
+    assert any(isinstance(error, ShutdownTimeout) for error in captured.value.failures)
+
+
+def test_shutdown_cancellation_precedes_post_lock_validation_failure() -> None:
+    class CancelledValidationContainer(Container):
+        def __init__(self) -> None:
+            super().__init__()
+            self.validations = 0
+
+        def _assert_no_external_entry_owner_in_tree(
+            self,
+            task: asyncio.Task[object] | None,
+            thread_id: int,
+        ) -> None:
+            del task, thread_id
+            self.validations += 1
+            if self.validations == 2:
+                raise InvalidBinding("post-lock validation failure")
+
+        async def _acquire_shutdown_lock_async(self) -> asyncio.CancelledError | None:
+            self._shutdown_lock.acquire()  # type: ignore[attr-defined]
+            return asyncio.CancelledError()
+
+    async def scenario() -> None:
+        root = CancelledValidationContainer()
+        with pytest.raises(asyncio.CancelledError):
+            await root.aclose()
+
+    asyncio.run(scenario())
 
 
 def test_async_contextual_factory_uses_immediate_consumer() -> None:

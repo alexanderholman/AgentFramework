@@ -1051,6 +1051,7 @@ class Container:
                 owner._retire_flight_key_locked(cache_key)
                 owner._release_async_loop_if_idle_locked()
                 owner._condition.notify_all()
+            owner._release_handoff_parent_if_idle()
             raise
         publication_error: BaseException | None = None
         with owner._condition:
@@ -1069,6 +1070,7 @@ class Container:
             owner._release_construction_locked()
             owner._release_async_loop_if_idle_locked()
             owner._condition.notify_all()
+        owner._release_handoff_parent_if_idle()
         if publication_error is not None:
             raise publication_error
         return value
@@ -1430,6 +1432,7 @@ class Container:
                     self._resolution_tasks[task] = count - 1
             self._release_async_loop_if_idle_locked()
             self._condition.notify_all()
+        self._release_handoff_parent_if_idle()
 
     @staticmethod
     def _can_use_ambient_context(binding: _Binding, resolver: Container) -> bool:
@@ -1456,6 +1459,7 @@ class Container:
         with self._condition:
             self._active_constructions -= 1
             self._condition.notify_all()
+        self._release_handoff_parent_if_idle()
 
     def _complete_construction(
         self,
@@ -1485,6 +1489,7 @@ class Container:
             if release or not publishable:
                 self._release_construction_locked()
         if not publishable:
+            self._release_handoff_parent_if_idle()
             raise ScopeDisposed("container scope was disposed during resolution")
 
     def _dispose_unpublished_resource(self, resource: _ResourceRecord | None) -> None:
@@ -1855,44 +1860,70 @@ class Container:
             self._assert_no_external_entry_owner_in_tree(current_task, get_ident())
         loop = asyncio.get_running_loop()
         await self._drain_late_async_resources(loop)
-        self._assert_async_cleanup_loop(loop)
-        with self._condition:
-            wait_for_sync_cleanup = self._sync_cleanup_active
-            if (
-                self._state != "disposed"
-                and self._cleanup_task is None
-                and not wait_for_sync_cleanup
-            ):
-                self._state = "disposing"
-                if self._shutdown_deadline is None:
-                    self._shutdown_deadline = monotonic() + self._shutdown_timeout
-                self._revoke_context()
-                cleanup_start = asyncio.Event()
-                cleanup_task = loop.create_task(
-                    self._await_cleanup_start(cleanup_start),
-                    context=ContextVarsContext(),
-                )
-                self._cleanup_task = cleanup_task
-                cleanup_task.add_done_callback(self._settle_async_cleanup)
-                cleanup_start.set()
-            close_future = self._close_future
+        lock_cancellation: asyncio.CancelledError | None = None
+        lock_acquired = False
+        if not entry_authorized:
+            lock_cancellation = await self._acquire_shutdown_lock_async()
+            lock_acquired = True
+        try:
+            if not entry_authorized:
+                self._assert_no_external_entry_owner_in_tree(current_task, get_ident())
+            self._assert_async_cleanup_loop(loop)
+            with self._condition:
+                wait_for_sync_cleanup = entry_authorized and self._sync_cleanup_active
+                if (
+                    self._state != "disposed"
+                    and self._cleanup_task is None
+                    and not wait_for_sync_cleanup
+                ):
+                    self._state = "disposing"
+                    if self._shutdown_deadline is None:
+                        self._shutdown_deadline = monotonic() + self._shutdown_timeout
+                    self._revoke_context()
+                    cleanup_start = asyncio.Event()
+                    cleanup_task = loop.create_task(
+                        self._await_cleanup_start(cleanup_start),
+                        context=ContextVarsContext(),
+                    )
+                    self._cleanup_task = cleanup_task
+                    cleanup_task.add_done_callback(self._settle_async_cleanup)
+                    cleanup_start.set()
+                close_future = self._close_future
+        except BaseException:
+            if lock_cancellation is not None:
+                raise lock_cancellation from None
+            raise
+        finally:
+            if lock_acquired:
+                self._shutdown_lock.release()
         if wait_for_sync_cleanup:
-            waiter = asyncio.create_task(self._wait_for_sync_cleanup_release_async())
             handoff_cancellation: asyncio.CancelledError | None = None
-            while not waiter.done():
+            while not close_future.done():
+                with self._condition:
+                    sync_cleanup_active = self._sync_cleanup_active
+                if not sync_cleanup_active:
+                    break
+                if self._remaining_shutdown_time() <= 0:
+                    if handoff_cancellation is not None:
+                        raise handoff_cancellation from None
+                    raise ScopeDisposalError((ShutdownTimeout(),))
                 try:
-                    await asyncio.shield(waiter)
+                    await asyncio.sleep(0.001)
                 except asyncio.CancelledError as error:
                     task = asyncio.current_task()
                     if task is not None and task.cancelling():
                         handoff_cancellation = handoff_cancellation or error
                         continue
                     break
-            if waiter.done() and not waiter.cancelled():
-                waiter.result()
+            if close_future.done():
+                close_future.result()
+                if handoff_cancellation is not None:
+                    raise handoff_cancellation from None
+                self._raise_disposal_outcome()
+                return
             handoff_error: BaseException | None = None
             try:
-                await self.aclose()
+                await self._aclose_coordinated(entry_authorized=True)
             except asyncio.CancelledError as error:
                 handoff_cancellation = handoff_cancellation or error
             except BaseException as error:
@@ -1902,7 +1933,7 @@ class Container:
             if handoff_error is not None:
                 raise handoff_error
             return
-        caller_cancellation: asyncio.CancelledError | None = None
+        caller_cancellation = lock_cancellation
         if not close_future.done():
             while not close_future.done():
                 try:
@@ -1920,11 +1951,26 @@ class Container:
             raise caller_cancellation from None
         self._raise_disposal_outcome()
 
-    async def _wait_for_sync_cleanup_release_async(self) -> None:
-        while True:
-            with self._condition:
-                if not self._sync_cleanup_active or self._close_future.done():
-                    return
+    async def _acquire_shutdown_lock_async(self) -> asyncio.CancelledError | None:
+        caller_cancellation: asyncio.CancelledError | None = None
+        while not self._shutdown_lock.acquire(blocking=False):
+            remaining = self._remaining_shutdown_time()
+            if remaining <= 0:
+                if caller_cancellation is not None:
+                    raise caller_cancellation from None
+                raise ScopeDisposalError((ShutdownTimeout(),))
+            try:
+                await asyncio.sleep(min(0.001, remaining))
+            except asyncio.CancelledError as error:
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    caller_cancellation = caller_cancellation or error
+                    continue
+                raise
+        return caller_cancellation
+
+    async def _acquire_entry_lock_async(self) -> None:
+        while not self._shutdown_lock.acquire(blocking=False):
             await asyncio.sleep(0.001)
 
     async def _await_cleanup_start(self, start: asyncio.Event) -> None:
@@ -2113,6 +2159,27 @@ class Container:
 
     async def _drain_late_async_resources(self, loop: asyncio.AbstractEventLoop) -> None:
         caller_cancellation: asyncio.CancelledError | None = None
+        with self._condition:
+            children = tuple(reversed(self._children))
+        for child in children:
+            with child._condition:
+                failure_start = len(child._disposal_failures)
+            try:
+                await child._drain_late_async_resources(loop)
+            except asyncio.CancelledError as cancellation:
+                caller_cancellation = caller_cancellation or cancellation
+            except BaseException as child_error:
+                self._record_late_cleanup_failure(child_error)
+            with child._condition:
+                child_failures = child._disposal_failures[failure_start:]
+                child_cancelled = child._disposal_cancelled
+            for child_failure in child_failures:
+                self._record_late_cleanup_failure(child_failure)
+            if child_cancelled:
+                with self._condition:
+                    self._disposal_cancelled = True
+                if caller_cancellation is None:
+                    caller_cancellation = asyncio.CancelledError()
         while True:
             with self._condition:
                 wait_for_constructions = bool(
@@ -2158,6 +2225,7 @@ class Container:
                                 "asynchronous scope is bound to another event loop"
                             )
                     if not resources:
+                        self._release_handoff_parent_if_idle()
                         if caller_cancellation is not None:
                             raise caller_cancellation from None
                         return
@@ -2181,7 +2249,8 @@ class Container:
                     break
             if task.done():
                 if task.cancelled():
-                    raise asyncio.CancelledError from None
+                    caller_cancellation = caller_cancellation or asyncio.CancelledError()
+                    continue
                 task.result()
 
     async def _await_late_cleanup_start(
@@ -2245,6 +2314,7 @@ class Container:
         with self._condition:
             if self._late_cleanup_task is task:
                 self._late_cleanup_task = None
+        self._release_handoff_parent_if_idle()
 
     def _call_sync_disposer_bounded(self, disposer: Callable[[], object]) -> None:
         if self._remaining_shutdown_time() <= 0:
@@ -2407,11 +2477,19 @@ class Container:
             self._disposal_failures = tuple(
                 self._sanitized_failure(error) for error in self._disposal_failures
             )
+            retain_for_handoff = bool(
+                self._children
+                or self._active_constructions
+                or self._active_resolutions
+                or self._inflight
+                or self._async_inflight
+                or self._late_async_resources
+                or self._late_cleanup_task is not None
+            )
             self._state = "disposed"
             self._instances.clear()
             self._resources.clear()
             self._owned_resource_ids.clear()
-            self._children.clear()
             self._execution_context = None
             self._revoke_context()
             self._async_inflight.clear()
@@ -2430,8 +2508,9 @@ class Container:
                 self._aliases = {}
                 self._contextual = {}
                 self._tags = {}
-            else:
+            elif not retain_for_handoff:
                 self._parent = None
+            if not is_root:
                 self._bindings = {}
                 self._aliases = {}
                 self._contextual = {}
@@ -2440,10 +2519,33 @@ class Container:
                 self._registry_lock = RLock()
             self._close_future.set_result(None)
             self._condition.notify_all()
-        if parent is not None:
+        if parent is not None and not retain_for_handoff:
             with parent._condition:
                 if self in parent._children:
                     parent._children.remove(self)
+            parent._release_handoff_parent_if_idle()
+
+    def _release_handoff_parent_if_idle(self) -> None:
+        with self._condition:
+            parent = self._parent
+            idle = self._state == "disposed" and not (
+                self._children
+                or self._active_constructions
+                or self._active_resolutions
+                or self._inflight
+                or self._async_inflight
+                or self._late_async_resources
+                or self._late_cleanup_task is not None
+            )
+        if parent is None or not idle:
+            return
+        with parent._condition:
+            if self in parent._children:
+                parent._children.remove(self)
+        with self._condition:
+            if self._parent is parent:
+                self._parent = None
+        parent._release_handoff_parent_if_idle()
 
     @staticmethod
     def _sanitized_failure(error: BaseException) -> BaseException:
@@ -2469,6 +2571,11 @@ class Container:
             raise ScopeDisposalError(self._disposal_failures) from None
 
     def __enter__(self) -> Container:
+        with self._shutdown_lock:
+            self._begin_entry_locked()
+        return self._complete_entry()
+
+    def _begin_entry_locked(self) -> None:
         self._assert_active()
         with self._condition:
             if not self._hierarchy_is_active():
@@ -2479,6 +2586,8 @@ class Container:
             self._entry_task = self._current_asyncio_task()
             self._entry_thread_id = get_ident()
             self._invocation_token = _CURRENT_INVOCATION_SCOPE.set(self)
+
+    def _complete_entry(self) -> Container:
         try:
             if self._execution_context is not None:
                 self._context_lease = ContextLease(
@@ -2526,7 +2635,12 @@ class Container:
                     self._invocation_token = None
 
     async def __aenter__(self) -> Container:
-        return self.__enter__()
+        await self._acquire_entry_lock_async()
+        try:
+            self._begin_entry_locked()
+        finally:
+            self._shutdown_lock.release()
+        return self._complete_entry()
 
     async def __aexit__(
         self,
