@@ -36,7 +36,11 @@ def test_reference_runtime_carries_recursive_questions_through_transport_and_gra
     assert isinstance(when, StructuredInquiryResult)
     assert isinstance(when.expression, QGroup)
     assert when.expression.operator is QOperator.ALL
-    assert [member.value_kind for member in when.expression.members if isinstance(member, QLeaf)] == [
+    assert [
+        member.value_kind
+        for member in when.expression.members
+        if isinstance(member, QLeaf)
+    ] == [
         "timestamp",
         "event",
     ]
