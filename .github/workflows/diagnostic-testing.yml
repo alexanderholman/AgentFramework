@@ -38,4 +38,18 @@ jobs:
           cache-dependency-glob: "uv.lock"
       - run: uv sync --locked --extra dev
       - name: Run diagnostic stage
-        run: python scripts/af_dev.py --action "${{ matrix.action }}" --execute
+        shell: bash
+        run: |
+          set +e
+          python scripts/af_dev.py --action "${{ matrix.action }}" --execute \
+            > "diagnostic-${{ matrix.action }}.log" 2>&1
+          status=$?
+          cat "diagnostic-${{ matrix.action }}.log"
+          exit "$status"
+      - name: Upload diagnostic output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diagnostic-${{ matrix.action }}
+          path: diagnostic-${{ matrix.action }}.log
+          if-no-files-found: error
