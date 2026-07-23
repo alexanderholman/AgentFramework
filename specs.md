@@ -871,3 +871,446 @@ capability, data, and delivery contracts.
 - SPEC-014 (Planner Side-Effect Authorization)
 
 ---
+
+## [SPEC-016] Deterministic Prime Language and Ideon Reference Contract
+**Date**: 2026-07-22
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+AF represents a resolved or deliberately open utterance as an authoritative, typed Ideon
+graph. A positive natural-number stable key addresses the contained idea, while a separate
+SHA-256 revision identifies one immutable recorded topology. The key is not the graph and
+must never be treated as its meaning.
+
+### Requirements
+- MUST keep graph identity, stable key, and immutable revision as distinct values.
+- MUST reserve zero for structural/control use.
+- MUST allocate actual odd-prime numeric keys to registered prime Ideons and MUST record them
+  in a versioned registry manifest.
+- MUST construct non-prime keys from injective canonical identity bytes in a disjoint even
+  key lane.
+- MUST include namespace, ruleset, ordered roles/children, and declared identity-bearing
+  context in canonical identity.
+- MUST preserve original UTF-8 and source spans while treating normalization as an added view.
+- MUST retain zero, one, or many dictionary candidates and MUST NOT convert confidence into
+  forced semantic closure.
+- MUST emit actual structured results for WHO, WHAT, WHERE, WHEN, WHERN, WHY, HOW, IS, COULD,
+  WOULD, and SHOULD.
+- MUST decide ask, answer, act, stop, or continue-reading from explicit openings, closure, and
+  SHOULD rules.
+- MUST resolve exact (stable_key, revision) references and fail closed on key, identity, or
+  revision conflicts.
+- MUST serialize arbitrary-precision keys as decimal strings at JSON boundaries.
+- MUST keep the typed Ideon record outside the current string-oriented generic procedure
+  pipeline; later pipeline routes may carry only a record reference or canonical document.
+
+### Tests
+- **Test ID**: TEST-016-1
+  - **Description**: Validate key and revision separation
+  - **Pass Criteria**: Prime and constructed key lanes, zero reservation, immutable revision
+    history, exact resolution, canonical deduplication, and explicit conflicts all pass
+  - **Fail Criteria**: A key is treated as a graph, a lane overlaps, or identity/revision data
+    is overwritten
+- **Test ID**: TEST-016-2
+  - **Description**: Validate ambiguity and all eleven inquiries
+  - **Pass Criteria**: "sat on the bank" retains both bank senses, reports missing actor and
+    contested location, emits eleven fields, and asks without guessing
+  - **Fail Criteria**: A candidate disappears without traced context or the system closes early
+- **Test ID**: TEST-016-3
+  - **Description**: Validate contextual closure and deterministic replay
+  - **Pass Criteria**: Actor plus river context selects only the declared river sense; identical
+    inputs produce the same reference and byte-identical record
+  - **Fail Criteria**: Operational timing changes semantic bytes or context is silently ambient
+- **Test ID**: TEST-016-4
+  - **Description**: Validate order, Whern, WILL, SHOULD, and relation representations
+  - **Pass Criteria**: Ordered compositions differ, was/is/will follows perspective, temporal
+    and volitional will differ, high-harm SHOULD stops/offers a safer route, and compact plus
+    reified relations round-trip
+  - **Fail Criteria**: Order is lost, modality is conflated, or normative risk is ignored
+- **Test ID**: TEST-016-5
+  - **Description**: Validate large/nested keys, unresolved forms, and context preservation
+  - **Pass Criteria**: Twenty-token and ten-level nested composites serialize and resolve;
+    unrelated unknown forms receive different keys; non-identity context changes revisions while
+    declared identity context changes keys
+  - **Fail Criteria**: Integer conversion limits escape to an interface, unknown forms collapse,
+    context disappears from the exact graph, or interpreter-wide limits are weakened
+
+### Related Specs
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+
+---
+
+---
+
+## [SPEC-017] Ideon Correction: Provenance Separation, Temporal Qualification, and Inquiry Scope
+**Date**: 2026-07-22
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Correction pass on the deterministic Prime Language reference slice.  Six semantic
+errors identified in review are addressed without changing the overall architecture.
+
+### Requirements
+- MUST rename `Tense.WILL` to `Tense.PROJECTED`; temporal perspective is expressed as
+  `WAS < IS > PROJECTED` attached to propositions/relations, not as a privileged inquiry
+  attention.
+- MUST classify the surface token "will" via dictionary disambiguation into temporal
+  (WHEN slot, resolved relation `future-state`/`future-event`) or volitional (WHAT slot,
+  resolved relation `intends`/`wants`/`commits`).  `WHERN` is reserved for
+  criterion-conditioned temporality, not simple future anchoring.
+- MUST rename `WillKind` to `AuxiliaryKind` and `will_kind()` to `auxiliary_kind()`.
+- MUST make WHO inquiry material-open only when a predicate (action/state/relation) is
+  present in viable candidates.  Utterances with no predicate leave WHO as NOT_APPLICABLE.
+- MUST NOT write source ID or rights declaration into semantic graph annotations or
+  provenance.  Both belong in `InterpretationRecord` only.  Requests with identical
+  semantics but different source IDs MUST resolve to the same graph revision.
+- MUST document constructed arbitrary-precision keys as canonical identity codes, not
+  compact operational or database IDs.
+- MUST accurately describe inquiry coverage: seven attentions (WHO, WHAT, WHERE, WHEN,
+  WHERN, IS, SHOULD) have conservative deterministic behaviour; WHY, HOW, COULD, and
+  WOULD are structurally represented but not yet evaluated.
+
+### Tests
+- **Test ID**: TEST-017-1
+  - **Description**: WHO not-applicable when no predicate present
+  - **Pass Criteria**: "the bank" (entity only, no action) yields WHO=NOT_APPLICABLE
+  - **Fail Criteria**: WHO is material-open despite no agent-requiring predicate
+- **Test ID**: TEST-017-2
+  - **Description**: Same semantics from different sources share graph revision
+  - **Pass Criteria**: Two requests with identical surface/context but different source_ids
+    produce the same ideon_key and ideon_revision while retaining distinct record_ids
+  - **Fail Criteria**: Source ID leaks into graph canonical bytes and changes the revision
+- **Test ID**: TEST-017-3
+  - **Description**: Temporal qualification attaches to proposition, not isolated inquiry
+  - **Pass Criteria**: WAS/IS/PROJECTED wraps a Whern in TemporalQualification; three
+    propositions under different temporal perspectives differ only in that qualification
+  - **Fail Criteria**: Temporal modality is encoded as a standalone inquiry question
+- **Test ID**: TEST-017-4
+  - **Description**: WHERN satisfied by criterion, not by temporal anchor
+  - **Pass Criteria**: Criterion-satisfied Whern renders IS without a datetime anchor
+  - **Fail Criteria**: WHERN is treated as equivalent to WHEN with a future anchor
+
+### Related Specs
+- SPEC-016 (Deterministic Prime Language and Ideon Reference Contract)
+
+---
+
+---
+
+## [SPEC-018] Ideon Correction: Composite Whern, Condition-Bearing WHEN, Role-Driven WHO, and Full Inquiry Procedures
+**Date**: 2026-07-22
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Second correction pass on the deterministic Prime Language reference slice addressing
+four remaining semantic errors identified in review of SPEC-017.
+
+### Requirements
+- MUST model WHEN as a condition-bearing temporal relation (WhenCondition with typed
+  alternatives: TIMESTAMP, INTERVAL, EVENT, CRITERION) rather than a scalar datetime.
+  A timestamp is one possible witness; WHEN supports anchors, intervals, event/state
+  predicates, and condition clauses.
+- MUST model WHERN as the conjunction of a WHERE (spatial/domain) component and a WHEN
+  (temporal/conditional) component.  WHERN(P) is satisfied only when both components
+  are present; partial presence yields OPEN (non-material) with the missing role
+  identified.  WHERN must not be used as a synonym for temporal standpoint alone.
+- MUST drive WHO from declared unfilled who-typed semantic roles on viable candidates
+  (agent, subject, experiencer, source, possessor, affected).  An impersonal state or
+  process with semantic_roles=() leaves WHO NOT_APPLICABLE even when a predicate is
+  present.  Agentive predicates carry semantic_roles=("agent",) and leave WHO
+  materially open when no actor is declared.
+- MUST attach global tense qualification (WAS/IS/PROJECTED) to propositions/relations
+  via TemporalQualification(tense, when: WhenCondition) rather than using Whern as the
+  host type.
+- MUST implement minimal evidence-driven procedures for WHY, HOW, COULD, and WOULD:
+    - WHY: OPEN (non-material) when a predicate is present; NOT_APPLICABLE otherwise.
+    - HOW: OPEN (non-material) when a predicate is present; NOT_APPLICABLE otherwise.
+    - COULD: OPEN (non-material) when both a predicate and a declared actor are present.
+    - WOULD: OPEN (non-material) when a predicate is present; NOT_APPLICABLE otherwise.
+  All four are non-blocking (material=False) so they do not prevent closure.
+- MUST rename 'reference Whern' terminology to 'temporal perspective' wherever used
+  to describe the observer's standpoint.
+- MUST NOT retain the old Whern(temporal_anchor, reference_perspective, criterion)
+  API; it is replaced by WhenCondition (typed temporal/conditional relation) and
+  Whern (WHERE+WHEN composite).
+
+### Tests
+- **TEST-018-1**: WHEN satisfied by EVENT/CRITERION WhenCondition without a datetime
+- **TEST-018-2**: WHERN satisfied only when both WHERE and WHEN components are present
+- **TEST-018-3**: WHERN open (non-material) with missing:where when only WHEN provided
+- **TEST-018-4**: WHERN open (non-material) with missing:when when only WHERE provided
+- **TEST-018-5**: WHO NOT_APPLICABLE for impersonal state predicate (semantic_roles=())
+- **TEST-018-6**: WHO OPEN (material) for agentive predicate (semantic_roles=("agent",))
+- **TEST-018-7**: WHY/HOW/WOULD non-material open when predicate present
+- **TEST-018-8**: COULD non-material open only when predicate and actor both present
+
+### Related Specs
+- SPEC-016 (Deterministic Prime Language and Ideon Reference Contract)
+- SPEC-017 (Ideon Correction: Provenance Separation, Temporal Qualification, and Inquiry Scope)
+
+---
+
+---
+
+## [SPEC-019] Ideon Correction: WHERN Constituent Propagation, Fail-Closed WHEN Validation, Multi-Role WHO, End-to-End Temporal Graph, Interpretation Graph Contract
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Third correction pass on the deterministic Prime Language reference slice, addressing
+six integration blockers identified in review of SPEC-018.
+
+### Requirements
+- MUST propagate WHERN constituent state from a contested WHERE: CONTESTED WHERE + satisfied
+  WHEN yields WHERN OPEN (non-material) with "where:contested" evidence, not NOT_APPLICABLE.
+  WHERN is satisfied only when WHERE is fully resolved (SATISFIED) and WHEN is satisfied.
+- MUST validate context.time as a parseable, timezone-aware ISO 8601 timestamp before
+  satisfying WHEN.  An invalid or timezone-naive string fails closed (WHEN remains
+  NOT_APPLICABLE).  Any non-empty context.when expression still satisfies WHEN as a
+  condition clause.
+- MUST expand WHO satisfaction beyond context.actor to all mapped who-typed context fields:
+  context.actor (agent), context.subject (subject), context.experiencer (experiencer),
+  context.source (source), context.possessor (possessor), context.affected (affected).
+  The emitted WHO role must be the actual context field name, not always "actor".
+  context.actor alone must NOT satisfy an experiencer-role candidate.
+- MUST attach a typed temporal-qualification node (when-kind, when-value properties) to
+  the interpretation graph when WHEN is satisfied, proving the WhenCondition model is
+  applied globally end-to-end rather than in domain tests alone.  Invalid timestamps must
+  not produce this node (fail-closed confirmed in graph output).
+- MUST document the interpretation graph contract explicitly: the graph is surface-bound;
+  same surface from different sources yields the same graph revision; different surfaces
+  produce different revisions unless equivalence is declared via IdeonIdentity.
+- MUST rename the stale test name containing "reference_whern" to remove the rejected
+  terminology.
+
+### Tests
+- **TEST-019-1**: WHERN OPEN (non-material, "where:contested") when WHERE contested + WHEN satisfied
+- **TEST-019-2**: WHERN SATISFIED when WHERE fully resolved + WHEN satisfied (matrix)
+- **TEST-019-3**: WHERN OPEN (missing:when) when WHERE contested + WHEN not satisfied
+- **TEST-019-4**: Invalid context.time string (non-parseable) → WHEN NOT_APPLICABLE
+- **TEST-019-5**: Timezone-naive context.time string → WHEN NOT_APPLICABLE
+- **TEST-019-6**: Valid timezone-aware ISO timestamp → WHEN SATISFIED
+- **TEST-019-7**: WHO satisfied by context.experiencer for experiencer-role candidate
+- **TEST-019-8**: context.actor alone does NOT satisfy an experiencer-role candidate
+- **TEST-019-9**: End-to-end: valid context.time produces temporal-qualification node in graph
+- **TEST-019-10**: End-to-end: invalid context.time produces no temporal-qualification node
+- **TEST-019-11**: Interpretation graph contract: same surface + different sources → same revision
+- **TEST-019-12**: Interpretation graph contract: different surfaces → different revisions
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018
+
+---
+
+---
+
+## [SPEC-020] Ideon Correction: Fail-Closed Tense, WhenKind.ORDERING, INTERVAL Invariants, Public parse_when_expression
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Fourth and final correction pass on the deterministic Prime Language reference slice.
+Four remaining integration blockers identified in review of SPEC-019 are resolved.
+
+### Requirements
+- MUST NOT silently default to `Tense.IS` when `reference_when` is provided but
+  `render_tense()` raises `ValueError` due to incompatible or uncomparable
+  `WhenCondition` kinds.  An incompatible or unresolved comparison must yield a
+  `tense="contested"` property in the temporal-qualification node rather than
+  silently asserting present-tense IS.
+- MUST add `WhenKind.ORDERING` — a bounded ordering relation (before, after, during)
+  relative to a named event or anchor.  `WhenCondition(ORDERING)` requires a non-empty
+  expression.  `parse_when_expression` and `InquiryEngine` accept the ``ordering:``
+  prefix.  This closes the gap between the documentation claim "WHEN supports orderings"
+  and the absence of an ordering form in `WhenKind`.
+- MUST enforce `WhenCondition(INTERVAL)` domain invariants in `__post_init__` directly:
+  both bounds absent must raise `ValueError`; `interval_start > interval_end` (when both
+  present) must raise `ValueError`.  The parser may provide early protection, but the
+  domain value must enforce its own invariant unconditionally.
+- MUST move WHEN-expression parsing from a private `_parse_when_expression` helper in
+  `inquiry.py` into a public `parse_when_expression` function in
+  `af.domain.ideons.temporal`.  Both `InquiryEngine` and `construct_graph()` must
+  consume this single authoritative parser; no private copy or application-to-private-
+  domain coupling is permitted.
+- The PR description and governance records must not claim `WILL` as a privileged inquiry
+  attention or assert "eleven implemented attentions" unless true.  The corrected model
+  is: eleven questions are structurally represented; seven have conservative deterministic
+  procedures (WHO, WHAT, WHERE, WHEN, WHERN, IS, SHOULD); four are open/non-material
+  by evidence (WHY, HOW, COULD, WOULD).  Global tense qualification follows the
+  ``WAS < IS > PROJECTED`` axis attached to propositions/relations, not a standalone WILL.
+
+### Tests
+- **TEST-020-1**: `tense="contested"` when TIMESTAMP event vs CRITERION reference (end-to-end
+  through `interpret()` and `resolve()`)
+- **TEST-020-2**: `tense="contested"` when CRITERION event vs TIMESTAMP reference
+- **TEST-020-3**: `tense="contested"` when INTERVAL event vs TIMESTAMP reference
+- **TEST-020-4**: `WhenKind.ORDERING` parsed by `parse_when_expression`; WHEN satisfied
+  by `ordering:before:X`, `ordering:after:X`, `ordering:during:X`
+- **TEST-020-5**: Empty `ordering:` expression fails closed (WHEN NOT_APPLICABLE)
+- **TEST-020-6**: `WhenCondition(INTERVAL)` with both bounds absent raises ValueError
+- **TEST-020-7**: `WhenCondition(INTERVAL)` with `interval_start > interval_end` raises ValueError
+- **TEST-020-8**: `WhenCondition(ORDERING)` with empty expression raises ValueError
+- **TEST-020-9**: `parse_when_expression` is importable from `af.domain.ideons.temporal`
+  (public API); `ordering:before:release-v1` and inverted interval fail closed
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019
+
+---
+
+---
+
+## [SPEC-021] Ideon Correction: Role-Driven WHERE and WHERN Contested-State Governance Alignment
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Fifth correction pass on the deterministic Prime Language reference slice.  Two
+remaining blockers identified in review of SPEC-020 are resolved.
+
+### Requirements
+- MUST drive WHERE from declared unfilled spatial roles (``location`` in
+  ``SenseEntry.semantic_roles``).  A bare location noun (``question_slot=WHERE``,
+  ``semantic_type=entity/place``) without a corresponding predicate/relation declaring
+  a ``location`` role must NOT make WHERE open or contested.  WHERE activates only when:
+    a. ``context.where`` is provided (explicit direct WHERE) — SATISFIED regardless of
+       whether any candidate carries a spatial role; or
+    b. a viable candidate declares ``"location"`` in ``semantic_roles``:
+         - exactly one viable location-typed dictionary candidate → SATISFIED
+         - multiple viable location-typed candidates → CONTESTED (material)
+         - no viable location-typed candidate and no ``context.where`` → OPEN (material)
+  WHERE is NOT_APPLICABLE when neither of the above conditions holds.
+- MUST declare ``on.spatial`` (and equivalent spatial relations) with
+  ``semantic_roles=("location",)`` in every dictionary, fixture, seed, and reference
+  table so the role-driven contract is enforced consistently.
+- MUST compute WHERN constituent status from the WHERE result directly (no separate
+  ``context.where`` check in the WHERN block); ``context.where`` is already incorporated
+  into the WHERE result.  WHERN transitions:
+    - WHERE=SATISFIED + WHEN=SATISFIED → WHERN=SATISFIED
+    - WHERE=CONTESTED + WHEN=SATISFIED → WHERN=CONTESTED (material)
+    - WHERE=any present (SATISFIED/CONTESTED/OPEN) + WHEN absent → WHERN=OPEN (non-material)
+    - WHEN=SATISFIED + WHERE not fully satisfied → WHERN=OPEN (non-material)
+    - WHERE=NOT_APPLICABLE + WHEN=NOT_APPLICABLE → WHERN=NOT_APPLICABLE
+- MUST supersede the SPEC-019/DEC-033 claim that ``CONTESTED WHERE + SATISFIED WHEN``
+  yields WHERN=OPEN; the correct and implemented outcome is WHERN=CONTESTED.  Append
+  DEC-035 to document the correction without editing prior governed history.
+
+### Tests
+- **TEST-021-1**: Bare location lexeme (entity, question_slot=WHERE) without a spatial
+  predicate → WHERE NOT_APPLICABLE; context.where alone → WHERE SATISFIED (role=location)
+- **TEST-021-2**: Spatial predicate with ``location`` role + multiple candidates → WHERE
+  CONTESTED; resolved candidates → WHERE SATISFIED (role=location-sense)
+- **TEST-021-3**: Spatial predicate with ``location`` role + no dictionary filler + no
+  context.where → WHERE OPEN (material, evidence contains "missing:location")
+- **TEST-021-4**: context.where and dictionary candidates produce equivalent WHERN
+  SATISFIED outcomes when WHEN is also satisfied
+- **TEST-021-5** (governance): SPEC-019/DEC-033 WHERN contested-state rule corrected by
+  DEC-035; code and tests confirm CONTESTED WHERE + SATISFIED WHEN → WHERN=CONTESTED
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020
+
+---
+
+## [SPEC-022] Ideon Correction: Typed Temporal Perspective and Fail-Closed Whitespace Conditions
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Sixth correction pass on the deterministic Prime Language reference slice.  Two
+remaining blockers identified in review of SPEC-021 are resolved.
+
+### Requirements
+- MUST introduce a finite typed representation that separates resolution status from
+  resolved tense.  Add ``TemporalPerspectiveStatus`` (``RESOLVED | UNANCHORED |
+  CONTESTED``) and ``TemporalPerspective`` (``status``, ``when: WhenCondition``,
+  ``tense: Tense | None``) to ``af.domain.ideons.temporal``.  Invariant: ``RESOLVED``
+  requires a non-None ``Tense``; ``UNANCHORED`` and ``CONTESTED`` must not carry a
+  tense.  Construct the typed value in ``IdeonService.construct_graph`` and serialize
+  only its validated finite projection into graph properties.  The graph node must carry
+  both a ``tense`` property (full label: ``was | is | projected | unanchored |
+  contested``) and a ``tense-status`` property (resolution status:
+  ``resolved | unanchored | contested``).  Do not add unresolved states to the ``Tense``
+  axis itself.
+- MUST reject whitespace-only expressions for ``WhenKind.EVENT`` and
+  ``WhenKind.CRITERION`` in both ``WhenCondition.__post_init__`` and
+  ``parse_when_expression``.  Test truthiness AND ``str.strip()`` in both layers.
+  A payload of ``event:   `` or ``criterion: \t`` must fail closed.
+
+### Tests
+- **TEST-022-1**: ``TemporalPerspective(RESOLVED)`` requires non-None ``Tense``; missing
+  tense raises ``ValueError``.
+- **TEST-022-2**: ``TemporalPerspective(UNANCHORED/CONTESTED)`` must not carry a tense;
+  supplying one raises ``ValueError``.
+- **TEST-022-3**: ``TemporalPerspective.tense_label`` returns ``was | is | projected``
+  for RESOLVED and ``unanchored | contested`` for unresolved.
+- **TEST-022-4**: Invalid ``status`` / ``when`` types raise ``TypeError``.
+- **TEST-022-5**: ``WhenCondition(EVENT/CRITERION, expression="   ")`` raises
+  ``ValueError`` (whitespace-only, direct constructor).
+- **TEST-022-6**: ``parse_when_expression("event:   ")`` returns ``None``; likewise for
+  ``criterion:   `` (fail-closed at parser layer).
+- **TEST-022-7**: End-to-end graph carries ``tense-status="resolved"`` +
+  ``tense="was"`` for a compatible timestamp reference; ``tense-status="unanchored"`` +
+  ``tense="unanchored"`` with no reference; ``tense-status="contested"`` + ``tense=
+  "contested"`` with incompatible kinds.
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021
+
+---
+
+## [SPEC-023] Ideon Correction: Separate Tense Axis from Resolution Status in Graph Projection
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Seventh correction pass on the deterministic Prime Language reference slice.  SPEC-022
+and DEC-036 introduced ``TemporalPerspective`` with a ``tense_label`` that correctly
+separated the domain model but then re-conflated resolution status with the tense axis
+in the graph projection: ``Property("tense", perspective.tense_label)`` emitted
+``"unanchored"`` and ``"contested"`` as values of a tense-named property.
+
+### Requirements
+- MUST emit exactly two temporal perspective graph properties with unambiguous names:
+  - ``temporal-perspective-status``: always present; one of
+    ``resolved | unanchored | contested``.
+  - ``resolved-tense``: present ONLY when ``temporal-perspective-status="resolved"``;
+    value is exactly one of ``was | is | projected``.  For unresolved states
+    (``unanchored``, ``contested``) this property MUST be absent from the graph node;
+    the strings ``"unanchored"`` and ``"contested"`` MUST NOT appear in any
+    tense-valued field.
+- MUST update ``TemporalPerspective.tense_label`` to return ``str | None``: the
+  resolved tense value (``was | is | projected``) for ``RESOLVED`` perspectives, and
+  ``None`` for ``UNANCHORED`` and ``CONTESTED`` perspectives.  This removes the
+  conflation of epistemic resolution status with the tense axis in the domain API.
+- MUST update ``TemporalQualification`` docstring to document its resolved-only role
+  (``tense: Tense`` is always required) and its relationship to ``TemporalPerspective``
+  (the broader graph-construction path that includes unresolved states).
+- MUST update the ``construct_graph`` inline comments and docstring to reflect the new
+  ``temporal-perspective-status`` / ``resolved-tense`` property contract.
+
+### Tests
+- **TEST-023-1**: ``TemporalPerspective(UNANCHORED/CONTESTED).tense_label`` returns
+  ``None`` (was ``"unanchored"`` / ``"contested"``); ``RESOLVED.tense_label`` still
+  returns the correct ``was | is | projected`` string.
+- **TEST-023-2** (end-to-end, five cases): WAS, IS, PROJECTED → status=``resolved``,
+  ``resolved-tense`` present and correct, not in ``{unanchored, contested}``.
+  UNANCHORED, CONTESTED → status correct, ``resolved-tense`` absent from the graph node.
+- **TEST-023-3**: All prior regression tests updated to assert
+  ``temporal-perspective-status`` instead of ``tense-status`` and ``resolved-tense``
+  (when resolved) / absent (when unresolved) instead of the old merged ``tense`` property.
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021, SPEC-022
+
+---
