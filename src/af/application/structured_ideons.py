@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 
 from af.application.ideons import IdeonService, InterpretRequest
-from af.domain.ideons.models import IdeonEdge, IdeonGraph, IdeonNode, NodeKind, Property
+from af.domain.ideons.models import (
+    IdeonEdge,
+    IdeonGraph,
+    IdeonIdentity,
+    IdeonNode,
+    NodeKind,
+    Property,
+)
 from af.domain.ideons.numeric import natural_to_decimal
 from af.domain.ideons.questions import (
     QExpression,
@@ -33,6 +40,7 @@ from af.domain.ideons.structured import (
 from af.domain.ideons.temporal import WhenCondition
 
 _OPERATOR_BY_VALUE: dict[str, QOperator] = {operator.value: operator for operator in QOperator}
+_LEGACY_TEMPORAL_NODE_ID = "temporal-qualification"
 
 
 def _leaf_for_result(result: InquiryResult) -> QLeaf:
@@ -331,8 +339,45 @@ def project_inquiry_expressions(
     return tuple(nodes), tuple(edges)
 
 
+def _expression_identity_properties(inquiry: InquiryState) -> tuple[Property, ...]:
+    properties: list[Property] = []
+    for result in inquiry.results:
+        if not isinstance(result, StructuredInquiryResult) or result.expression is None:
+            raise TypeError("identity construction requires structured inquiry results")
+        properties.append(
+            Property(
+                f"inquiry-expression-{result.question.value}",
+                q_expression_id(result.expression),
+            )
+        )
+    return tuple(properties)
+
+
+def _predicate_node_ids(candidates: tuple[CandidateSet, ...]) -> tuple[str, ...]:
+    node_ids: list[str] = []
+    for form_index, candidate_set in enumerate(candidates):
+        for candidate_index, candidate in enumerate(candidate_set.viable):
+            if candidate.entry.semantic_type in {"action", "state", "relation"}:
+                node_ids.append(f"sense-{form_index}-{candidate_index}")
+    return tuple(node_ids)
+
+
+def _remove_legacy_temporal_projection(
+    graph: IdeonGraph,
+) -> tuple[tuple[IdeonNode, ...], tuple[IdeonEdge, ...]]:
+    """Remove the flat temporal node superseded by the recursive WHEN expression."""
+
+    nodes = tuple(node for node in graph.nodes if node.node_id != _LEGACY_TEMPORAL_NODE_ID)
+    edges = tuple(
+        edge
+        for edge in graph.edges
+        if edge.source != _LEGACY_TEMPORAL_NODE_ID and edge.target != _LEGACY_TEMPORAL_NODE_ID
+    )
+    return nodes, edges
+
+
 class StructuredIdeonService(IdeonService):
-    """Ideon service whose runtime, graph, and transport share one Q structure."""
+    """Ideon service whose runtime, graph, identity, and transport share one Q structure."""
 
     def query_openings(
         self,
@@ -367,11 +412,43 @@ class StructuredIdeonService(IdeonService):
             rights=rights,
             reference_when=reference_when,
         )
+        base_nodes, base_edges = _remove_legacy_temporal_projection(graph)
         inquiry_nodes, inquiry_edges = project_inquiry_expressions(inquiry)
+
+        when_result = inquiry.get(Question.WHEN)
+        when_edges: list[IdeonEdge] = []
+        if when_result.status is not InquiryStatus.NOT_APPLICABLE:
+            for predicate_node_id in _predicate_node_ids(candidates):
+                when_edges.append(
+                    IdeonEdge(
+                        source="inquiry-when",
+                        relation="qualifies-predicate",
+                        target=predicate_node_id,
+                        source_role="when-expression",
+                        target_role="predicate",
+                    )
+                )
+
+        identity = IdeonIdentity(
+            namespace=graph.identity.namespace,
+            ruleset=graph.identity.ruleset,
+            name=graph.identity.name,
+            kind=graph.identity.kind,
+            roles=graph.identity.roles,
+            order=graph.identity.order,
+            context=(
+                *graph.identity.context,
+                *_expression_identity_properties(inquiry),
+            ),
+            roots=(
+                *graph.identity.roots,
+                *(f"inquiry-{result.question.value}" for result in inquiry.results),
+            ),
+        )
         return IdeonGraph(
-            identity=graph.identity,
-            nodes=(*graph.nodes, *inquiry_nodes),
-            edges=(*graph.edges, *inquiry_edges),
+            identity=identity,
+            nodes=(*base_nodes, *inquiry_nodes),
+            edges=(*base_edges, *inquiry_edges, *when_edges),
             hyperedges=graph.hyperedges,
             contracts=(*graph.contracts, "af.ideon.inquiry-expression/v1"),
             openings=graph.openings,
