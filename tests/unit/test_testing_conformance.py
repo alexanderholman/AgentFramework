@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
 
@@ -167,7 +167,7 @@ def test_provider_factory_and_dependency_contracts_fail_closed() -> None:
         run_provider_conformance(fixture)
 
     class InvalidDependencies(FixtureProvider):
-        dependencies = ["invalid"]
+        dependencies: ClassVar[list[str]] = ["invalid"]
 
     fixture = ProviderConformanceFixture(
         "invalid-dependencies",
