@@ -121,6 +121,8 @@ The approved future execution policy is documented in
 continues to deny direct generation until its scoped review and reuse gates are implemented.
 The Laravel-inspired provider, lifecycle, manager, driver, scope, data, and delivery
 contracts are defined in [Application Platform Contracts](docs/application-platform.md).
+Testing hosts, deterministic fakes, provider suites, driver suites, and their non-certifying
+boundary are defined in [Testing and Conformance](docs/testing-conformance.md).
 
 ## Prime Language / Ideon reference
 
