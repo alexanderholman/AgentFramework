@@ -42,30 +42,54 @@ from af.domain.ideons.temporal import (
 )
 
 
-def _make_when_condition_from_context(context: ContextGraph) -> WhenCondition | None:
-    """Extract a validated ``WhenCondition`` from context fields, fail-closed.
+def _parse_context_time(context: ContextGraph) -> WhenCondition | None:
+    """Parse ``context.time`` as a timezone-aware TIMESTAMP ``WhenCondition``, fail-closed.
 
-    Priority:
-    1. ``context.time`` — validated as a timezone-aware ISO 8601 timestamp.
-    2. ``context.when`` — validated as a ``kind:expression`` string via
-       ``parse_when_expression``.
-
-    Returns ``None`` when neither field is valid.
+    Returns ``None`` when the field is absent, unparseable, or naive (no tzinfo).
     """
     from datetime import datetime
 
     time_val = context.get("time")
-    if time_val is not None:
-        try:
-            dt = datetime.fromisoformat(time_val)
-            if dt.tzinfo is not None:
-                return WhenCondition(WhenKind.TIMESTAMP, instant=dt)
-        except (ValueError, OverflowError):
-            pass
-    when_val = context.get("when")
-    if when_val is not None:
-        return parse_when_expression(when_val)
+    if time_val is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(time_val)
+        if dt.tzinfo is not None:
+            return WhenCondition(WhenKind.TIMESTAMP, instant=dt)
+    except (ValueError, OverflowError):
+        pass
     return None
+
+
+def _parse_context_when(context: ContextGraph) -> WhenCondition | None:
+    """Parse ``context.when`` via ``parse_when_expression``, fail-closed.
+
+    Returns ``None`` when the field is absent or does not match the bounded
+    ``kind:expression`` format.
+    """
+    when_val = context.get("when")
+    if when_val is None:
+        return None
+    return parse_when_expression(when_val)
+
+
+def _make_when_condition_from_context(context: ContextGraph) -> WhenCondition | None:
+    """Extract a validated ``WhenCondition`` from a single context witness, fail-closed.
+
+    When **both** ``context.time`` (valid timestamp) and ``context.when`` (valid
+    expression) are present, returns ``None`` — this signals a conflict that the caller
+    must handle explicitly rather than silently picking one.  Use
+    ``_parse_context_time`` and ``_parse_context_when`` directly when the conflict case
+    requires a contested temporal-qualification node.
+
+    When exactly one field is valid, returns that ``WhenCondition``.
+    Returns ``None`` when neither field yields a valid condition.
+    """
+    time_cond = _parse_context_time(context)
+    when_cond = _parse_context_when(context)
+    if time_cond is not None and when_cond is not None:
+        return None  # Conflict: both witnesses present; caller must handle explicitly.
+    return time_cond or when_cond
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,11 +205,18 @@ class IdeonService:
         When the standpoint is resolved (reference supplied + compatible kinds), a
         ``resolved-tense`` property is also added with one of ``was | is | projected``.
         For unresolved states (``unanchored`` or ``contested``), ``resolved-tense`` is
-        absent; only ``temporal-perspective-status`` carries the epistemic state.  The
-        tense is computed by ``render_tense(event_when, reference_when)`` when a reference
-        perspective is supplied and the kinds are comparable.  When no reference
-        perspective is supplied, the status is ``"unanchored"`` — the WHEN condition is
-        structurally present but no temporal standpoint can be asserted.  A directed
+        absent; only ``temporal-perspective-status`` carries the epistemic state.
+
+        **Two-witness contract (fail-closed)**: when both ``context.time`` (a valid
+        timezone-aware ISO 8601 timestamp) and ``context.when`` (a valid
+        ``kind:expression`` condition) are present simultaneously, neither is silently
+        prioritised.  The ``temporal-qualification`` node is emitted with
+        ``temporal-perspective-status="contested"`` and a ``when-additional`` property
+        carrying the raw ``context.when`` expression, so that both witnesses are
+        preserved in the graph.  ``resolved-tense`` is absent in this case; the
+        ``reference_when`` parameter is not consulted.  When only one witness is valid,
+        the single-witness path applies normally: ``render_tense(event_when,
+        reference_when)`` is called when a reference is supplied.  A directed
         ``IdeonEdge`` with relation ``qualifies-predicate`` connects the
         ``temporal-qualification`` node to each predicate (action/state/relation) SENSE
         node in the graph, making the temporal qualification structurally attached to the
@@ -260,42 +291,54 @@ class IdeonService:
         # predicate SENSE node via a ``qualifies-predicate`` edge.
         #
         # Tense resolution rules:
-        # - When ``reference_when`` is supplied and kinds are comparable, ``render_tense``
-        #   determines the resolved tense (WAS / IS / PROJECTED), emitted as
-        #   ``resolved-tense``.
-        # - When ``reference_when`` is None, the status is ``"unanchored"``: the WHEN
-        #   condition is structurally present but no tense standpoint can be asserted.
-        #   ``resolved-tense`` is absent; IS is reserved for a justified present/equal
-        #   standpoint from render_tense.  event:, criterion:, interval:, and ordering:
-        #   conditions do not imply present tense by themselves, and a plain timestamp has
-        #   no standpoint without a declared reference.
-        # - When ``reference_when`` is supplied but the kinds are incompatible, the status
-        #   is ``"contested"`` — the qualification is present but the standpoint cannot be
-        #   computed.  ``resolved-tense`` is absent; the graph node is still emitted so
-        #   the temporal fact is not silently lost.
+        # - When **both** ``context.time`` and ``context.when`` are valid, neither can be
+        #   silently prioritised (option 2: fail-closed).  The node is emitted with
+        #   ``temporal-perspective-status="contested"`` and a ``when-additional`` property
+        #   carrying the raw ``context.when`` expression so that neither witness is
+        #   discarded from the graph.  ``resolved-tense`` is absent.
+        # - When only one is valid, the single-witness path applies:
+        #   - ``reference_when`` absent → status ``"unanchored"``; ``resolved-tense`` absent.
+        #   - ``reference_when`` supplied + compatible kinds → status ``"resolved"``; the
+        #     ``resolved-tense`` property carries ``was | is | projected``.
+        #   - ``reference_when`` supplied + incompatible kinds → status ``"contested"``;
+        #     ``resolved-tense`` absent.
+        # IS is reserved for a justified present/equal standpoint from ``render_tense``.
         when_result = inquiry.get(Question.WHEN)
         if when_result.status is InquiryStatus.SATISFIED:
-            event_when = _make_when_condition_from_context(context)
+            time_cond = _parse_context_time(context)
+            when_cond = _parse_context_when(context)
+            both_present = time_cond is not None and when_cond is not None
+
+            if both_present:
+                # Two valid WHEN witnesses — fail closed: emit contested node with both.
+                assert time_cond is not None  # both_present guarantees this
+                event_when: WhenCondition | None = time_cond
+                perspective = TemporalPerspective(
+                    status=TemporalPerspectiveStatus.CONTESTED, when=time_cond
+                )
+            else:
+                event_when = time_cond or when_cond
+
             if event_when is not None:
-                # Build a typed TemporalPerspective so the resolution status is validated
-                # before serialisation into graph properties.
-                if reference_when is None:
-                    perspective = TemporalPerspective(
-                        status=TemporalPerspectiveStatus.UNANCHORED, when=event_when
-                    )
-                else:
-                    try:
-                        resolved_tense = render_tense(event_when, reference_when)
+                if not both_present:
+                    # Single-witness path: compute tense perspective.
+                    if reference_when is None:
                         perspective = TemporalPerspective(
-                            status=TemporalPerspectiveStatus.RESOLVED,
-                            when=event_when,
-                            tense=resolved_tense,
+                            status=TemporalPerspectiveStatus.UNANCHORED, when=event_when
                         )
-                    except ValueError:
-                        # Incompatible or uncomparable kinds — do not silently default to IS.
-                        perspective = TemporalPerspective(
-                            status=TemporalPerspectiveStatus.CONTESTED, when=event_when
-                        )
+                    else:
+                        try:
+                            resolved_tense = render_tense(event_when, reference_when)
+                            perspective = TemporalPerspective(
+                                status=TemporalPerspectiveStatus.RESOLVED,
+                                when=event_when,
+                                tense=resolved_tense,
+                            )
+                        except ValueError:
+                            # Incompatible or uncomparable kinds — do not silently default to IS.
+                            perspective = TemporalPerspective(
+                                status=TemporalPerspectiveStatus.CONTESTED, when=event_when
+                            )
 
                 # Build the WhenCondition representation for graph properties.
                 when_value: str
@@ -318,6 +361,12 @@ class IdeonService:
                     Property("when-kind", event_when.kind.value),
                     Property("when-value", when_value),
                 ]
+                if both_present:
+                    # Both witnesses present: record the condition-bearing witness as a
+                    # separate property so neither is silently discarded from the graph.
+                    raw_when = context.get("when")
+                    assert raw_when is not None  # both_present guarantees context.when valid
+                    tq_properties.append(Property("when-additional", raw_when))
                 if perspective.tense is not None:
                     # resolved-tense: only present when the standpoint is resolved.
                     # Values are exactly was | is | projected; unresolved states
