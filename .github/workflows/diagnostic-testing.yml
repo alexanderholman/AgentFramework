@@ -1,0 +1,41 @@
+name: AF Testing Diagnostics
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    name: ${{ matrix.action }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        action: [format-check, lint, typecheck, test]
+    env:
+      AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
+      AF_APPEND_ONLY_HEAD_REF: ${{ github.sha }}
+      AF_APPEND_ONLY_BASE_STRATEGY: merge-base
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv sync --locked --extra dev
+      - name: Run diagnostic stage
+        run: python scripts/af_dev.py --action "${{ matrix.action }}" --execute
