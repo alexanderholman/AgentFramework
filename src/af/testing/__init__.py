@@ -1,6 +1,17 @@
 """First-class testing helpers for AF applications and extensions."""
 
 from af.testing.application import BindingOverride, TestApplication, TestApplicationBuilder
+from af.testing.conformance import (
+    ConformanceFailure,
+    ConformanceKind,
+    ConformanceReport,
+    DriverConformanceFixture,
+    ProviderConformanceFixture,
+    ProviderProbe,
+    RealServiceHook,
+    run_driver_conformance,
+    run_provider_conformance,
+)
 from af.testing.fakes import (
     FakeCache,
     FakeCall,
@@ -19,6 +30,10 @@ from af.testing.fakes import (
 
 __all__ = (
     "BindingOverride",
+    "ConformanceFailure",
+    "ConformanceKind",
+    "ConformanceReport",
+    "DriverConformanceFixture",
     "FakeCache",
     "FakeCall",
     "FakeClock",
@@ -32,6 +47,11 @@ __all__ = (
     "FakeSearch",
     "FakeSubsystems",
     "FakeTransport",
+    "ProviderConformanceFixture",
+    "ProviderProbe",
+    "RealServiceHook",
     "TestApplication",
     "TestApplicationBuilder",
+    "run_driver_conformance",
+    "run_provider_conformance",
 )
