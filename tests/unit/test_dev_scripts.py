@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -206,6 +207,67 @@ def test_locked_release_uv_resolution_prefers_inherited_path(
     assert module.resolve_locked_uv_executable() == str(inherited_uv.resolve())
 
 
+def test_locked_release_git_resolution_prefers_inherited_path(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_af_dev()
+    inherited_bin = tmp_path / "inherited-bin"
+    inherited_bin.mkdir()
+    inherited_git = inherited_bin / "git"
+    inherited_git.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    inherited_git.chmod(0o755)
+
+    project_bin = tmp_path / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    project_git = project_bin / "git"
+    project_git.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    project_git.chmod(0o755)
+
+    monkeypatch.setattr(module, "PROJECT_ENV_BIN", project_bin)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(inherited_bin), "/usr/bin", "/bin")))
+
+    assert module.resolve_locked_git_executable() == str(inherited_git.resolve())
+
+
+def test_locked_release_git_resolution_rejects_project_venv(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_af_dev()
+    project_bin = tmp_path / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    project_git = project_bin / "git"
+    project_git.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    project_git.chmod(0o755)
+
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(module, "PROJECT_ENV_BIN", project_bin)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(project_bin), "/usr/bin", "/bin")))
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"locked release actions require git outside the project \.venv",
+    ):
+        module.resolve_locked_git_executable()
+
+
+def test_locked_release_git_resolution_requires_accessible_inherited_executable(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_af_dev()
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="locked release actions require git on inherited PATH"):
+        module.resolve_locked_git_executable()
+
+    monkeypatch.setattr(
+        module.shutil, "which", lambda _name, path=None: str(tmp_path / "missing-git")
+    )
+    with pytest.raises(
+        RuntimeError, match="locked release actions require an accessible git executable"
+    ):
+        module.resolve_locked_git_executable()
+
+
 def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypatch: Any) -> None:
     module = _load_af_dev()
     inherited_bin = tmp_path / "inherited-bin"
@@ -271,7 +333,7 @@ def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypat
     assert uv_log.read_text(encoding="utf-8").splitlines() == ["inherited", "inherited"]
 
 
-def test_locked_release_nested_package_uses_only_inherited_uv(
+def test_locked_release_nested_package_uses_only_inherited_uv_and_git(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     module = _load_af_dev()
@@ -315,6 +377,57 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
         encoding="utf-8",
     )
     project_uv.chmod(0o755)
+    project_git_log = tmp_path / "project-git.log"
+    project_git = project_bin / "git"
+    project_git.write_text(
+        (f"#!/bin/sh\necho project >> {shlex.quote(str(project_git_log))}\nexit 33\n"),
+        encoding="utf-8",
+    )
+    project_git.chmod(0o755)
+
+    git_log = tmp_path / "git-log.jsonl"
+    git_probe = tmp_path / "git_probe.py"
+    git_probe.write_text(
+        "import io\n"
+        "import json\n"
+        "import tarfile\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "log_path = Path(sys.argv[1])\n"
+        "argv = sys.argv[2:]\n"
+        "with log_path.open('a', encoding='utf-8') as handle:\n"
+        "    handle.write(json.dumps({'argv': argv}, separators=(',', ':')) + '\\n')\n"
+        "if argv[:3] == ['status', '--porcelain', '--untracked-files=all']:\n"
+        "    raise SystemExit(0)\n"
+        "if argv[:3] == ['rev-parse', '--verify', 'HEAD']:\n"
+        "    print('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')\n"
+        "    raise SystemExit(0)\n"
+        "if argv and argv[0] == 'archive':\n"
+        "    output = next(\n"
+        "        (arg.split('=', 1)[1] for arg in argv if arg.startswith('--output=')),\n"
+        "        None,\n"
+        "    )\n"
+        "    if output is None:\n"
+        "        raise SystemExit(21)\n"
+        "    with tarfile.open(output, 'w:') as archive:\n"
+        "        info = tarfile.TarInfo('snapshot.txt')\n"
+        "        payload = b'snapshot\\n'\n"
+        "        info.size = len(payload)\n"
+        "        archive.addfile(info, io.BytesIO(payload))\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    inherited_git = inherited_bin / "git"
+    inherited_git.write_text(
+        (
+            "#!/bin/sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(git_probe))} "
+            f'{shlex.quote(str(git_log))} "$@"\n'
+        ),
+        encoding="utf-8",
+    )
+    inherited_git.chmod(0o755)
 
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
@@ -332,14 +445,47 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
         "    parser.add_argument('--action', required=True)\n"
         "    parser.add_argument('--execute', action='store_true')\n"
         "    parser.add_argument('--uv')\n"
+        "    parser.add_argument('--git')\n"
         "    args = parser.parse_args()\n"
-        "    if args.action != 'package' or not args.execute or not args.uv:\n"
+        "    if args.action != 'package' or not args.execute or not args.uv or not args.git:\n"
         "        return 9\n"
         "    uv_path = Path(args.uv)\n"
+        "    git_path = Path(args.git)\n"
         "    if not uv_path.is_absolute():\n"
         "        return 10\n"
-        f"    if uv_path.is_relative_to(Path({project_venv_root_literal})):\n"
+        "    if not git_path.is_absolute():\n"
         "        return 11\n"
+        f"    if uv_path.is_relative_to(Path({project_venv_root_literal})):\n"
+        "        return 12\n"
+        f"    if git_path.is_relative_to(Path({project_venv_root_literal})):\n"
+        "        return 13\n"
+        "    status = subprocess.run(\n"
+        "        [str(git_path), 'status', '--porcelain', '--untracked-files=all'],\n"
+        "        check=False,\n"
+        "    )\n"
+        "    if status.returncode:\n"
+        "        return status.returncode\n"
+        "    commit = subprocess.run(\n"
+        "        [str(git_path), 'rev-parse', '--verify', 'HEAD'],\n"
+        "        capture_output=True,\n"
+        "        check=False,\n"
+        "        text=True,\n"
+        "    )\n"
+        "    if commit.returncode:\n"
+        "        return commit.returncode\n"
+        "    archive_path = Path('snapshot.tar')\n"
+        "    archive = subprocess.run(\n"
+        "        [\n"
+        "            str(git_path),\n"
+        "            'archive',\n"
+        "            '--format=tar',\n"
+        "            f'--output={archive_path}',\n"
+        "            commit.stdout.strip(),\n"
+        "        ],\n"
+        "        check=False,\n"
+        "    )\n"
+        "    if archive.returncode:\n"
+        "        return archive.returncode\n"
         f"    with Path({nested_uv_log_literal}).open('a', encoding='utf-8') as handle:\n"
         "        handle.write(str(uv_path) + '\\n')\n"
         "    for command in (\n"
@@ -391,6 +537,7 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
     assert module.main() == 0
 
     assert project_uv_log.exists() is False
+    assert project_git_log.exists() is False
     assert nested_uv_log.read_text(encoding="utf-8").splitlines() == [
         str(inherited_uv.resolve()),
         str(inherited_uv.resolve()),
@@ -431,9 +578,21 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
     nested_run_calls = [call for call in uv_calls if call and call[0] == "run"]
     assert len(nested_run_calls) == 2
     assert all("--uv" in call for call in nested_run_calls)
+    assert all("--git" in call for call in nested_run_calls)
     assert all(
         call[call.index("--uv") + 1] == str(inherited_uv.resolve()) for call in nested_run_calls
     )
+    assert all(
+        call[call.index("--git") + 1] == str(inherited_git.resolve()) for call in nested_run_calls
+    )
+    git_calls = [
+        json.loads(line)["argv"]
+        for line in git_log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert git_calls.count(["status", "--porcelain", "--untracked-files=all"]) == 2
+    assert git_calls.count(["rev-parse", "--verify", "HEAD"]) == 2
+    assert sum(1 for call in git_calls if call and call[0] == "archive") == 2
 
 
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:

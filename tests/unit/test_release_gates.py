@@ -761,6 +761,19 @@ def test_package_execute_returns_two_when_uv_is_unavailable() -> None:
     assert "uv executable is unavailable" in completed.stderr
 
 
+def test_package_execute_returns_two_when_git_is_unavailable() -> None:
+    completed = _run(
+        "--action",
+        "package",
+        "--execute",
+        "--git",
+        "definitely-missing-git-command",
+    )
+
+    assert completed.returncode == 2
+    assert "git executable is unavailable" in completed.stderr
+
+
 def test_package_execute_returns_one_when_build_fails(tmp_path: Path) -> None:
     root = tmp_path / "repository"
     root.mkdir()

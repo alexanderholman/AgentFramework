@@ -118,6 +118,21 @@ def resolve_locked_uv_executable() -> str:
     return str(resolved)
 
 
+def resolve_locked_git_executable() -> str:
+    """Resolve the git executable from the inherited PATH for locked release actions."""
+    inherited_path = os.environ.get("PATH", "")
+    executable = shutil.which("git", path=inherited_path)
+    if executable is None:
+        raise RuntimeError("locked release actions require git on inherited PATH")
+    try:
+        resolved = Path(executable).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("locked release actions require an accessible git executable") from exc
+    if resolved.is_relative_to(PROJECT_ROOT / ".venv"):
+        raise RuntimeError("locked release actions require git outside the project .venv")
+    return str(resolved)
+
+
 def _is_nested_release_package_command(command: Sequence[str]) -> bool:
     """Return true when argv represents the nested release package invocation."""
     locked_run_tail = LOCKED_RUN[1:]
@@ -142,7 +157,7 @@ def _is_nested_release_package_command(command: Sequence[str]) -> bool:
 
 
 def pin_locked_uv_commands(
-    commands: tuple[tuple[str, ...], ...], uv_executable: str
+    commands: tuple[tuple[str, ...], ...], uv_executable: str, git_executable: str | None = None
 ) -> tuple[tuple[str, ...], ...]:
     """Pin uv invocations in locked commands to a resolved absolute executable path."""
     pinned: list[tuple[str, ...]] = []
@@ -152,6 +167,12 @@ def pin_locked_uv_commands(
             updated = (uv_executable, *command[1:])
         if _is_nested_release_package_command(updated) and "--uv" not in updated:
             updated = (*updated, "--uv", uv_executable)
+        if (
+            git_executable is not None
+            and _is_nested_release_package_command(updated)
+            and "--git" not in updated
+        ):
+            updated = (*updated, "--git", git_executable)
         pinned.append(updated)
     return tuple(pinned)
 
@@ -210,7 +231,14 @@ def main() -> int:
 
     if args.action in LOCKED_ACTIONS:
         try:
-            commands = pin_locked_uv_commands(commands, resolve_locked_uv_executable())
+            git_executable = (
+                resolve_locked_git_executable()
+                if any(_is_nested_release_package_command(command) for command in commands)
+                else None
+            )
+            commands = pin_locked_uv_commands(
+                commands, resolve_locked_uv_executable(), git_executable
+            )
         except RuntimeError as exc:
             print(f"action '{args.action}' failed: {exc}", file=sys.stderr)
             return 2

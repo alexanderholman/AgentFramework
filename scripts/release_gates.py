@@ -762,10 +762,10 @@ def _run_release_command(
     return completed
 
 
-def _ensure_clean_checkout(root: Path, environment: Mapping[str, str]) -> None:
+def _ensure_clean_checkout(root: Path, environment: Mapping[str, str], git_executable: str) -> None:
     try:
         completed = subprocess.run(
-            ("git", "status", "--porcelain", "--untracked-files=all"),
+            (git_executable, "status", "--porcelain", "--untracked-files=all"),
             capture_output=True,
             check=False,
             cwd=root,
@@ -781,10 +781,10 @@ def _ensure_clean_checkout(root: Path, environment: Mapping[str, str]) -> None:
         raise ArtifactError("package build requires a clean tracked and untracked checkout")
 
 
-def _release_commit(root: Path, environment: Mapping[str, str]) -> str:
+def _release_commit(root: Path, environment: Mapping[str, str], git_executable: str) -> str:
     try:
         completed = subprocess.run(
-            ("git", "rev-parse", "--verify", "HEAD"),
+            (git_executable, "rev-parse", "--verify", "HEAD"),
             capture_output=True,
             check=False,
             cwd=root,
@@ -860,7 +860,9 @@ def _release_environment(temporary_root: Path) -> dict[str, str]:
     return environment
 
 
-def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> ArtifactSummary:
+def build_and_validate_distribution(
+    root: Path, uv_command: str = "uv", git_command: str = "git"
+) -> ArtifactSummary:
     """Build wheel-from-sdist, install it temporarily, and run deterministic smoke checks."""
     try:
         root = root.resolve(strict=True)
@@ -873,6 +875,13 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
         uv_executable = str(Path(uv_executable).resolve(strict=True))
     except (OSError, RuntimeError) as exc:
         raise InputError("uv executable is inaccessible") from exc
+    git_executable = shutil.which(git_command)
+    if git_executable is None:
+        raise InputError("git executable is unavailable")
+    try:
+        git_executable = str(Path(git_executable).resolve(strict=True))
+    except (OSError, RuntimeError) as exc:
+        raise InputError("git executable is inaccessible") from exc
     with tempfile.TemporaryDirectory(prefix="af-release-") as temporary:
         temporary_root = Path(temporary)
         artifacts = temporary_root / "artifacts"
@@ -883,10 +892,10 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
         artifacts.mkdir()
         target.mkdir()
         environment = _release_environment(temporary_root)
-        _ensure_clean_checkout(root, environment)
-        commit = _release_commit(root, environment)
+        _ensure_clean_checkout(root, environment, git_executable)
+        commit = _release_commit(root, environment, git_executable)
         _run_release_command(
-            ("git", "archive", "--format=tar", f"--output={source_archive}", commit),
+            (git_executable, "archive", "--format=tar", f"--output={source_archive}", commit),
             cwd=root,
             environment=environment,
             stage="commit snapshot",
@@ -914,9 +923,9 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
             raise ArtifactError("package build did not produce exactly one sdist")
         if _sha256(source_archive) != source_archive_sha256:
             raise ArtifactError("commit snapshot changed while the sdist was being built")
-        if _release_commit(root, environment) != commit:
+        if _release_commit(root, environment, git_executable) != commit:
             raise ArtifactError("release checkout HEAD changed during the package build")
-        _ensure_clean_checkout(root, environment)
+        _ensure_clean_checkout(root, environment, git_executable)
         _extract_source_snapshot(source_archive, reference_root)
         identity = _project_identity(reference_root)
         _inspect_sdist(reference_root, sdists[0], identity=identity)
@@ -935,9 +944,9 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
             raise ArtifactError("sdist changed while its wheel was being built")
         if _sha256(source_archive) != source_archive_sha256:
             raise ArtifactError("commit snapshot changed while the wheel was being built")
-        if _release_commit(root, environment) != commit:
+        if _release_commit(root, environment, git_executable) != commit:
             raise ArtifactError("release checkout HEAD changed during the package build")
-        _ensure_clean_checkout(root, environment)
+        _ensure_clean_checkout(root, environment, git_executable)
         summary = inspect_distribution(reference_root, sdists[0], wheels[0])
         wheel_sha256 = summary.wheel_sha256
 
@@ -968,9 +977,9 @@ def build_and_validate_distribution(root: Path, uv_command: str = "uv") -> Artif
             stage="installed-wheel smoke",
             timeout=60,
         )
-        if _release_commit(root, environment) != commit:
+        if _release_commit(root, environment, git_executable) != commit:
             raise ArtifactError("release checkout HEAD changed during the package smoke")
-        _ensure_clean_checkout(root, environment)
+        _ensure_clean_checkout(root, environment, git_executable)
         return summary
 
 
@@ -1390,6 +1399,11 @@ def main() -> int:
         default="uv",
         help="uv executable used by the package action.",
     )
+    parser.add_argument(
+        "--git",
+        default="git",
+        help="git executable used by the package action.",
+    )
     args = parser.parse_args()
 
     if args.action == "package":
@@ -1397,7 +1411,7 @@ def main() -> int:
             if not args.execute:
                 print(_render_package_plan(args.uv))
                 return 0
-            summary = build_and_validate_distribution(args.root, args.uv)
+            summary = build_and_validate_distribution(args.root, args.uv, args.git)
         except InputError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
