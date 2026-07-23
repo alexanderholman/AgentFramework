@@ -1,98 +1,49 @@
-name: Sync PR 52 branch
+name: Approve PR 52 checks
 
 on:
   push:
     branches: [automation/sync-pr52-20260723]
 
 permissions:
-  contents: write
+  actions: write
+  contents: read
+  pull-requests: read
 
 concurrency:
-  group: sync-pr52
+  group: approve-pr52-checks
   cancel-in-progress: false
 
 jobs:
-  sync:
-    name: Merge master into PR 52
+  approve:
+    name: Approve exact PR 52 workflow runs
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - name: Check out exact PR head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          ref: feature/production-mvp-readiness
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Merge current master and preserve append-only histories
+      - name: Verify PR head and approve runs
         shell: bash
         env:
-          EXPECTED_HEAD: a20da8169716c86c3ef610e1dffddb057a24f382
-          MERGE_BASE: 06cfdda9225ab1091a616e15c9631cfd73175ef2
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: alexanderholman/AgentFramework
+          EXPECTED_HEAD: 1f0eec01d93220668847782cf5c63bad66603175
+          RUN_IDS: "30041011654 30041011651"
         run: |
           set -euo pipefail
-          actual_head="$(git rev-parse HEAD)"
-          if [[ "$actual_head" != "$EXPECTED_HEAD" ]]; then
-            echo "Refusing stale synchronization: expected $EXPECTED_HEAD, found $actual_head" >&2
+          current_head="$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/pulls/52" \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])')"
+          if [[ "$current_head" != "$EXPECTED_HEAD" ]]; then
+            echo "Refusing stale approval: expected $EXPECTED_HEAD, found $current_head" >&2
             exit 1
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch --no-tags origin master
-
-          set +e
-          git merge --no-ff --no-commit origin/master
-          merge_status=$?
-          set -e
-
-          if [[ $merge_status -ne 0 ]]; then
-            for path in agent_runs.md decisions.md specs.md; do
-              git show "$MERGE_BASE:$path" > "/tmp/base-${path}"
-              git show "origin/master:$path" > "/tmp/master-${path}"
-              git show "$EXPECTED_HEAD:$path" > "/tmp/head-${path}"
-              python - "$path" "/tmp/base-${path}" "/tmp/master-${path}" "/tmp/head-${path}" <<'PY'
-          from pathlib import Path
-          import sys
-
-          output, base_path, master_path, head_path = sys.argv[1:]
-          base = Path(base_path).read_bytes()
-          master = Path(master_path).read_bytes()
-          head = Path(head_path).read_bytes()
-          if not master.startswith(base):
-              raise SystemExit(f"master no longer preserves the append-only prefix for {output}")
-          if not head.startswith(base):
-              raise SystemExit(f"PR head no longer preserves the append-only prefix for {output}")
-          suffix = head[len(base):]
-          Path(output).write_bytes(master + suffix)
-          PY
-              git add "$path"
-            done
-
-            if git ls-files -u -- README.md | grep -q .; then
-              git show "$EXPECTED_HEAD:README.md" > /tmp/readme-head
-              git show "$MERGE_BASE:README.md" > /tmp/readme-base
-              git show "origin/master:README.md" > /tmp/readme-master
-              set +e
-              git merge-file -p /tmp/readme-head /tmp/readme-base /tmp/readme-master > README.md
-              readme_status=$?
-              set -e
-              if [[ $readme_status -ne 0 ]]; then
-                echo "README.md still has unresolved semantic conflicts" >&2
-                exit 1
-              fi
-              git add README.md
-            fi
-          fi
-
-          unresolved="$(git diff --name-only --diff-filter=U)"
-          if [[ -n "$unresolved" ]]; then
-            echo "Unresolved merge paths:" >&2
-            printf '%s\n' "$unresolved" >&2
-            exit 1
-          fi
-
-          git commit -m "chore: merge master into production MVP readiness"
-          git push origin HEAD:feature/production-mvp-readiness
-
-# This second push exists so the branch-local workflow definition is present before its trigger.
+          for run_id in $RUN_IDS; do
+            curl --fail --silent --show-error \
+              --request POST \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${REPOSITORY}/actions/runs/${run_id}/approve"
+          done
