@@ -9,6 +9,7 @@ import pytest
 from af.framework.context import (
     AcceptanceScope,
     CancellationToken,
+    ContextLease,
     ExecutionContext,
     Principal,
     TraceContext,
@@ -16,6 +17,7 @@ from af.framework.context import (
     derive_context,
     maybe_current_context,
     use_context,
+    without_context,
 )
 from af.framework.errors import PlatformError, PlatformReason
 
@@ -78,6 +80,41 @@ def test_context_binding_nests_and_restores_exact_parent() -> None:
             assert current_context() is child
         assert current_context() is parent
     assert maybe_current_context() is None
+
+
+def test_context_lease_clears_sensitive_reference_when_binding_exits() -> None:
+    value = context("leased")
+    lease = ContextLease(value)
+
+    with use_context(value, lease=lease):
+        assert current_context() is value
+
+    assert not lease.active
+    assert lease.context is None
+
+
+def test_context_lease_authority_cannot_be_reassigned_or_reactivated() -> None:
+    lease = ContextLease(context("first"))
+
+    with pytest.raises(AttributeError):
+        lease.context = context("second")  # type: ignore[misc]
+    lease.revoke()
+    with pytest.raises(AttributeError):
+        lease.active = True  # type: ignore[misc]
+
+
+def test_context_binding_rejects_mismatched_or_revoked_lease() -> None:
+    first = context("first")
+    lease = ContextLease(first)
+
+    with (
+        pytest.raises(ValueError, match="same context"),
+        use_context(context("second"), lease=lease),
+    ):
+        pass
+    lease.revoke()
+    with pytest.raises(ValueError, match="active"), use_context(first, lease=lease):
+        pass
 
 
 def test_context_copied_to_unowned_task_expires_after_parent_scope() -> None:
@@ -173,3 +210,11 @@ def test_context_is_restored_after_async_cancellation() -> None:
         assert maybe_current_context() is None
 
     asyncio.run(scenario())
+
+
+def test_context_can_be_explicitly_masked_for_long_lived_construction() -> None:
+    parent = context("parent")
+    with use_context(parent):
+        with without_context(), pytest.raises(PlatformError):
+            current_context()
+        assert current_context() is parent

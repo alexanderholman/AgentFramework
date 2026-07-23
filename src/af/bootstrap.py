@@ -192,6 +192,7 @@ def create_application(
     )
     for provider in providers:
         provider.register(container)
+    container.freeze()
     for provider in providers:
         provider.boot(container)
 

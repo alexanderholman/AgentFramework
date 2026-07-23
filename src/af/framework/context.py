@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -152,14 +152,61 @@ class ExecutionContext:
         )
 
 
+class ContextLease:
+    """Revocable authority to expose one execution context ambiently."""
+
+    __slots__ = ("_active", "_context", "_validator")
+    _active: bool
+    _context: ExecutionContext | None
+    _validator: Callable[[], bool] | None
+
+    def __init__(
+        self,
+        context: ExecutionContext,
+        *,
+        validator: Callable[[], bool] | None = None,
+    ) -> None:
+        object.__setattr__(self, "_context", context)
+        object.__setattr__(self, "_active", True)
+        object.__setattr__(self, "_validator", validator)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        del name, value
+        raise AttributeError("context lease authority is read-only")
+
+    @property
+    def context(self) -> ExecutionContext | None:
+        return self._context
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def permits_current_caller(self) -> bool:
+        return (
+            self._active
+            and self._context is not None
+            and (self._validator is None or self._validator())
+        )
+
+    def revoke(self) -> None:
+        object.__setattr__(self, "_active", False)
+        object.__setattr__(self, "_context", None)
+        object.__setattr__(self, "_validator", None)
+
+
 @dataclass(slots=True)
 class _ContextBinding:
-    context: ExecutionContext
+    lease: ContextLease
     parent: _ContextBinding | None = None
     active: bool = True
 
     def is_active(self) -> bool:
-        return self.active and (self.parent is None or self.parent.is_active())
+        return (
+            self.active
+            and self.lease.permits_current_caller()
+            and (self.parent is None or self.parent.is_active())
+        )
 
 
 _CURRENT_CONTEXT: ContextVar[_ContextBinding | None] = ContextVar(
@@ -169,7 +216,7 @@ _CURRENT_CONTEXT: ContextVar[_ContextBinding | None] = ContextVar(
 
 def maybe_current_context() -> ExecutionContext | None:
     binding = _CURRENT_CONTEXT.get()
-    return binding.context if binding is not None and binding.is_active() else None
+    return binding.lease.context if binding is not None and binding.is_active() else None
 
 
 def current_context() -> ExecutionContext:
@@ -183,13 +230,31 @@ def current_context() -> ExecutionContext:
 
 
 @contextmanager
-def use_context(context: ExecutionContext) -> Iterator[ExecutionContext]:
-    binding = _ContextBinding(context, parent=_CURRENT_CONTEXT.get())
+def use_context(
+    context: ExecutionContext, *, lease: ContextLease | None = None
+) -> Iterator[ExecutionContext]:
+    if not isinstance(context, ExecutionContext):
+        raise TypeError("context must be an ExecutionContext")
+    resolved_lease = ContextLease(context) if lease is None else lease
+    if resolved_lease.context is not context or not resolved_lease.active:
+        raise ValueError("context lease must be active and bound to the same context")
+    binding = _ContextBinding(resolved_lease, parent=_CURRENT_CONTEXT.get())
     token = _CURRENT_CONTEXT.set(binding)
     try:
         yield context
     finally:
         binding.active = False
+        resolved_lease.revoke()
+        _CURRENT_CONTEXT.reset(token)
+
+
+@contextmanager
+def without_context() -> Iterator[None]:
+    """Temporarily mask invocation identity for broader-lifetime construction."""
+    token = _CURRENT_CONTEXT.set(None)
+    try:
+        yield
+    finally:
         _CURRENT_CONTEXT.reset(token)
 
 
