@@ -8,18 +8,11 @@ permissions:
   contents: read
 
 jobs:
-  stage:
-    name: ${{ matrix.action }}
+  import-fix:
+    name: import-fix
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        action: [format-check, lint, typecheck, coverage]
+    timeout-minutes: 10
     env:
-      AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
-      AF_APPEND_ONLY_HEAD_REF: ${{ github.sha }}
-      AF_APPEND_ONLY_BASE_STRATEGY: merge-base
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
     steps:
@@ -37,19 +30,14 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - run: uv sync --locked --extra dev
-      - name: Run diagnostic stage
-        shell: bash
+      - name: Materialize Ruff import fix
         run: |
-          set +e
-          python scripts/af_dev.py --action "${{ matrix.action }}" --execute \
-            > "diagnostic-${{ matrix.action }}.log" 2>&1
-          status=$?
-          cat "diagnostic-${{ matrix.action }}.log"
-          exit "$status"
-      - name: Upload diagnostic output
-        if: always()
+          uv run ruff check --fix tests/feature/test_testing_fixture_extension.py
+          cp tests/feature/test_testing_fixture_extension.py fixed-test_testing_fixture_extension.py
+          uv run ruff check tests/feature/test_testing_fixture_extension.py
+      - name: Upload fixed source
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: diagnostic-${{ matrix.action }}
-          path: diagnostic-${{ matrix.action }}.log
+          name: diagnostic-import-fix
+          path: fixed-test_testing_fixture_extension.py
           if-no-files-found: error
