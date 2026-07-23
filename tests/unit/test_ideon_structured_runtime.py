@@ -126,7 +126,7 @@ def test_who_multiple_roles_form_an_all_group() -> None:
     runtime = create_reference_ideon_runtime()
     forms = runtime.service.encode_forms("sat")
     candidates = runtime.service.lookup_senses(forms, ContextGraph())
-    flat = runtime.service._inquiry.query(  # noqa: SLF001 - verifies integration boundary
+    flat = runtime.service._inquiry.query(
         forms,
         candidates,
         ContextGraph.from_dict({"actor": "alice"}),
