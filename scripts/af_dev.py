@@ -10,6 +10,8 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
+LOCKED_RUN = ("uv", "run", "--offline", "--locked", "--no-sources", "--extra", "dev")
+
 ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
     "sync": (("uv", "sync", "--locked", "--extra", "dev"),),
     "test": (("uv", "run", "pytest"),),
@@ -28,14 +30,13 @@ ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
     "legacy": (("./validate_agents.sh",),),
     "opencode-integration": (("node", "--test", "tests/opencode/route-gate.test.mjs"),),
     "release-validate": (
-        ("uv", "run", "python", "scripts/release_gates.py", "--action", "validate"),
+        (*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "validate"),
     ),
-    "release-report": (("uv", "run", "python", "scripts/release_gates.py", "--action", "report"),),
-    "release-check": (("uv", "run", "python", "scripts/release_gates.py", "--action", "check"),),
+    "release-report": ((*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "report"),),
+    "release-check": ((*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "check"),),
     "package": (
         (
-            "uv",
-            "run",
+            *LOCKED_RUN,
             "python",
             "scripts/release_gates.py",
             "--action",
@@ -44,15 +45,20 @@ ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
         ),
     ),
     "check": (
-        ("uv", "run", "python", "scripts/release_gates.py", "--action", "validate"),
-        ("uv", "run", "ruff", "format", "--check", "src/af", "tests", "scripts"),
-        ("uv", "run", "ruff", "check", "src/af", "tests", "scripts"),
-        ("uv", "run", "mypy", "src"),
-        ("uv", "run", "pytest", "--cov=af", "--cov-report=term-missing", "--cov-fail-under=90"),
+        (*LOCKED_RUN, "python", "scripts/release_gates.py", "--action", "validate"),
+        (*LOCKED_RUN, "ruff", "format", "--check", "src/af", "tests", "scripts"),
+        (*LOCKED_RUN, "ruff", "check", "src/af", "tests", "scripts"),
+        (*LOCKED_RUN, "mypy", "src"),
+        (
+            *LOCKED_RUN,
+            "pytest",
+            "--cov=af",
+            "--cov-report=term-missing",
+            "--cov-fail-under=90",
+        ),
         ("node", "--test", "tests/opencode/route-gate.test.mjs"),
         (
-            "uv",
-            "run",
+            *LOCKED_RUN,
             "python",
             "scripts/release_gates.py",
             "--action",

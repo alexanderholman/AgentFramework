@@ -1,7 +1,7 @@
 schema_version: "1.0.0"
 
 profile:
-  id: "private-single-node-loopback-deterministic"
+  id: "private-single-node-stdio-deterministic"
   title: "Private single-node deterministic production MVP"
   release_target: "private-mvp-candidate"
   maturity: "pre-release"
@@ -10,10 +10,11 @@ profile:
     python: "3.12"
     nodes: 1
     tenants: 1
-    active_processes_per_database: 1
+    databases: 1
+    live_processes: 1
     database: "sqlite"
     routes: "deterministic-only"
-    network_exposure: "loopback"
+    network_exposure: "none"
     remote_inference: false
   supported_surfaces:
     - "cli-offline-maintenance"
@@ -34,7 +35,7 @@ gates:
   - id: "scope.profile-definition"
     category: "scope"
     title: "Bounded deployment profile"
-    requirement: "The release declares one node, one tenant, one active process per SQLite database, MCP stdio with offline CLI maintenance, no network listener, and deterministic routes."
+    requirement: "The release declares one node, one tenant, one SQLite database, one live MCP-stdio process, offline CLI maintenance while quiesced, no network listener, and deterministic routes."
     blocking: true
     verification: "hybrid"
     state: "met"
@@ -129,14 +130,14 @@ gates:
   - id: "artifact.package-validation"
     category: "artifact"
     title: "Wheel-from-sdist artifact validation"
-    requirement: "CI builds a wheel from an inspected sdist, validates complete metadata and RECORD hashes, installs the exact wheel outside the checkout, imports both entry-point targets, and exercises the installed CLI route."
+    requirement: "CI snapshots the exact clean commit, builds a wheel from its inspected sdist, validates strict core metadata, license files, entry-point groups and targets, complete RECORD hashes, and source identity, then installs and smokes the exact wheel outside the checkout."
     blocking: true
     verification: "automated"
     state: "met"
     evidence:
       - kind: "script"
         ref: "release-package"
-        description: "The package action builds wheel-from-sdist in temporary paths, validates contents, installs with no dependencies, and smokes deterministic routes outside the checkout."
+        description: "The package action builds wheel-from-sdist from a clean commit snapshot, validates contents, installs with no dependencies, and smokes deterministic routes outside the checkout."
       - kind: "file"
         ref: "tests/unit/test_release_gates.py"
         description: "Release-gate tests cover artifact identity, required files, forbidden runtime state, and dry-run behavior."
@@ -286,6 +287,19 @@ gates:
     next_action: "Add production settings validation and tests for absolute paths, local storage, ownership, permissions, and capacity."
     issues:
       - "https://github.com/alexanderholman/AgentFramework/issues/17"
+
+  - id: "data.sqlite-runtime-policy"
+    category: "data"
+    title: "Enforced SQLite durability and concurrency policy"
+    requirement: "Production configuration enforces and verifies the approved SQLite journal mode, synchronous durability, busy timeout, foreign-key behavior, integrity checks, and one-database/one-process invariant."
+    blocking: true
+    verification: "automated"
+    state: "unmet"
+    evidence: []
+    next_action: "Define the production SQLite settings contract and add startup plus integration tests for every required pragma and rejected concurrency mode."
+    issues:
+      - "https://github.com/alexanderholman/AgentFramework/issues/17"
+      - "https://github.com/alexanderholman/AgentFramework/issues/34"
 
   - id: "data.schema-migrations"
     category: "data"

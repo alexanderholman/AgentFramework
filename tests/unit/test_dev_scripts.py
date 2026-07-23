@@ -37,8 +37,13 @@ def test_af_dev_check_preview_lints_all_maintained_python_scripts() -> None:
     )
 
     assert completed.returncode == 0
-    assert "uv run ruff format --check src/af tests scripts" in completed.stdout
-    assert "uv run ruff check src/af tests scripts" in completed.stdout
+    assert (
+        "uv run --offline --locked --no-sources --extra dev "
+        "ruff format --check src/af tests scripts"
+    ) in completed.stdout
+    assert (
+        "uv run --offline --locked --no-sources --extra dev ruff check src/af tests scripts"
+    ) in completed.stdout
     assert "node --test tests/opencode/route-gate.test.mjs" in completed.stdout
 
 
@@ -52,8 +57,14 @@ def test_af_dev_check_preview_validates_release_manifest_and_package() -> None:
     )
 
     assert completed.returncode == 0
-    assert "uv run python scripts/release_gates.py --action validate" in completed.stdout
-    assert "uv run python scripts/release_gates.py --action package --execute" in completed.stdout
+    assert (
+        "uv run --offline --locked --no-sources --extra dev "
+        "python scripts/release_gates.py --action validate"
+    ) in completed.stdout
+    assert (
+        "uv run --offline --locked --no-sources --extra dev "
+        "python scripts/release_gates.py --action package --execute"
+    ) in completed.stdout
 
 
 def test_release_gate_workflow_is_registered() -> None:
@@ -64,15 +75,17 @@ def test_release_gate_workflow_is_registered() -> None:
     )
 
     assert release_gate["command"] == (
-        "uv run --extra dev python scripts/release_gates.py --action '<action>'"
+        "uv run --offline --locked --no-sources --extra dev "
+        "python scripts/release_gates.py --action '<action>'"
     )
     assert set(release_gate["capabilities"]) >= {
         "production-readiness-report",
-        "release-enforcement",
+        "release-declaration-validation",
     }
     assert release_gate["parameters"] == ["action"]
     assert release_package["command"] == (
-        "uv run --extra dev python scripts/release_gates.py --action package --execute"
+        "uv run --offline --locked --no-sources --extra dev "
+        "python scripts/release_gates.py --action package --execute"
     )
     assert "package-validation" in release_package["capabilities"]
 

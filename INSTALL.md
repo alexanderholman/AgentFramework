@@ -34,14 +34,15 @@ The expected outputs are `Hello, world!` and `3`.
 Validate the source and wheel packaging path:
 
 ```bash
-uv run --extra dev python scripts/release_gates.py --action package
-uv run --extra dev python scripts/release_gates.py --action package --execute
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package --execute
 ```
 
-The executed package action uses temporary directories, builds the wheel from the source
-distribution, installs it outside the checkout without dependencies, and runs deterministic
-smoke checks using the locked development environment. It is not a clean-host production
-installation test.
+The executed package action snapshots the clean Git commit into temporary directories, builds
+the wheel from that source distribution with uv resolution offline and configuration disabled,
+installs it outside the checkout without dependencies, and runs deterministic smoke checks
+using the locked development environment. It is not an operating-system network sandbox or a
+clean-host production installation test.
 
 ## Run the interfaces
 
@@ -73,17 +74,19 @@ Removing the checkout does not remove any separately deployed database or MCP se
 ## Production status
 
 AgentFramework is not yet production-ready. Do not operate a service from an editable
-checkout. The first candidate profile permits one dedicated-account MCP-stdio process and
-quiesced offline CLI maintenance; every HTTP/MCP network listener is excluded. The target,
+checkout. The first candidate profile permits one SQLite database, one dedicated-account
+MCP-stdio process, and quiesced offline CLI maintenance; every HTTP/MCP network listener is
+excluded. The target,
 release blockers, artifact requirements, backup/restore evidence, and rollback expectations
 are defined in [Private production MVP](docs/production-mvp.md).
 
 ```bash
-uv run --extra dev python scripts/release_gates.py --action validate
-uv run --extra dev python scripts/release_gates.py --action report
-uv run --extra dev python scripts/release_gates.py --action check
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action validate
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action check
 ```
 
-The final command intentionally exits `1` while any blocking implementation gate remains
-unmet or pending. Exit `0` would mean policy gates are complete, not that deployment has been
-authorized; current candidate-bound evidence and maintainer approval remain external gates.
+The final command intentionally exits `1` while any blocking declaration remains unmet or
+pending. Exit `0` would mean the manifest declares every policy gate complete, not that the
+evidence was independently verified or deployment authorized; candidate-bound evidence and
+maintainer approval remain external gates.

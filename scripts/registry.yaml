@@ -32,13 +32,13 @@ scripts:
       - "validate"
     capabilities:
       - "production-readiness-report"
-      - "release-enforcement"
-    description: "Validate, report, or check completeness of the canonical private production-MVP policy"
-    command: "uv run --extra dev python scripts/release_gates.py --action '<action>'"
+      - "release-declaration-validation"
+    description: "Validate or report declarations against the canonical private production-MVP policy without certifying deployment"
+    command: "uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action '<action>'"
     parameters:
       - "action"
     outputs:
-      - "requirements-report"
+      - "declaration-report"
       - "validation-report"
     validation:
       - "exit_code in [0, 1, 2] according to documented action semantics"
@@ -53,8 +53,8 @@ scripts:
       - "package-validation"
       - "artifact-inspection"
       - "installed-wheel-smoke"
-    description: "Build an offline wheel from an inspected sdist and validate the installed package"
-    command: "uv run --extra dev python scripts/release_gates.py --action package --execute"
+    description: "Build with uv offline from a clean commit snapshot and validate the installed wheel"
+    command: "uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package --execute"
     parameters: []
     outputs:
       - "artifact-digests"

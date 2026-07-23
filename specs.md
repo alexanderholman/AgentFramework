@@ -1031,3 +1031,68 @@ that process is stopped.
 - SPEC-016 (Private Single-Node Production-MVP Release Contract)
 
 ---
+
+## [SPEC-018] Stdio-Only Declaration and Commit-Snapshot Package Contract
+**Date**: 2026-07-23
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+This specification supersedes SPEC-017 where that specification calls manifest state
+"requirements completeness," permits one process per database, or claims that package
+execution has operating-system-level network denial. The first production-MVP profile has
+exactly one SQLite database, one live MCP-stdio process, and no AF network exposure. The
+repository checker validates canonical declarations; only later candidate-bound admission
+can verify evidence and authorize deployment.
+
+### Requirements
+- MUST encode `network_exposure: none`, exactly one database, exactly one live process, and
+  MCP stdio as the sole live application surface
+- MUST report `declarations_complete`, `manifest_sha256`, `policy_sha256`, and
+  `certifies_production: false`; every text result MUST state that production certification
+  was not performed
+- MUST treat checker exit `0` as declaration completeness only and MUST NOT describe it as
+  evidence verification, readiness, certification, admission, or deployment approval
+- MUST include a blocking SQLite runtime-policy gate covering journal and synchronous modes,
+  busy timeout, foreign keys, integrity, and the one-database/one-process invariant
+- MUST build the sdist from a clean commit-derived source snapshot rather than the mutable
+  checkout and MUST fail if checkout HEAD or cleanliness changes during package execution
+- MUST parse sdist and wheel core metadata strictly, compare runtime and optional dependency
+  metadata, extras, explicit license files, and exact console entry-point groups, and load the
+  installed target of every declared console entry point
+- MUST require valid `PKG-INFO`, `uv.lock`, complete wheel `RECORD` coverage, regular archive
+  members, and byte identity for every non-generated sdist file against the commit snapshot
+- MUST disable inherited uv configuration and resolution network access for package commands,
+  while accurately stating that this is not an OS network sandbox for backend or package code
+- MUST keep the independent no-egress, clean-host installation, provenance, deployment,
+  evidence-verification, and maintainer-approval gates unmet until their separate controls run
+
+### Tests
+- **Test ID**: TEST-018-1
+  - **Description**: Validate the exact stdio-only profile
+  - **Pass Criteria**: The canonical policy fixes one database/process and no network exposure;
+    widening either process count or exposure fails validation
+  - **Fail Criteria**: A loopback listener or additional database/process remains in profile
+- **Test ID**: TEST-018-2
+  - **Description**: Separate declarations from verified admission
+  - **Pass Criteria**: Synthetic all-met state says declarations are complete while every
+    format says production certification was not performed and binds the full manifest digest
+  - **Fail Criteria**: Self-declared evidence yields a readiness or authorization claim
+- **Test ID**: TEST-018-3
+  - **Description**: Bind package artifacts to a clean commit snapshot
+  - **Pass Criteria**: Package execution builds from the archived commit, rechecks live checkout
+    identity/cleanliness, and compares generated artifacts with an unexecuted reference snapshot
+  - **Fail Criteria**: Build-time mutation of the working checkout becomes accepted evidence
+- **Test ID**: TEST-018-4
+  - **Description**: Reject malformed metadata, entry points, archives, and RECORD rows
+  - **Pass Criteria**: Duplicate/missing core metadata, unsafe licenses, undeclared entry-point
+    groups, missing attributes, special members, bad hashes/sizes, duplicate rows, self-hashed
+    RECORD, and incomplete coverage all fail
+  - **Fail Criteria**: Structurally invalid or undeclared package metadata passes inspection
+
+### Related Specs
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+- SPEC-017 (Canonical Production Policy and External Admission Evidence)
+
+---

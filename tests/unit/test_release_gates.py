@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
 import stat
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -63,7 +65,7 @@ def _manifest(gates: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "schema_version": "1.0.0",
         "profile": {
-            "id": "private-single-node-loopback-deterministic",
+            "id": "private-single-node-stdio-deterministic",
             "title": "Private single-node deterministic production MVP",
             "release_target": "private-mvp-candidate",
             "maturity": "pre-release",
@@ -72,10 +74,11 @@ def _manifest(gates: list[dict[str, Any]]) -> dict[str, Any]:
                 "python": "3.12",
                 "nodes": 1,
                 "tenants": 1,
-                "active_processes_per_database": 1,
+                "databases": 1,
+                "live_processes": 1,
                 "database": "sqlite",
                 "routes": "deterministic-only",
-                "network_exposure": "loopback",
+                "network_exposure": "none",
                 "remote_inference": False,
             },
             "supported_surfaces": ["cli-offline-maintenance", "mcp-stdio"],
@@ -156,8 +159,18 @@ def _write_distribution_fixture(
     omit_dependency_metadata: bool = False,
     omit_optional_dependency_metadata: bool = False,
     omit_extra_metadata: bool = False,
+    duplicate_name_metadata: bool = False,
+    omit_metadata_version: bool = False,
+    unsafe_license_metadata: bool = False,
+    extra_entry_point_group: bool = False,
     omit_record: bool = False,
+    corrupt_record_hash: bool = False,
+    corrupt_record_size: bool = False,
+    duplicate_record_row: bool = False,
+    hash_record_itself: bool = False,
+    omit_record_member: bool = False,
     tamper_sdist_path: str | None = None,
+    fifo_sdist_path: str | None = None,
 ) -> tuple[Path, Path]:
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     version = project["version"]
@@ -178,8 +191,8 @@ def _write_distribution_fixture(
         f"Name: {project['name']}",
         f"Version: {version}",
         f"Requires-Python: {project['requires-python']}",
-        "License-File: LICENSE",
     ]
+    metadata_lines.extend(f"License-File: {name}" for name in project["license-files"])
     if not omit_extra_metadata:
         metadata_lines.extend(
             f"Provides-Extra: {extra}" for extra in project.get("optional-dependencies", {})
@@ -191,15 +204,33 @@ def _write_distribution_fixture(
                 metadata_lines.extend(
                     f"Requires-Dist: {item}; extra == '{extra}'" for item in requirements
                 )
-    wheel_files[f"{dist_info}/METADATA"] = ("\n".join(metadata_lines) + "\n").encode()
-    wheel_files[f"{dist_info}/entry_points.txt"] = (
-        "[console_scripts]\n"
-        + "".join(f"{name} = {target}\n" for name, target in project["scripts"].items())
-    ).encode()
+    metadata = ("\n".join(metadata_lines) + "\n").encode()
+    wheel_metadata_lines = list(metadata_lines)
+    if duplicate_name_metadata:
+        wheel_metadata_lines.append(f"Name: {project['name']}")
+    if omit_metadata_version:
+        wheel_metadata_lines = [
+            line for line in wheel_metadata_lines if not line.startswith("Metadata-Version:")
+        ]
+    if unsafe_license_metadata:
+        wheel_metadata_lines = [
+            "License-File: ../LICENSE" if line == "License-File: LICENSE" else line
+            for line in wheel_metadata_lines
+        ]
+    wheel_files[f"{dist_info}/METADATA"] = ("\n".join(wheel_metadata_lines) + "\n").encode()
+    entry_points = "[console_scripts]\n" + "".join(
+        f"{name} = {target}\n" for name, target in project["scripts"].items()
+    )
+    if extra_entry_point_group:
+        entry_points += "\n[pytest11]\naf = af.interfaces.cli:app\n"
+    wheel_files[f"{dist_info}/entry_points.txt"] = entry_points.encode()
     wheel_files[f"{dist_info}/WHEEL"] = (
         b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
     )
-    wheel_files[f"{dist_info}/licenses/LICENSE"] = (REPO_ROOT / "LICENSE").read_bytes()
+    for license_file in project["license-files"]:
+        wheel_files[f"{dist_info}/licenses/{license_file}"] = (
+            REPO_ROOT / license_file
+        ).read_bytes()
     if omit_wheel_path is not None:
         wheel_files.pop(omit_wheel_path)
     if extra_wheel_path is not None:
@@ -207,10 +238,26 @@ def _write_distribution_fixture(
     if not omit_record:
         record_buffer = io.StringIO()
         writer = csv.writer(record_buffer, lineterminator="\n")
-        for name, content in sorted(wheel_files.items()):
+        recorded_names: list[str] = []
+        for index, (name, content) in enumerate(sorted(wheel_files.items())):
+            if omit_record_member and index == 0:
+                continue
             digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=")
-            writer.writerow((name, f"sha256={digest.decode()}", str(len(content))))
-        writer.writerow((f"{dist_info}/RECORD", "", ""))
+            encoded_hash = (
+                "sha256=invalid"
+                if corrupt_record_hash and index == 0
+                else f"sha256={digest.decode()}"
+            )
+            encoded_size = (
+                str(len(content) + 1) if corrupt_record_size and index == 0 else str(len(content))
+            )
+            writer.writerow((name, encoded_hash, encoded_size))
+            recorded_names.append(name)
+        if duplicate_record_row:
+            writer.writerow((recorded_names[0], "sha256=invalid", "0"))
+        record_hash = "sha256=invalid" if hash_record_itself else ""
+        record_size = "1" if hash_record_itself else ""
+        writer.writerow((f"{dist_info}/RECORD", record_hash, record_size))
         wheel_files[f"{dist_info}/RECORD"] = record_buffer.getvalue().encode()
     with zipfile.ZipFile(wheel, "w") as archive:
         for name, content in wheel_files.items():
@@ -227,12 +274,15 @@ def _write_distribution_fixture(
 
     root = f"af_agent_framework-{version}"
     sdist_files: dict[str, bytes] = {
+        "AUTHORS.md": (REPO_ROOT / "AUTHORS.md").read_bytes(),
+        "PKG-INFO": metadata,
         "pyproject.toml": (REPO_ROOT / "pyproject.toml").read_bytes(),
         "README.md": (REPO_ROOT / "README.md").read_bytes(),
         "LICENSE": (REPO_ROOT / "LICENSE").read_bytes(),
         "release/production-mvp.yaml": REPOSITORY_MANIFEST.read_bytes(),
         "scripts/release_gates.py": RELEASE_GATES.read_bytes(),
         "docs/production-mvp.md": (REPO_ROOT / "docs/production-mvp.md").read_bytes(),
+        "uv.lock": (REPO_ROOT / "uv.lock").read_bytes(),
     }
     sdist_files.update(
         {
@@ -258,6 +308,11 @@ def _write_distribution_fixture(
             info.size = len(payload)
             info.mode = 0o644
             archive.addfile(info, io.BytesIO(payload))
+        if fifo_sdist_path is not None:
+            info = tarfile.TarInfo(f"{root}/{fifo_sdist_path}")
+            info.type = tarfile.FIFOTYPE
+            info.mode = 0o644
+            archive.addfile(info)
     return sdist, wheel
 
 
@@ -268,15 +323,17 @@ def test_repository_manifest_is_valid_but_honestly_blocked() -> None:
     assert validated.returncode == 0
     assert reported.returncode == 0
     report = json.loads(reported.stdout)
-    assert report["profile"] == "private-single-node-loopback-deterministic"
-    assert report["requirements_complete"] is False
+    assert report["profile"] == "private-single-node-stdio-deterministic"
+    assert report["declarations_complete"] is False
     assert "ready" not in report
     assert report["certifies_production"] is False
     assert report["blocking_gates"] >= 20
     assert "security.authentication-boundary" in report["blockers"]
     assert "data.backup-restore" in report["blockers"]
+    assert "data.sqlite-runtime-policy" in report["blockers"]
     assert "operations.health-readiness" in report["blockers"]
     assert "release.commit-bound-evidence" in report["blockers"]
+    assert len(report["manifest_sha256"]) == 64
 
 
 def test_policy_rejects_removed_mandatory_gate(tmp_path: Path) -> None:
@@ -297,10 +354,20 @@ def test_policy_rejects_removed_mandatory_gate(tmp_path: Path) -> None:
     assert "release policy does not match the canonical policy digest" in completed.stderr
 
 
-def test_policy_rejects_wider_network_or_remote_inference(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("constraint", "value"),
+    [
+        ("network_exposure", "public"),
+        ("remote_inference", True),
+        ("databases", 2),
+        ("live_processes", 2),
+    ],
+)
+def test_policy_rejects_wider_profile_constraints(
+    tmp_path: Path, constraint: str, value: object
+) -> None:
     manifest = _repository_policy_manifest()
-    manifest["profile"]["constraints"]["network_exposure"] = "public"
-    manifest["profile"]["constraints"]["remote_inference"] = True
+    manifest["profile"]["constraints"][constraint] = value
     root, manifest_path = _write_fixture(tmp_path, manifest)
 
     completed = _run(
@@ -336,7 +403,7 @@ def test_check_reports_policy_completeness_without_certifying_production(
 
     assert completed.returncode == 0
     report = json.loads(completed.stdout)
-    assert report["requirements_complete"] is True
+    assert report["declarations_complete"] is True
     assert report["certifies_production"] is False
     assert "ready" not in report
 
@@ -350,6 +417,22 @@ def test_distribution_inspection_verifies_identity_and_runtime_files(tmp_path: P
     assert summary.version == "0.1.0a0"
     assert len(summary.sdist_sha256) == 64
     assert len(summary.wheel_sha256) == 64
+
+
+def test_optional_direct_url_with_semicolon_is_normalized_without_string_splitting() -> None:
+    module = _load_module()
+    project = copy.deepcopy(
+        tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    )
+    project["optional-dependencies"] = {
+        "url-extra": ["demo @ https://example.invalid/package;parameter=1"]
+    }
+
+    identity = module._identity_from_project_table(project, "fixture")
+
+    demo = next(requirement for requirement in identity.dependencies if requirement[0] == "demo")
+    assert demo[3] == 'extra == "url-extra"'
+    assert demo[4] == "https://example.invalid/package;parameter=1"
 
 
 def test_distribution_inspection_rejects_missing_typing_marker(tmp_path: Path) -> None:
@@ -412,6 +495,18 @@ def test_distribution_inspection_rejects_duplicate_sdist_member(tmp_path: Path) 
         raise AssertionError("duplicate sdist member was accepted")
 
 
+def test_distribution_inspection_rejects_sdist_fifo(tmp_path: Path) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, fifo_sdist_path="pipe")
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "sdist contains unsupported member" in str(exc)
+    else:
+        raise AssertionError("sdist FIFO was accepted")
+
+
 def test_distribution_inspection_requires_record_hashes(tmp_path: Path) -> None:
     module = _load_module()
     sdist, wheel = _write_distribution_fixture(tmp_path, omit_record=True)
@@ -424,6 +519,30 @@ def test_distribution_inspection_requires_record_hashes(tmp_path: Path) -> None:
         raise AssertionError("wheel without RECORD was accepted")
 
 
+@pytest.mark.parametrize(
+    ("option", "message"),
+    [
+        ("corrupt_record_hash", "wheel RECORD hash or size mismatch"),
+        ("corrupt_record_size", "wheel RECORD hash or size mismatch"),
+        ("duplicate_record_row", "wheel is missing a valid RECORD"),
+        ("hash_record_itself", "wheel RECORD must not hash itself"),
+        ("omit_record_member", "wheel RECORD does not cover every archive member"),
+    ],
+)
+def test_distribution_inspection_rejects_invalid_record_contents(
+    tmp_path: Path, option: str, message: str
+) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, **{option: True})
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert message in str(exc)
+    else:
+        raise AssertionError(f"invalid RECORD was accepted: {option}")
+
+
 def test_distribution_inspection_rejects_dependency_metadata_drift(tmp_path: Path) -> None:
     module = _load_module()
     sdist, wheel = _write_distribution_fixture(tmp_path, omit_dependency_metadata=True)
@@ -431,7 +550,7 @@ def test_distribution_inspection_rejects_dependency_metadata_drift(tmp_path: Pat
     try:
         module.inspect_distribution(REPO_ROOT, sdist, wheel)
     except module.ManifestError as exc:
-        assert "wheel dependencies do not match pyproject.toml" in str(exc)
+        assert "dependencies do not match pyproject.toml" in str(exc)
     else:
         raise AssertionError("wheel dependency drift was accepted")
 
@@ -445,7 +564,7 @@ def test_distribution_inspection_rejects_optional_dependency_metadata_drift(
     try:
         module.inspect_distribution(REPO_ROOT, sdist, wheel)
     except module.ManifestError as exc:
-        assert "wheel dependencies do not match pyproject.toml" in str(exc)
+        assert "dependencies do not match pyproject.toml" in str(exc)
     else:
         raise AssertionError("wheel optional dependency drift was accepted")
 
@@ -457,9 +576,38 @@ def test_distribution_inspection_rejects_extra_metadata_drift(tmp_path: Path) ->
     try:
         module.inspect_distribution(REPO_ROOT, sdist, wheel)
     except module.ManifestError as exc:
-        assert "wheel extras do not match pyproject.toml" in str(exc)
+        assert "extras do not match pyproject.toml" in str(exc)
     else:
         raise AssertionError("wheel extra metadata drift was accepted")
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["duplicate_name_metadata", "omit_metadata_version", "unsafe_license_metadata"],
+)
+def test_distribution_inspection_rejects_invalid_core_metadata(tmp_path: Path, option: str) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, **{option: True})
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "wheel" in str(exc)
+        assert "metadata" in str(exc)
+    else:
+        raise AssertionError(f"invalid core metadata was accepted: {option}")
+
+
+def test_distribution_inspection_rejects_undeclared_entry_point_group(tmp_path: Path) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, extra_entry_point_group=True)
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "wheel entry-point groups do not match pyproject.toml" in str(exc)
+    else:
+        raise AssertionError("undeclared entry-point group was accepted")
 
 
 def test_distribution_inspection_rejects_foreign_top_level_package(tmp_path: Path) -> None:
@@ -488,13 +636,53 @@ def test_distribution_inspection_binds_sdist_source_to_checkout(tmp_path: Path) 
         raise AssertionError("tampered sdist source was accepted")
 
 
+def test_distribution_inspection_rejects_foreign_sdist_file(tmp_path: Path) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, tamper_sdist_path="foreign.txt")
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "sdist contains unexpected path: foreign.txt" in str(exc)
+    else:
+        raise AssertionError("foreign sdist file was accepted")
+
+
+def test_package_smoke_rejects_missing_entry_point_attribute(tmp_path: Path) -> None:
+    module = _load_module()
+    target = tmp_path / "installed"
+    shutil.copytree(REPO_ROOT / "src/af", target / "af")
+    dist_info = target / "af_agent_framework-0.1.0a0.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: af-agent-framework\nVersion: 0.1.0a0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "entry_points.txt").write_text(
+        "[console_scripts]\naf = af.interfaces.cli:missing\naf-mcp = af.interfaces.mcp:main\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", module.PACKAGE_SMOKE, str(target)],
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "installed wheel entry-point target failed to load: af" in completed.stderr
+
+
 def test_package_build_is_a_dry_run_without_execute() -> None:
     completed = _run("--action", "package")
 
     assert completed.returncode == 0
-    assert "uv build --no-sources --sdist" in completed.stdout
+    assert "create a clean commit-derived source snapshot with git archive" in completed.stdout
+    assert "uv build --offline --no-sources --no-build-isolation" in completed.stdout
     assert "build the wheel from that sdist" in completed.stdout
-    assert "install the wheel into an isolated temporary target" in completed.stdout
+    assert "uv pip install --offline --no-deps" in completed.stdout
     assert "Dry run only. Re-run with --execute to build and smoke the package." in completed.stdout
 
 
@@ -509,6 +697,44 @@ def test_package_execute_returns_two_when_uv_is_unavailable() -> None:
 
     assert completed.returncode == 2
     assert "uv executable is unavailable" in completed.stderr
+
+
+def test_package_execute_returns_one_when_build_fails(tmp_path: Path) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    fake_uv = root / "fake-uv"
+    fake_uv.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    fake_uv.chmod(0o755)
+    subprocess.run(["git", "init", "-q"], check=True, cwd=root)
+    subprocess.run(["git", "add", "fake-uv"], check=True, cwd=root)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=AF Test",
+            "-c",
+            "user.email=af-test@example.invalid",
+            "commit",
+            "-qm",
+            "test fixture",
+        ],
+        check=True,
+        cwd=root,
+    )
+
+    completed = _run(
+        "--action",
+        "package",
+        "--execute",
+        "--root",
+        str(root),
+        "--uv",
+        str(fake_uv),
+    )
+
+    assert completed.returncode == 1
+    assert "package sdist build failed with exit 7" in completed.stderr
+    assert "Traceback" not in completed.stderr
 
 
 def test_release_environment_drops_credentials_and_package_manager_overrides(
@@ -527,6 +753,9 @@ def test_release_environment_drops_credentials_and_package_manager_overrides(
     assert environment["PATH"] == "/usr/bin"
     assert environment["HOME"].startswith(str(tmp_path))
     assert environment["UV_CACHE_DIR"].startswith(str(tmp_path))
+    assert environment["UV_NO_CONFIG"] == "1"
+    assert environment["UV_OFFLINE"] == "1"
+    assert environment["UV_PYTHON"] == sys.executable
     assert "GITHUB_TOKEN" not in environment
     assert "AWS_SECRET_ACCESS_KEY" not in environment
     assert "UV_INDEX_URL" not in environment
@@ -578,7 +807,7 @@ def test_report_is_deterministic_and_lists_blockers(tmp_path: Path) -> None:
         "pending": 1,
         "unmet": 1,
     }
-    assert report["requirements_complete"] is False
+    assert report["declarations_complete"] is False
     assert report["certifies_production"] is False
 
 
@@ -610,10 +839,11 @@ def test_check_uses_zero_one_two_exit_contract(tmp_path: Path) -> None:
     )
 
     assert blocked.returncode == 1
-    assert "GATES INCOMPLETE" in blocked.stdout
+    assert "DECLARATIONS INCOMPLETE" in blocked.stdout
     assert "operations.health-readiness" in blocked.stdout
     assert ready.returncode == 0
-    assert "GATES COMPLETE" in ready.stdout
+    assert "DECLARATIONS COMPLETE" in ready.stdout
+    assert "certifies_production: false" in ready.stdout
     assert "READY" not in ready.stdout
 
 
@@ -716,6 +946,24 @@ def test_manifest_rejects_symlinked_file_evidence(tmp_path: Path) -> None:
 
     assert completed.returncode == 2
     assert "must not reference a symlink" in completed.stderr
+
+
+def test_manifest_rejects_symlinked_manifest(tmp_path: Path) -> None:
+    root, manifest_path = _write_fixture(tmp_path, _repository_policy_manifest())
+    linked_manifest = root / "release" / "linked-production-mvp.yaml"
+    linked_manifest.symlink_to(manifest_path)
+
+    completed = _run(
+        "--action",
+        "validate",
+        "--manifest",
+        str(linked_manifest),
+        "--root",
+        str(root),
+    )
+
+    assert completed.returncode == 2
+    assert "manifest must not reference a symlink" in completed.stderr
 
 
 def test_manifest_rejects_met_gate_without_evidence(tmp_path: Path) -> None:

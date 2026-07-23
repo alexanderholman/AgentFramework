@@ -13,26 +13,26 @@ current gaps without executing commands from the manifest:
 
 ```bash
 # [SCRIPT:release-gates] Validate the manifest itself.
-uv run --extra dev python scripts/release_gates.py --action validate
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action validate
 
 # Report current status. A valid but blocked report exits zero.
-uv run --extra dev python scripts/release_gates.py --action report
-uv run --extra dev python scripts/release_gates.py --action report --json
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report --json
 
-# Check policy completeness. This is not production authorization.
-uv run --extra dev python scripts/release_gates.py --action check
+# Check declaration completeness. This does not verify evidence or authorize production.
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action check
 
 # Preview, then execute the temporary wheel-from-sdist package smoke.
-uv run --extra dev python scripts/release_gates.py --action package
-uv run --extra dev python scripts/release_gates.py --action package --execute
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package
+uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package --execute
 ```
 
 Malformed manifest input or an internal validation failure exits `2`. The package action
 uses `1` for a failed build, inspection, installation, or smoke and `2` when it cannot access
 its inputs. The checker never executes a command supplied by YAML. It pins the canonical
 profile and gate policy by digest so gates cannot be removed, demoted, or widened silently.
-A `met` declaration means the referenced implementation or test exists; even `GATES
-COMPLETE` is not deployment approval. Final release still requires fresh commit-, artifact-,
+A `met` declaration means the manifest points to claimed evidence; even `DECLARATIONS
+COMPLETE` neither verifies that evidence nor approves deployment. Final release still requires fresh commit-, artifact-,
 configuration-, and deployment-bound evidence plus explicit maintainer authorization.
 
 ## Why this profile is narrow
@@ -55,7 +55,7 @@ The first candidate production deployment is all of the following:
 - one dedicated Linux host or virtual machine;
 - CPython 3.12;
 - one trusted operator and one dedicated, non-root operating-system account;
-- one supervised AF MCP-stdio process for each SQLite database;
+- one SQLite database and one supervised AF MCP-stdio process in total;
 - an absolute SQLite path on a local filesystem outside the release directory;
 - deterministic built-in routes only;
 - no selector adapter, model execution, remote inference, planner, or generated answer;
@@ -125,10 +125,12 @@ Before release:
 8. Keep `0.1.0a0` until roadmap issue #3 authorizes one exact candidate version; rebuilding
    that version invalidates earlier artifact evidence and must precede final approval.
 
-The package action introduced with this profile covers steps 1 through 4. It deliberately
-uses an uncredentialed temporary home, offline locked build tooling, and temporary paths. It
-leaves clean-host installation, signatures/provenance, deployment evidence, publication, and
-final version authorization blocked.
+The package action introduced with this profile covers steps 1 through 4. It builds from a
+clean commit-derived snapshot, uses an uncredentialed temporary home, disables inherited uv
+configuration, keeps uv resolution offline, and uses temporary paths. Those controls do not
+create an operating-system network sandbox for the backend or installed code; the separate
+no-egress gate remains unmet. Clean-host installation, signatures/provenance, deployment
+evidence, publication, and final version authorization also remain blocked.
 
 ### Security and privacy
 
@@ -206,8 +208,9 @@ flows before admission.
 ## Evidence contract
 
 The manifest is versioned requirements data, not self-authenticating proof. The checker can
-prove that the canonical policy is intact and that declared implementation gates are
-complete; it intentionally always reports `certifies_production: false`. A release
+prove that the canonical policy is intact, bind output to the complete manifest digest, and
+report whether its declarations are complete; it does not validate the truth or freshness of
+referenced evidence and always reports `certifies_production: false`. A release
 evidence bundle must bind every result to:
 
 - the full Git commit SHA and clean-tree assertion;
@@ -244,5 +247,5 @@ candidate proves that it passed.
    restarts candidate evidence and approval.
 
 Broader drivers and peer/model capabilities should proceed after this baseline or under
-separate profiles. They must not weaken the deterministic, loopback, evidence, or fail-closed
+separate profiles. They must not weaken the deterministic, stdio-only, evidence, or fail-closed
 properties required here.

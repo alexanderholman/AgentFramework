@@ -1795,3 +1795,68 @@ surface, and version-sequencing language while retaining the useful bounded-prof
 - Preserved: issue #3 version authority and issue #9 implementation isolation
 
 ---
+
+## [DEC-032] Encode Stdio-Only Scope and Treat Manifest State as Declarations
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon final-review response
+
+### Context
+Final independent review found three remaining ambiguities in DEC-031 and SPEC-017. The
+canonical profile said `loopback` despite prohibiting every AF listener, constrained processes
+only per database instead of constraining the whole deployment, and called self-maintained
+manifest state "requirements complete." Package review also showed that building directly
+from the mutable checkout, permissive core-metadata parsing, incomplete negative `RECORD`
+coverage, and imprecise offline language could overstate artifact evidence.
+
+Append-only history preserves DEC-031. This decision narrows and supersedes those terms; it
+does not weaken the external candidate evidence or maintainer-approval requirements.
+
+### Decision
+1. Encode the first profile as `private-single-node-stdio-deterministic`, with one database,
+   one live process, and `network_exposure: none`.
+2. Rename checker status to declaration completeness. Emit both full-manifest and canonical
+   policy digests and state in every human-readable result that production certification was
+   not performed.
+3. Add an explicit unmet SQLite runtime-policy gate so documented durability and concurrency
+   controls cannot disappear between path, migration, and backup requirements.
+4. Build release artifacts from `git archive` of the exact clean HEAD in a temporary source
+   tree, compare them with a separate reference extraction, and recheck HEAD and cleanliness
+   throughout package execution.
+5. Require strict `PKG-INFO`/`METADATA`, explicit licenses, exact entry-point groups, loadable
+   installed targets, regular archive members, source byte identity, and complete negative
+   `RECORD` validation.
+6. Run uv with locked, no-source, no-config, offline resolution after the development
+   environment is synchronized. Describe this honestly as uv-offline execution, not kernel-
+   enforced no-egress; the production no-egress gate remains separate and unmet.
+
+### Consequences
+**Positive:**
+- Machine-readable scope now agrees with the documented no-listener trust boundary.
+- A green declaration check cannot reasonably be read as verified production evidence.
+- SQLite durability policy is an explicit release blocker.
+- Package evidence is tied to a committed snapshot and rejects broader metadata/archive drift.
+
+**Negative:**
+- Existing consumers of the new, unreleased `requirements_complete` field must adopt
+  `declarations_complete`.
+- Package validation requires Git and a clean commit, and uv-offline execution requires a
+  previously synchronized locked tool environment.
+- Same-UID hostile build code still requires future OS sandbox/no-egress controls before
+  production admission.
+
+### Related Decisions
+- DEC-030 (Establish a Bounded Private Production-MVP Profile)
+- DEC-031 (Separate Policy Completeness from Production Authorization)
+
+### Related Specs
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+- SPEC-017 (Canonical Production Policy and External Admission Evidence)
+- SPEC-018 (Stdio-Only Declaration and Commit-Snapshot Package Contract)
+
+### Output References
+- Corrected: `release/production-mvp.yaml`, `docs/production-mvp.md`
+- Hardened: `scripts/release_gates.py`, `tests/unit/test_release_gates.py`
+- Clarified: `README.md`, `INSTALL.md`, `SECURITY.md`, `scripts/registry.yaml`
+
+---
