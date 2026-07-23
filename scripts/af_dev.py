@@ -120,9 +120,10 @@ def resolve_locked_uv_executable() -> str:
 
 def _is_nested_release_package_command(command: Sequence[str]) -> bool:
     """Return true when argv represents the nested release package invocation."""
-    if len(command) < len(LOCKED_RUN):
+    locked_run_tail = LOCKED_RUN[1:]
+    if not locked_run_tail or len(command) < (1 + len(locked_run_tail)):
         return False
-    if tuple(command[1 : len(LOCKED_RUN)]) != LOCKED_RUN[1:]:
+    if tuple(command[1 : 1 + len(locked_run_tail)]) != locked_run_tail:
         return False
     try:
         script_index = command.index("scripts/release_gates.py")

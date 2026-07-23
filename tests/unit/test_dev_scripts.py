@@ -321,6 +321,7 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
     release_gates = scripts_dir / "release_gates.py"
     nested_uv_log = tmp_path / "nested-uv.log"
     nested_uv_log_literal = repr(str(nested_uv_log))
+    project_venv_root_literal = repr(str((tmp_path / ".venv").resolve()))
     release_gates.write_text(
         "from __future__ import annotations\n"
         "import argparse\n"
@@ -337,7 +338,7 @@ def test_locked_release_nested_package_uses_only_inherited_uv(
         "    uv_path = Path(args.uv)\n"
         "    if not uv_path.is_absolute():\n"
         "        return 10\n"
-        "    if '.venv' in uv_path.parts:\n"
+        f"    if uv_path.is_relative_to(Path({project_venv_root_literal})):\n"
         "        return 11\n"
         f"    with Path({nested_uv_log_literal}).open('a', encoding='utf-8') as handle:\n"
         "        handle.write(str(uv_path) + '\\n')\n"
