@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime
 from typing import Literal
 
@@ -140,12 +141,17 @@ def _invoke_mcp_resource[T](callback: Callable[[], T]) -> T:
     raise AssertionError("unreachable")
 
 
-def create_mcp_server(application: AFApplication | None = None) -> FastMCP[None]:
-    resolved = application or create_application()
+def create_mcp_server(application: AFApplication) -> FastMCP[None]:
+    """Build an MCP adapter; the invoking host retains application ownership."""
+    return _assemble_mcp_server(application)
+
+
+def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     controller = resolved.tasks
     agent_routes = resolved.agent_routes
     registry = resolved.container.resolve(ProcedureRegistry)
     transport_security = _transport_security_for(resolved)
+
     server: FastMCP[None] = FastMCP(
         name="AF Agent Framework",
         instructions=(
@@ -361,12 +367,19 @@ def _canonical_transport_origins(values: tuple[str, ...]) -> list[str]:
 
 def main() -> None:
     application = create_application()
-    transport: Literal["stdio", "streamable-http"]
-    if application.settings.mcp_transport == "streamable-http":
-        transport = "streamable-http"
+    try:
+        transport: Literal["stdio", "streamable-http"]
+        if application.settings.mcp_transport == "streamable-http":
+            transport = "streamable-http"
+        else:
+            transport = "stdio"
+        create_mcp_server(application).run(transport=transport)
+    except BaseException:
+        with suppress(BaseException):
+            application.shutdown()
+        raise
     else:
-        transport = "stdio"
-    create_mcp_server(application).run(transport=transport)
+        application.shutdown()
 
 
 if __name__ == "__main__":
