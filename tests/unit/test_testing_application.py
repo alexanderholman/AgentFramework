@@ -94,7 +94,10 @@ def test_multiple_test_applications_are_isolated_and_overrides_are_local() -> No
 def test_test_adapter_and_direct_bus_have_identical_semantics() -> None:
     calls: list[tuple[str, ExecutionContext]] = []
 
-    async def handler(message: _Echo, context: ExecutionContext) -> ApplicationResult[object]:
+    async def handler(
+        message: _Echo,
+        context: ExecutionContext,
+    ) -> ApplicationResult[object]:
         calls.append((message.value, context))
         return ApplicationResult(value=message.value.upper())
 
@@ -119,7 +122,10 @@ def test_test_adapter_and_direct_bus_have_identical_semantics() -> None:
 
 
 def test_handler_registries_do_not_leak_between_test_applications() -> None:
-    async def handler(message: _Echo, _context: ExecutionContext) -> ApplicationResult[object]:
+    async def handler(
+        message: _Echo,
+        _context: ExecutionContext,
+    ) -> ApplicationResult[object]:
         return ApplicationResult(value=message.value)
 
     with_handler = TestApplicationBuilder(settings=_settings()).handler(_Echo, handler).build()
@@ -142,7 +148,10 @@ def test_handler_registries_do_not_leak_between_test_applications() -> None:
 
 
 def test_context_manager_owns_shutdown_and_duplicate_handlers_fail_early() -> None:
-    async def handler(message: _Echo, _context: ExecutionContext) -> ApplicationResult[object]:
+    async def handler(
+        message: _Echo,
+        _context: ExecutionContext,
+    ) -> ApplicationResult[object]:
         return ApplicationResult(value=message.value)
 
     builder = TestApplicationBuilder(settings=_settings()).handler(_Echo, handler)
