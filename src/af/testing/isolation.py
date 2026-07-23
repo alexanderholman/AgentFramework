@@ -7,7 +7,7 @@ import threading
 import warnings
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 from af.framework.application import ApplicationState
 from af.framework.container import Container
@@ -71,7 +71,7 @@ class ProcessStateGuard:
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         del exc_type, traceback
         snapshot = self._snapshot
         if not self._entered or snapshot is None:
@@ -127,8 +127,11 @@ def _capture_process_state() -> _ProcessSnapshot:
             tuple[tuple[object, ...], ...],
             tuple(tuple(value) for value in warnings.filters),
         ),
-        warning_default_action=warnings.defaultaction,
-        warning_once_registry=cast(dict[object, object], dict(warnings.onceregistry)),
+        warning_default_action=cast(str, getattr(warnings, "defaultaction")),
+        warning_once_registry=cast(
+            dict[object, object],
+            dict(cast(dict[object, object], getattr(warnings, "onceregistry"))),
+        ),
         threads=frozenset(threading.enumerate()),
     )
 
@@ -147,10 +150,12 @@ def _restore_process_state(snapshot: _ProcessSnapshot, surfaces: list[str]) -> N
             surfaces.append("working-directory-restore")
 
     try:
-        warnings.filters[:] = cast(Any, list(snapshot.warning_filters))
-        warnings.defaultaction = snapshot.warning_default_action
-        warnings.onceregistry.clear()
-        warnings.onceregistry.update(cast(Any, snapshot.warning_once_registry))
+        filters = cast(Any, warnings.filters)
+        filters[:] = list(snapshot.warning_filters)
+        setattr(warnings, "defaultaction", snapshot.warning_default_action)
+        once_registry = cast(dict[object, object], getattr(warnings, "onceregistry"))
+        once_registry.clear()
+        once_registry.update(snapshot.warning_once_registry)
         filters_mutated = getattr(warnings, "_filters_mutated", None)
         if callable(filters_mutated):
             filters_mutated()
