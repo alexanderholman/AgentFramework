@@ -135,9 +135,7 @@ def validate_q_expression(expression: QExpression) -> None:
         raise ValueError(f"question expression exceeds the maximum depth of {MAX_Q_DEPTH}")
     nodes = expression_node_count(expression)
     if nodes > MAX_Q_NODES:
-        raise ValueError(
-            f"question expression exceeds the maximum size of {MAX_Q_NODES} nodes"
-        )
+        raise ValueError(f"question expression exceeds the maximum size of {MAX_Q_NODES} nodes")
 
 
 def q_expression_record(expression: QExpression) -> dict[str, Any]:
