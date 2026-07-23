@@ -4,6 +4,7 @@ import pytest
 
 from af.bootstrap import create_application
 from af.config import ConfigSnapshot, MappingConfigSource, Settings, load_settings
+from af.framework.errors import InvalidBinding
 
 
 def test_application_preserves_explicit_settings_and_snapshot_identity() -> None:
@@ -31,3 +32,10 @@ def test_application_does_not_capture_invocation_context() -> None:
         application = create_application()
     assert maybe_current_context() is None
     assert "tenant-private" not in repr(application.config)
+
+
+def test_application_freezes_container_before_provider_boot() -> None:
+    application = create_application()
+
+    with pytest.raises(InvalidBinding, match="frozen"):
+        application.container.instance(Settings, Settings(port=8999), replace=True)
