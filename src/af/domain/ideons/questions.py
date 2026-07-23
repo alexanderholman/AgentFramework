@@ -1,9 +1,9 @@
 """Recursive inquiry expressions shared by every Prime Language question type.
 
-Recursion is a property of the inquiry/value structure generally.  ``WHEN`` is not
+Recursion is a property of the inquiry/value structure generally. ``WHEN`` is not
 special because it can contain a collection: WHO, WHAT, WHERE, WHEN, WHERN, WHY,
 HOW, IS, COULD, WOULD, and SHOULD may all be represented as bounded leaves or
-nested groups.  Specialist modules remain responsible for validating the meaning
+nested groups. Specialist modules remain responsible for validating the meaning
 of their leaf values.
 """
 
@@ -32,10 +32,10 @@ class QOperator(StrEnum):
     TRIGGER = "trigger"
 
 
-def _bounded_text(value: str, label: str, *, allow_empty: bool = False) -> None:
+def _bounded_text(value: str, label: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{label} must be text")
-    if not allow_empty and not value:
+    if not value:
         raise ValueError(f"{label} must not be empty")
     if len(value) > MAX_Q_TEXT:
         raise ValueError(f"{label} exceeds the {MAX_Q_TEXT}-character limit")
@@ -48,8 +48,8 @@ class QLeaf:
     """One specialist-validated value or opening for a question type.
 
     ``value_kind`` identifies the specialist value schema and ``value_ref`` points to
-    its authoritative immutable value or record.  The generic recursive contract does
-    not reinterpret that value.  For example, a WHEN leaf may refer to a timestamp,
+    its authoritative immutable value or record. The generic recursive contract does
+    not reinterpret that value. For example, a WHEN leaf may refer to a timestamp,
     event predicate, criterion, interval, ordering, or situated atomic-clock mark.
     """
 
@@ -77,9 +77,9 @@ class QLeaf:
 class QGroup:
     """A bounded recursive composition of inquiry expressions.
 
-    Child questions may differ from the group question.  This is required for
+    Child questions may differ from the group question. This is required for
     compositions such as WHERN, whose children are a WHERE expression and a WHEN
-    expression.  The group status is explicit rather than inferred generically because
+    expression. The group status is explicit rather than inferred generically because
     closure rules are specialist- and operator-dependent.
     """
 
@@ -135,7 +135,9 @@ def validate_q_expression(expression: QExpression) -> None:
         raise ValueError(f"question expression exceeds the maximum depth of {MAX_Q_DEPTH}")
     nodes = expression_node_count(expression)
     if nodes > MAX_Q_NODES:
-        raise ValueError(f"question expression exceeds the maximum size of {MAX_Q_NODES} nodes")
+        raise ValueError(
+            f"question expression exceeds the maximum size of {MAX_Q_NODES} nodes"
+        )
 
 
 def q_expression_record(expression: QExpression) -> dict[str, Any]:
