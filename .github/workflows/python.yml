@@ -57,7 +57,30 @@ jobs:
         run: uv sync --locked --extra dev
 
       - name: Verify Ruff formatting
+        id: format_check
+        continue-on-error: true
         run: uv run ruff format --check src/af tests scripts
+
+      - name: Materialize Ruff formatter output
+        if: ${{ steps.format_check.outcome == 'failure' }}
+        run: uv run ruff format src/af tests scripts
+
+      - name: Upload Ruff formatter output
+        if: ${{ steps.format_check.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ruff-formatted-sources
+          path: |
+            src/af/domain/ideons/__init__.py
+            src/af/domain/ideons/questions.py
+            src/af/domain/ideons/spacetime.py
+            tests/unit/test_ideon_recursive_questions.py
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce Ruff formatting result
+        if: ${{ steps.format_check.outcome == 'failure' }}
+        run: exit 1
 
       - name: Run Ruff lint
         run: uv run ruff check src/af tests scripts
