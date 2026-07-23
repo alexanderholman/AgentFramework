@@ -42,6 +42,55 @@ reuse storage, settings, and an optional selector. A selector may only propose a
 installed typed procedure, and the current reference application does not bundle a real
 local or remote selector provider adapter.
 
+### Container contracts and lifetimes
+
+Container declarations are explicit and become immutable when the first application scope
+is created. A binding may be unqualified or use a bounded `Qualifier`; aliases resolve to
+the target identity, contextual bindings apply only to the immediate consumer, and tags
+resolve an ordered tuple of declared service keys. `with_test_overrides()` forks declarations
+with empty runtime caches; an explicit override also takes precedence over contextual
+production bindings for that canonical service key. Declared instance values and factory
+closure state remain shared unless explicitly overridden, so mutable instances are not
+deep-cloned by a test fork.
+
+The four lifetimes have distinct cache owners:
+
+| Lifetime | Cache and ownership boundary |
+| --- | --- |
+| Singleton | Root container and all descendants |
+| Application | One application scope |
+| Invocation | One typed request, message, command, job, event, schedule, notification, or interaction scope (`InvocationKind`) |
+| Transient | New value for each resolution, owned by the requesting scope |
+
+Factories remain explicit and may be synchronous or asynchronous. Cached construction is
+single-flight for concurrent callers, failures can be retried, and dependency or alias
+cycles report their complete service-key chain. Synchronous resolution never starts an event
+loop for an asynchronous factory. `resolve_async()` executes a synchronous factory on its
+calling event-loop thread rather than silently changing the construction domain; waiting for
+an already-running synchronous single flight remains asynchronous.
+
+Scopes own factory-created closeable resources. `close()` and `aclose()` unwind child scopes
+and resources exactly once in reverse successful-construction order; asynchronous-only
+cleanup requires `aclose()`. Cleanup continues after ordinary failures and reports sanitized
+aggregate evidence. Every hierarchy has one configurable total shutdown budget (30 seconds by
+default). Work that ignores cancellation is abandoned after that budget with typed
+`ShutdownTimeout` evidence, while scope/context authority is revoked and remaining cleanup is
+attempted in reverse order. Synchronous disposers run in bounded worker threads and therefore
+must be thread-safe; event-loop- or thread-affine resources must expose `aclose()` instead.
+A synchronous factory that outlives a timed-out shutdown and later transfers a closeable
+resource records a pending cleanup handoff; a subsequent `aclose()` drains that handoff on an
+explicit event loop rather than starting hidden or untracked cleanup.
+A closing or disposed scope and all descendants reject new resolution. Invocation scopes can
+own the existing immutable `ExecutionContext`; resolution, context access, and owned-task
+creation require the exact active invocation lease, and its ambient binding is removed when
+the invocation exits. Invocation child work must use `Container.create_task()` so it is joined
+or cancelled before cleanup. A raw `asyncio.create_task()` does not inherit scoped resolution
+or context authority; detached work must cross an explicit typed boundary.
+
+Factories, providers, and disposers are trusted in-process Python code. Resolver leases,
+registry freezing, and context masking prevent accidental authority widening; they are not a
+sandbox. Hostile extensions require a separate process boundary.
+
 ## Execution lifecycle
 
 `TaskService.execute()` normalizes the prompt and passes a `WorkRequest` to

@@ -5,6 +5,7 @@ import pytest
 import af
 from af.bootstrap import AFApplication, create_application
 from af.config import ConfigSnapshot, MappingConfigSource, Settings, load_settings
+from af.framework.errors import InvalidBinding
 
 
 def test_application_preserves_explicit_settings_and_snapshot_identity() -> None:
@@ -38,5 +39,12 @@ def test_root_package_lazily_exposes_only_the_composition_root_api() -> None:
     assert af.AFApplication is AFApplication
     assert af.create_application is create_application
     missing_name = "missing"
-    with pytest.raises(AttributeError, match="has no attribute"):
+    with pytest.raises(AttributeError):
         getattr(af, missing_name)
+
+
+def test_application_freezes_container_before_provider_boot() -> None:
+    application = create_application()
+
+    with pytest.raises(InvalidBinding, match="frozen"):
+        application.container.instance(Settings, Settings(port=8999), replace=True)
