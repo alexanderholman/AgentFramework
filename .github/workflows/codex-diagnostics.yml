@@ -1,6 +1,7 @@
 name: Codex diagnostics
 
 on:
+  pull_request:
   push:
     branches:
       - codex/testing-application-host
