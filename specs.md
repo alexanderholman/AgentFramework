@@ -1164,3 +1164,58 @@ Four remaining integration blockers identified in review of SPEC-019 are resolve
 - SPEC-016, SPEC-017, SPEC-018, SPEC-019
 
 ---
+
+---
+
+## [SPEC-021] Ideon Correction: Role-Driven WHERE and WHERN Contested-State Governance Alignment
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Fifth correction pass on the deterministic Prime Language reference slice.  Two
+remaining blockers identified in review of SPEC-020 are resolved.
+
+### Requirements
+- MUST drive WHERE from declared unfilled spatial roles (``location`` in
+  ``SenseEntry.semantic_roles``).  A bare location noun (``question_slot=WHERE``,
+  ``semantic_type=entity/place``) without a corresponding predicate/relation declaring
+  a ``location`` role must NOT make WHERE open or contested.  WHERE activates only when:
+    a. ``context.where`` is provided (explicit direct WHERE) — SATISFIED regardless of
+       whether any candidate carries a spatial role; or
+    b. a viable candidate declares ``"location"`` in ``semantic_roles``:
+         - exactly one viable location-typed dictionary candidate → SATISFIED
+         - multiple viable location-typed candidates → CONTESTED (material)
+         - no viable location-typed candidate and no ``context.where`` → OPEN (material)
+  WHERE is NOT_APPLICABLE when neither of the above conditions holds.
+- MUST declare ``on.spatial`` (and equivalent spatial relations) with
+  ``semantic_roles=("location",)`` in every dictionary, fixture, seed, and reference
+  table so the role-driven contract is enforced consistently.
+- MUST compute WHERN constituent status from the WHERE result directly (no separate
+  ``context.where`` check in the WHERN block); ``context.where`` is already incorporated
+  into the WHERE result.  WHERN transitions:
+    - WHERE=SATISFIED + WHEN=SATISFIED → WHERN=SATISFIED
+    - WHERE=CONTESTED + WHEN=SATISFIED → WHERN=CONTESTED (material)
+    - WHERE=any present (SATISFIED/CONTESTED/OPEN) + WHEN absent → WHERN=OPEN (non-material)
+    - WHEN=SATISFIED + WHERE not fully satisfied → WHERN=OPEN (non-material)
+    - WHERE=NOT_APPLICABLE + WHEN=NOT_APPLICABLE → WHERN=NOT_APPLICABLE
+- MUST supersede the SPEC-019/DEC-033 claim that ``CONTESTED WHERE + SATISFIED WHEN``
+  yields WHERN=OPEN; the correct and implemented outcome is WHERN=CONTESTED.  Append
+  DEC-035 to document the correction without editing prior governed history.
+
+### Tests
+- **TEST-021-1**: Bare location lexeme (entity, question_slot=WHERE) without a spatial
+  predicate → WHERE NOT_APPLICABLE; context.where alone → WHERE SATISFIED (role=location)
+- **TEST-021-2**: Spatial predicate with ``location`` role + multiple candidates → WHERE
+  CONTESTED; resolved candidates → WHERE SATISFIED (role=location-sense)
+- **TEST-021-3**: Spatial predicate with ``location`` role + no dictionary filler + no
+  context.where → WHERE OPEN (material, evidence contains "missing:location")
+- **TEST-021-4**: context.where and dictionary candidates produce equivalent WHERN
+  SATISFIED outcomes when WHEN is also satisfied
+- **TEST-021-5** (governance): SPEC-019/DEC-033 WHERN contested-state rule corrected by
+  DEC-035; code and tests confirm CONTESTED WHERE + SATISFIED WHEN → WHERN=CONTESTED
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020
+
+---

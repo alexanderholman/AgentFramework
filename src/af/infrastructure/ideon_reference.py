@@ -39,7 +39,7 @@ class _SeedSense:
 
 _SEED_SENSES = (
     _SeedSense("sit.past", 3, ("sat",), "action", Question.WHAT, (), ("agent",)),
-    _SeedSense("on.spatial", 5, ("on",), "relation", Question.WHERE),
+    _SeedSense("on.spatial", 5, ("on",), "relation", Question.WHERE, (), ("location",)),
     _SeedSense("the.definite", 7, ("the",), "property", Question.WHAT),
     _SeedSense(
         "bank.river-edge",

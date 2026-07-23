@@ -2015,3 +2015,106 @@ This entry and SPEC-020 are the authoritative current statements.
 - Modified: `tests/unit/test_ideon_service.py` (new contested-tense regression tests)
 
 ---
+
+---
+
+## [DEC-035] Ideon Correction: Role-Driven WHERE and WHERN State Machine Governance Correction
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-020 (DEC-034) identified two remaining blockers:
+
+1. **WHERE was not role-driven.**  `InquiryEngine` derived WHERE from any viable lexeme
+   whose `question_slot` was WHERE, irrespective of whether any predicate or relation
+   declared an unfilled spatial role.  This caused an explicit `context.where` to satisfy
+   the spatial constituent of WHERN while `Question.WHERE` itself remained NOT_APPLICABLE,
+   and allowed a bare location noun to make WHERE contested even when no predicate declared
+   a spatial dependency.
+
+2. **Append-only governance contradicted the implemented WHERN state machine.**  SPEC-019
+   (TEST-019-1) and DEC-033 stated that ``CONTESTED WHERE + SATISFIED WHEN`` yields
+   ``WHERN=OPEN (non-material)``.  The implementation (as reviewed and accepted through
+   DEC-033 and DEC-034) correctly yields ``WHERN=CONTESTED (material)`` so that contested
+   spatial disambiguation blocks WHERN closure.  The governed record was wrong; the code
+   was right.
+
+### Decision
+
+**1 — Role-driven WHERE**
+
+Introduce `_WHERE_TYPED_ROLES = frozenset({"location"})` in `InquiryEngine`.  WHERE
+activates only when:
+
+  a. `context.where` is provided → SATISFIED (explicit direct WHERE; role="location").
+  b. A viable candidate has `"location"` in `semantic_roles`:
+     - Exactly one viable location-typed dictionary candidate → SATISFIED
+       (role="location-sense").
+     - Multiple viable location-typed candidates → CONTESTED (material,
+       role="location-sense").
+     - No viable location-typed candidate, no `context.where` → OPEN (material,
+       role="location", evidence="missing:location").
+
+`on.spatial` (and all equivalent spatial relations) is updated to carry
+`semantic_roles=("location",)` in every dictionary, fixture, seed, and reference table.
+
+A bare location noun without a spatial predicate leaves WHERE NOT_APPLICABLE.
+
+**2 — WHERN constituent computation**
+
+The WHERN block now uses the WHERE result status directly.  `context.where` is already
+incorporated into the WHERE result; no separate check is needed.  The full transition
+table, correcting SPEC-019/DEC-033:
+
+  - WHERE=SATISFIED + WHEN=SATISFIED    → WHERN=SATISFIED
+  - WHERE=CONTESTED + WHEN=SATISFIED    → WHERN=CONTESTED (material) ← correction
+  - WHERE=SATISFIED/CONTESTED/OPEN + WHEN absent → WHERN=OPEN (non-material, missing:when)
+  - WHEN=SATISFIED + WHERE not fully satisfied   → WHERN=OPEN (non-material, missing:where)
+  - WHERE=NOT_APPLICABLE + WHEN=NOT_APPLICABLE   → WHERN=NOT_APPLICABLE
+
+**3 — Governance supersession**
+
+The SPEC-019 (TEST-019-1) claim "CONTESTED WHERE + satisfied WHEN → WHERN OPEN
+(non-material)" and the DEC-033 description of the same rule are superseded by this
+entry.  Prior governed wording is preserved in the append-only history; this DEC-035
+and SPEC-021 are the authoritative current statements.
+
+### Alternatives Considered
+- **Keep WHERE lexeme-driven and add a separate spatial-role check for WHERN**: rejected
+  because this creates inconsistent WHERE/WHERN states (WHERE NOT_APPLICABLE while WHERN
+  uses the same candidate set for its spatial component).
+- **Make context.where require a declared spatial role**: rejected because `context.where`
+  represents an explicit, authoritative spatial declaration from the caller; it must not
+  require a corroborating predicate role.
+
+### Consequences
+- WHERE is now semantically consistent with WHO: both are driven by declared unfilled
+  typed roles, not by the presence of lexemes that happen to carry a particular
+  `question_slot`.
+- The WHERN state machine is self-consistent: the governed record, code, and tests all
+  agree that contested WHERE propagates as WHERN=CONTESTED.
+- Three new behavioural tests added (TEST-021-1 through TEST-021-4).
+- `on.spatial` carries `semantic_roles=("location",)` in all three data sources
+  (test fixture, service fixture, reference seed).
+
+### Supersedes
+- SPEC-019 TEST-019-1 (WHERN state for CONTESTED WHERE + SATISFIED WHEN)
+- DEC-033 item 1 WHERN constituent-state propagation rule (partial)
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033, DEC-034
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021
+
+### Output References
+- Modified: `src/af/domain/ideons/inquiry.py` (role-driven WHERE, simplified WHERN)
+- Modified: `src/af/infrastructure/ideon_reference.py` (`on.spatial` gets location role)
+- Modified: `tests/unit/test_ideon_language.py` (`on.spatial` location role, 3 new tests)
+- Modified: `tests/unit/test_ideon_service.py` (`on.spatial` location role)
+- Modified: `specs.md` (appended SPEC-021)
+- Modified: `decisions.md` (appended DEC-035)
+- Modified: `agent_runs.md` (appended Run #021)
+
+---

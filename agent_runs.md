@@ -1065,3 +1065,63 @@ comment #5053551914:
 - PR review comment: #5053551914
 
 ---
+
+---
+
+## Run #021 — Role-Driven WHERE and WHERN Governance Alignment
+**Date**: 2026-07-23
+**Trigger**: PR review comment #5053882042
+
+### Problem
+Two merge blockers in the PR's deterministic reference slice:
+
+1. WHERE was still lexeme-driven, not role-driven.  `context.where` could satisfy the
+   spatial constituent of WHERN while `Question.WHERE` itself stayed NOT_APPLICABLE.
+   A bare location noun made WHERE contested without any predicate declaring a spatial
+   dependency.
+2. SPEC-019/DEC-033 stated that CONTESTED WHERE + SATISFIED WHEN yields WHERN=OPEN
+   (non-material).  The implementation correctly yields WHERN=CONTESTED (material).
+   The governed record and the code disagreed.
+
+### Actions Taken
+- `src/af/domain/ideons/inquiry.py`:
+  - Added `_WHERE_TYPED_ROLES = frozenset({"location"})` module-level constant.
+  - Replaced the old lexeme-driven WHERE block with a role-driven implementation:
+    `context.where` → SATISFIED; `location` role + candidates → CONTESTED/SATISFIED;
+    `location` role + no filler → OPEN (material); no role + no context.where →
+    NOT_APPLICABLE.
+  - Replaced the WHERN block: removed the separate `context.where` check; uses WHERE
+    result status directly; added `where_open` handling so WHERE=OPEN + WHEN=SATISFIED
+    yields WHERN=OPEN (missing:where) rather than accidentally NOT_APPLICABLE.
+  - Updated module docstring for WHERE.
+- `src/af/infrastructure/ideon_reference.py`:
+  - Added `semantic_roles=("location",)` to the `on.spatial` seed sense.
+- `tests/unit/test_ideon_language.py`:
+  - Added `semantic_roles=("location",)` to `on.spatial` in `reference_dictionary()`.
+  - Added `test_where_is_role_driven_not_lexeme_driven`.
+  - Added `test_where_open_when_spatial_role_declared_but_no_filler`.
+  - Added `test_context_where_and_dict_candidates_resolve_same_spatial_role`.
+- `tests/unit/test_ideon_service.py`:
+  - Added `semantic_roles=("location",)` to `on.spatial` in `reference_service()`.
+- `specs.md`: Appended SPEC-021.
+- `decisions.md`: Appended DEC-035 (supersedes SPEC-019 TEST-019-1 and DEC-033 WHERN rule).
+- `agent_runs.md`: Appended Run #021.
+
+### Verified Results
+- `ruff check src tests`: passed
+- `ruff format --check src tests`: passed
+- `strict mypy src` (51 source files): no issues
+- `pytest tests/ --ignore=tests/unit/test_governance_scripts.py`: 591 passed
+- All 3 new tests pass (TEST-021-1 through TEST-021-4)
+- Pre-existing `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone); GitHub CI is authoritative.
+
+### Issues Encountered
+- None beyond the pre-existing shallow-clone governance test failure.
+
+### Related References
+- Spec: SPEC-021
+- Decision: DEC-035
+- PR review comment: #5053882042
+
+---

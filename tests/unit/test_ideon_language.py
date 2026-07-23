@@ -63,7 +63,7 @@ def reference_dictionary() -> LogicDictionary:
     return LogicDictionary(
         (
             entry("sit.past", 2, "sat", "action", Question.WHAT, semantic_roles=("agent",)),
-            entry("on.spatial", 3, "on", "relation", Question.WHERE),
+            entry("on.spatial", 3, "on", "relation", Question.WHERE, semantic_roles=("location",)),
             entry("the.definite", 5, "the", "property", Question.WHAT),
             entry(
                 "bank.river-edge",
@@ -812,3 +812,127 @@ def test_ordering_when_condition_domain_validation() -> None:
     # None expression — fail closed
     with pytest.raises(ValueError, match="non-empty expression"):
         WhenCondition(WhenKind.ORDERING)
+
+
+def test_where_is_role_driven_not_lexeme_driven() -> None:
+    """WHERE must be driven by declared spatial roles, not by bare location lexemes.
+
+    A bare location noun (question_slot=WHERE, semantic_type entity/place) without a
+    corresponding predicate/relation carrying a ``location`` semantic role does NOT
+    manufacture a WHERE opening — WHERE stays NOT_APPLICABLE.
+
+    context.where satisfies WHERE directly (explicit direct WHERE), even when no spatial
+    role is declared on any candidate.
+
+    A predicate/relation with ``semantic_roles=("location",)`` activates WHERE: contested
+    when multiple location candidates are ambiguous, satisfied when exactly one resolves.
+    """
+    forms_just_bank = LosslessFormEncoder().encode("the bank", PROFILE)
+    forms_with_on = LosslessFormEncoder().encode("sat on the bank", PROFILE)
+    dictionary = reference_dictionary()
+
+    # Bare location lexeme without a spatial predicate → WHERE NOT_APPLICABLE
+    inquiry_bare = InquiryEngine().query(
+        forms_just_bank,
+        dictionary.candidates(forms_just_bank, ContextGraph()),
+        ContextGraph(),
+    )
+    assert inquiry_bare.get(Question.WHERE).status is InquiryStatus.NOT_APPLICABLE
+    assert inquiry_bare.get(Question.WHERE).material is False
+
+    # context.where satisfies WHERE directly (no spatial role required)
+    ctx_where = ContextGraph.from_dict({"where": "london"})
+    inquiry_ctx = InquiryEngine().query(
+        forms_just_bank,
+        dictionary.candidates(forms_just_bank, ctx_where),
+        ctx_where,
+    )
+    assert inquiry_ctx.get(Question.WHERE).status is InquiryStatus.SATISFIED
+    assert inquiry_ctx.get(Question.WHERE).role == "location"
+    assert "context:where=london" in inquiry_ctx.get(Question.WHERE).evidence
+
+    # Spatial predicate (on.spatial with location role) + contested candidates → CONTESTED
+    inquiry_contested = InquiryEngine().query(
+        forms_with_on,
+        dictionary.candidates(forms_with_on, ContextGraph()),
+        ContextGraph(),
+    )
+    assert inquiry_contested.get(Question.WHERE).status is InquiryStatus.CONTESTED
+    assert inquiry_contested.get(Question.WHERE).material is True
+
+    # Spatial predicate + unambiguous candidates (domain=river) → SATISFIED
+    ctx_river = ContextGraph.from_dict({"domain": "river"})
+    inquiry_satisfied = InquiryEngine().query(
+        forms_with_on,
+        dictionary.candidates(forms_with_on, ctx_river),
+        ctx_river,
+    )
+    assert inquiry_satisfied.get(Question.WHERE).status is InquiryStatus.SATISFIED
+    assert inquiry_satisfied.get(Question.WHERE).role == "location-sense"
+
+
+def test_where_open_when_spatial_role_declared_but_no_filler() -> None:
+    """WHERE is OPEN (material) when a spatial role is declared but no location candidate
+    is available in the dictionary and no context.where is provided.
+
+    This covers the case where a predicate declares a spatial dependency but the
+    corresponding noun is absent from the utterance and from context."""
+    spatial_predicate_no_filler = SenseEntry(
+        entry_id="move.to-location",
+        ideon_key=23,
+        ideon_revision=REVISION,
+        profile_id=PROFILE.identifier,
+        forms=("moves",),
+        lexeme="move",
+        sense="move.to-location",
+        semantic_type="action",
+        question_slot=Question.WHAT,
+        semantic_roles=("agent", "location"),
+    )
+    no_filler_dict = LogicDictionary((spatial_predicate_no_filler,))
+    forms = LosslessFormEncoder().encode("moves", PROFILE)
+
+    inquiry = InquiryEngine().query(
+        forms, no_filler_dict.candidates(forms, ContextGraph()), ContextGraph()
+    )
+    assert inquiry.get(Question.WHERE).status is InquiryStatus.OPEN
+    assert inquiry.get(Question.WHERE).material is True
+    assert "missing:location" in inquiry.get(Question.WHERE).evidence
+
+    # Providing context.where satisfies WHERE even without location candidates
+    ctx_with_where = ContextGraph.from_dict({"where": "warehouse-3"})
+    inquiry_resolved = InquiryEngine().query(
+        forms, no_filler_dict.candidates(forms, ctx_with_where), ctx_with_where
+    )
+    assert inquiry_resolved.get(Question.WHERE).status is InquiryStatus.SATISFIED
+
+
+def test_context_where_and_dict_candidates_resolve_same_spatial_role() -> None:
+    """context.where and dictionary location candidates resolve the same declared spatial
+    role and both produce WHERN SATISFIED when WHEN is also satisfied.
+
+    Proves the two WHERE resolution paths are equivalent for WHERN composition."""
+    forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
+    dictionary = reference_dictionary()
+
+    # Path 1: context.where + context.time → WHERN SATISFIED via context.where
+    ctx_via_context = ContextGraph.from_dict(
+        {"time": "2026-01-01T00:00:00Z", "where": "river-bank"}
+    )
+    inquiry_ctx = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_via_context), ctx_via_context
+    )
+    assert inquiry_ctx.get(Question.WHERE).status is InquiryStatus.SATISFIED
+    assert inquiry_ctx.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inquiry_ctx.get(Question.WHERN).status is InquiryStatus.SATISFIED
+
+    # Path 2: dictionary candidate (domain=river resolves bank) + context.time → WHERN SATISFIED
+    ctx_via_dict = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-01-01T00:00:00Z"}
+    )
+    inquiry_dict = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_via_dict), ctx_via_dict
+    )
+    assert inquiry_dict.get(Question.WHERE).status is InquiryStatus.SATISFIED
+    assert inquiry_dict.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inquiry_dict.get(Question.WHERN).status is InquiryStatus.SATISFIED

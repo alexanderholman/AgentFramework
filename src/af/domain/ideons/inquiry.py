@@ -11,8 +11,15 @@ evidence-driven deterministic behaviour:
           resolved, not only the first one found.
 - WHAT  — satisfied when every word-form has at least one viable dictionary candidate;
           open (material) when any word-form has no viable candidate.
-- WHERE — satisfied when exactly one location candidate is viable; contested (material)
-          when multiple candidates remain; not-applicable when none are present.
+- WHERE — driven by declared spatial roles (``location`` in ``SenseEntry.semantic_roles``).
+          Satisfied when ``context.where`` is present (explicit direct WHERE), or when a
+          viable candidate carries a ``location`` role and exactly one location-typed
+          dictionary candidate is found.  Contested (material) when multiple location
+          candidates match a declared spatial role.  Open (material) when a spatial role
+          is declared but no location candidate or ``context.where`` is available.
+          Not-applicable when no candidate declares a spatial role and ``context.where``
+          is absent.  A bare location lexeme without a corresponding predicate/relation
+          declaring a spatial role does not manufacture a WHERE opening.
 - WHEN  — satisfied when a valid temporal or conditional anchor is declared:
           context.time must be a parseable, timezone-aware ISO 8601 timestamp;
           context.when must follow the bounded ``kind:expression`` format where kind is
@@ -60,6 +67,11 @@ from af.domain.ideons.temporal import parse_when_expression
 _WHO_TYPED_ROLES: frozenset[str] = frozenset(
     {"agent", "subject", "experiencer", "source", "possessor", "affected"}
 )
+
+# Spatial roles that activate the WHERE inquiry when declared on a viable candidate.
+# WHERE is driven by these declared roles — a bare location lexeme without a matching
+# predicate/relation carrying a spatial role does not open WHERE.
+_WHERE_TYPED_ROLES: frozenset[str] = frozenset({"location"})
 
 # Maps semantic role names (from SenseEntry.semantic_roles) to the context field
 # that satisfies them.  Only roles present in this map participate in WHO resolution.
@@ -182,7 +194,23 @@ class InquiryEngine:
             evidence=tuple(f"unknown-form:{item.surface}" for item in unknown),
         )
 
-        # WHERE
+        # WHERE: role-driven spatial inquiry.
+        # WHERE activates only when a viable candidate declares a spatial role in
+        # _WHERE_TYPED_ROLES ("location"), or when context.where is supplied directly.
+        #   - context.where present                            → SATISFIED (explicit direct WHERE)
+        #   - spatial role declared + exactly one candidate     → SATISFIED
+        #   - spatial role declared + multiple candidates       → CONTESTED (material)
+        #   - spatial role declared + no candidate              → OPEN (material)
+        #   - no spatial role + no context.where               → NOT_APPLICABLE
+        # A bare location lexeme (question_slot=WHERE, semantic_type entity/place) without
+        # a predicate/relation carrying a spatial role does NOT manufacture a WHERE opening.
+        required_spatial_role = any(
+            role in _WHERE_TYPED_ROLES
+            for candidate_set in word_candidate_sets
+            for candidate in candidate_set.viable
+            for role in candidate.entry.semantic_roles
+        )
+        where_context = context.get("where")
         location_candidates = tuple(
             candidate
             for candidate_set in word_candidate_sets
@@ -191,26 +219,47 @@ class InquiryEngine:
             and candidate.entry.semantic_type in {"entity", "place"}
         )
         location_keys = tuple(candidate.entry.ideon_key for candidate in location_candidates)
-        if len(location_candidates) > 1:
-            results[Question.WHERE] = InquiryResult(
-                Question.WHERE,
-                InquiryStatus.CONTESTED,
-                role="location-sense",
-                candidate_keys=location_keys,
-                required_information="the contextual set that distinguishes location senses",
-                material=True,
-                evidence=tuple(
-                    f"candidate:{candidate.entry.entry_id}" for candidate in location_candidates
-                ),
-            )
-        elif location_candidates:
+
+        if where_context is not None:
+            # Explicit context.where satisfies WHERE directly; no role check required.
             results[Question.WHERE] = InquiryResult(
                 Question.WHERE,
                 InquiryStatus.SATISFIED,
-                role="location-sense",
-                candidate_keys=location_keys,
-                evidence=(f"selected:{location_candidates[0].entry.entry_id}",),
+                role="location",
+                evidence=(f"context:where={where_context}",),
             )
+        elif required_spatial_role:
+            if len(location_candidates) > 1:
+                results[Question.WHERE] = InquiryResult(
+                    Question.WHERE,
+                    InquiryStatus.CONTESTED,
+                    role="location-sense",
+                    candidate_keys=location_keys,
+                    required_information="the contextual set that distinguishes location senses",
+                    material=True,
+                    evidence=tuple(
+                        f"candidate:{candidate.entry.entry_id}" for candidate in location_candidates
+                    ),
+                )
+            elif location_candidates:
+                results[Question.WHERE] = InquiryResult(
+                    Question.WHERE,
+                    InquiryStatus.SATISFIED,
+                    role="location-sense",
+                    candidate_keys=location_keys,
+                    evidence=(f"selected:{location_candidates[0].entry.entry_id}",),
+                )
+            else:
+                # Spatial role declared but no viable location filler in dictionary.
+                results[Question.WHERE] = InquiryResult(
+                    Question.WHERE,
+                    InquiryStatus.OPEN,
+                    role="location",
+                    required_information="the spatial or domain location",
+                    material=True,
+                    evidence=("missing:location",),
+                )
+        # else: WHERE NOT_APPLICABLE (no spatial role, no context.where) — default
 
         # WHEN: condition-bearing temporal relation (timestamp, interval, event, criterion,
         # ordering).
@@ -239,32 +288,27 @@ class InquiryEngine:
             )
 
         # WHERN: composite WHERE (spatial/domain) + WHEN (temporal/conditional).
-        # Satisfied only when WHERE is fully satisfied and WHEN is satisfied.
-        # WHERE CONTESTED + WHEN SATISFIED → WHERN CONTESTED (contested status propagates).
-        # WHERE present but WHEN missing → WHERN OPEN (non-material).
-        # WHERE absent + WHEN SATISFIED → WHERN OPEN (non-material).
-        # Neither present → WHERN NOT_APPLICABLE (default).
-        where_context = context.get("where")
+        # Use WHERE result status directly — context.where is already incorporated into the
+        # WHERE result, so no separate context.where check is needed here.
+        #   SATISFIED  only when WHERE is SATISFIED and WHEN is satisfied.
+        #   CONTESTED  when WHERE is CONTESTED and WHEN is satisfied.
+        #   OPEN       when WHERE is any non-NOT_APPLICABLE status but WHEN is missing,
+        #              OR when WHEN is satisfied but WHERE is not fully resolved.
+        #   NOT_APPLICABLE when neither WHERE nor WHEN is present (default).
         where_result_status = results[Question.WHERE].status
-        where_satisfied_from_candidates = where_result_status is InquiryStatus.SATISFIED
-        where_contested_from_candidates = where_result_status is InquiryStatus.CONTESTED
-        where_context_present = where_context is not None
-        where_fully_satisfied = where_satisfied_from_candidates or where_context_present
-        where_present = where_fully_satisfied or where_contested_from_candidates
+        where_satisfied = where_result_status is InquiryStatus.SATISFIED
+        where_contested = where_result_status is InquiryStatus.CONTESTED
+        where_open = where_result_status is InquiryStatus.OPEN
+        where_present = where_satisfied or where_contested or where_open
 
-        if where_fully_satisfied and when_satisfied:
-            w_ev = (
-                (f"context:where={where_context}",)
-                if where_context_present
-                else ("where:from-candidates",)
-            )
+        if where_satisfied and when_satisfied:
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
                 InquiryStatus.SATISFIED,
                 role="spatiotemporal-condition",
-                evidence=w_ev + t_ev,
+                evidence=results[Question.WHERE].evidence + t_ev,
             )
-        elif where_contested_from_candidates and when_satisfied:
+        elif where_contested and when_satisfied:
             # WHERE is contested; WHERN inherits the contested status.
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
@@ -275,8 +319,8 @@ class InquiryEngine:
                 evidence=("where:contested", *t_ev),
             )
         elif where_present and not when_satisfied:
-            # WHERE is present (fully or contested) but WHEN is missing.
-            where_ev = ("where:contested",) if where_contested_from_candidates else ()
+            # WHERE is present (satisfied/contested/open) but WHEN is missing.
+            where_ev: tuple[str, ...] = ("where:contested",) if where_contested else ()
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
                 InquiryStatus.OPEN,
@@ -285,7 +329,8 @@ class InquiryEngine:
                 material=False,
                 evidence=(*where_ev, "missing:when"),
             )
-        elif when_satisfied and not where_present:
+        elif when_satisfied and not where_satisfied:
+            # WHEN is satisfied but WHERE is not fully resolved (absent or open/missing filler).
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
                 InquiryStatus.OPEN,

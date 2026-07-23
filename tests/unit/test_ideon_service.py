@@ -34,7 +34,7 @@ def reference_service() -> tuple[IdeonService, InMemoryIdeonRegistry]:
     # Each element: (entry_id, key, forms, semantic_type, question, valid_contexts, semantic_roles)
     declarations = (
         ("sit.past", 3, ("sat",), "action", Question.WHAT, (), ("agent",)),
-        ("on.spatial", 5, ("on",), "relation", Question.WHERE, (), ()),
+        ("on.spatial", 5, ("on",), "relation", Question.WHERE, (), ("location",)),
         ("the.definite", 7, ("the",), "property", Question.WHAT, (), ()),
         (
             "bank.river-edge",
