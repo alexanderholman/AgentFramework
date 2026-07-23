@@ -133,7 +133,7 @@ class CompositeDriver(Generic[DriverT]):
         )
 
     def _candidate_indices(self) -> tuple[int, ...]:
-        if self._mode is CompositeMode.FAILOVER:
+        if self._mode in {CompositeMode.FALLBACK, CompositeMode.FAILOVER}:
             return tuple(range(len(self._connections)))
         return tuple(
             (self._cursor + offset) % len(self._connections)
