@@ -85,15 +85,18 @@ _ORDERING_OPERATORS: frozenset[str] = frozenset({"before", "after", "during"})
 def _validate_ordering_expression(expression: str) -> None:
     """Validate an ORDERING expression of the form ``operator:anchor``.
 
-    Raises ``ValueError`` if the expression does not contain a ``:``, the operator
-    is not one of ``before``, ``after``, or ``during``, or the anchor is absent or
-    consists only of whitespace.  This is the authoritative domain invariant enforced
-    by both ``WhenCondition.__post_init__`` and ``parse_when_expression``.
+    Raises ``ValueError`` if the expression does not contain a ``:``, has an empty
+    operator (colon at the start), the operator is not one of ``before``, ``after``, or
+    ``during``, or the anchor is absent or consists only of whitespace.  This is the
+    authoritative domain invariant enforced by both ``WhenCondition.__post_init__`` and
+    ``parse_when_expression``.
     """
     sep = expression.find(":")
-    if sep < 1:
+    if sep <= 0:
+        # sep == -1: no ':' found; sep == 0: empty operator (starts with ':')
         raise ValueError(
-            "ORDERING expression must be 'operator:anchor'; no ':' separator found"
+            "ORDERING expression must be 'operator:anchor'; "
+            "separator ':' missing or operator is empty"
         )
     operator = expression[:sep]
     anchor = expression[sep + 1 :]
@@ -285,7 +288,8 @@ def parse_when_expression(value: str) -> WhenCondition | None:
         # is non-empty, non-whitespace.  _validate_ordering_expression enforces the same
         # invariant at the domain level; the parser validates first (fail-closed layer 1).
         op_sep = payload.find(":")
-        if op_sep < 1:
+        if op_sep <= 0:
+            # op_sep == -1: no separator; op_sep == 0: empty operator (starts with ':')
             return None
         operator = payload[:op_sep]
         anchor = payload[op_sep + 1 :]

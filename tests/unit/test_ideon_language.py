@@ -849,15 +849,17 @@ def test_ordering_expression_validated_for_operator_and_anchor() -> None:
     assert parse_when_expression("ordering:after:   ") is None
 
     # No separator in payload — no ':' to split operator from anchor
-    with pytest.raises(ValueError, match="no ':' separator"):
+    with pytest.raises(ValueError, match=r"separator.*missing or operator is empty"):
         WhenCondition(WhenKind.ORDERING, expression="before")
     assert parse_when_expression("ordering:before") is None
 
+    # Empty operator (colon at start of expression)
+    with pytest.raises(ValueError, match=r"separator.*missing or operator is empty"):
+        WhenCondition(WhenKind.ORDERING, expression=":anchor")
+    assert parse_when_expression("ordering::anchor") is None
+
     # Parser: opaque non-ordering payload without structured form
     assert parse_when_expression("ordering:banana") is None
-
-    # Parser: empty operator (starts with ':')
-    assert parse_when_expression("ordering::anchor") is None
 
 
 def test_where_is_role_driven_not_lexeme_driven() -> None:
