@@ -265,7 +265,8 @@ def parse_when_expression(value: str) -> WhenCondition | None:
         interval_end = parsed
     if interval_start is None and interval_end is None:
         return None  # both open — not a valid bounded interval
-    # Domain invariant: start must not exceed end (enforced by WhenCondition too)
+    # Fail-closed at parse time: start must not exceed end.  WhenCondition.__post_init__
+    # enforces the same invariant unconditionally as the authoritative second layer.
     if interval_start is not None and interval_end is not None and interval_start > interval_end:
         return None
     return WhenCondition(
