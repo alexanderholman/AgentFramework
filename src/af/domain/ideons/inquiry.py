@@ -320,7 +320,16 @@ class InquiryEngine:
             )
         elif where_present and not when_satisfied:
             # WHERE is present (satisfied/contested/open) but WHEN is missing.
-            where_ev: tuple[str, ...] = ("where:contested",) if where_contested else ()
+            # When WHERE is OPEN, propagate its constituent evidence (e.g. "missing:location")
+            # so that the WHERN record preserves the specific unfilled role rather than
+            # collapsing to a generic signal.
+            where_ev: tuple[str, ...]
+            if where_contested:
+                where_ev = ("where:contested",)
+            elif where_open:
+                where_ev = results[Question.WHERE].evidence
+            else:
+                where_ev = ()
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
                 InquiryStatus.OPEN,
@@ -331,13 +340,18 @@ class InquiryEngine:
             )
         elif when_satisfied and not where_satisfied:
             # WHEN is satisfied but WHERE is not fully resolved (absent or open/missing filler).
+            # When WHERE is OPEN (unfilled required role), propagate its constituent evidence
+            # (e.g. "missing:location") rather than emitting a generic "missing:where" signal.
+            where_ev_2: tuple[str, ...] = (
+                results[Question.WHERE].evidence if where_open else ("missing:where",)
+            )
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
                 InquiryStatus.OPEN,
                 role="spatiotemporal-condition",
                 required_information="spatial or domain location for WHERN",
                 material=False,
-                evidence=("missing:where",),
+                evidence=where_ev_2,
             )
 
         # IS

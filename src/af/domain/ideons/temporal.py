@@ -53,9 +53,11 @@ class WhenKind(StrEnum):
     EVENT     — an event or state predicate label (``expression`` field is set).
     CRITERION — a condition clause or transition expression (``expression`` field is set).
     ORDERING  — a bounded ordering relation relative to a named event or anchor
-                (``expression`` field contains a relational expression of the form
-                ``before:<X>``, ``after:<X>``, or ``during:<X>`` where ``<X>`` identifies
-                the reference point; any non-empty relational expression is accepted).
+                (``expression`` field contains a validated relational expression of the form
+                ``before:<X>``, ``after:<X>``, or ``during:<X>`` where the operator is
+                exactly one of those three keywords and ``<X>`` is a non-empty, non-whitespace
+                anchor; expressions with unknown operators or empty/whitespace-only anchors
+                are rejected by both the parser and the domain invariant).
     """
 
     TIMESTAMP = "timestamp"
@@ -74,6 +76,36 @@ class AuxiliaryKind(StrEnum):
 
     TEMPORAL = "temporal"
     VOLITIONAL = "volitional"
+
+
+#: Ordering operators accepted for ``WhenKind.ORDERING`` expressions.
+_ORDERING_OPERATORS: frozenset[str] = frozenset({"before", "after", "during"})
+
+
+def _validate_ordering_expression(expression: str) -> None:
+    """Validate an ORDERING expression of the form ``operator:anchor``.
+
+    Raises ``ValueError`` if the expression does not contain a ``:``, the operator
+    is not one of ``before``, ``after``, or ``during``, or the anchor is absent or
+    consists only of whitespace.  This is the authoritative domain invariant enforced
+    by both ``WhenCondition.__post_init__`` and ``parse_when_expression``.
+    """
+    sep = expression.find(":")
+    if sep < 1:
+        raise ValueError(
+            "ORDERING expression must be 'operator:anchor'; no ':' separator found"
+        )
+    operator = expression[:sep]
+    anchor = expression[sep + 1 :]
+    if operator not in _ORDERING_OPERATORS:
+        raise ValueError(
+            f"ORDERING operator must be one of {sorted(_ORDERING_OPERATORS)!r}; "
+            f"got {operator!r}"
+        )
+    if not anchor.strip():
+        raise ValueError(
+            "ORDERING expression anchor must be non-empty and non-whitespace"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,9 +155,13 @@ class WhenCondition:
                 raise ValueError(
                     "INTERVAL WhenCondition interval_start must not exceed interval_end"
                 )
-        elif self.kind in {WhenKind.EVENT, WhenKind.CRITERION, WhenKind.ORDERING}:
+        elif self.kind in {WhenKind.EVENT, WhenKind.CRITERION}:
             if not self.expression:
                 raise ValueError(f"{self.kind} WhenCondition requires a non-empty expression")
+        elif self.kind is WhenKind.ORDERING:
+            if not self.expression:
+                raise ValueError(f"{self.kind} WhenCondition requires a non-empty expression")
+            _validate_ordering_expression(self.expression)
         if not self.status:
             raise ValueError("WhenCondition status must not be empty")
 
@@ -221,12 +257,15 @@ def parse_when_expression(value: str) -> WhenCondition | None:
     - ``criterion:<expression>`` — a condition clause or transition expression
     - ``interval:<start>,<end>`` — an interval with at least one timezone-aware
                                    ISO 8601 bound (both open is invalid)
-    - ``ordering:<expression>``  — a bounded ordering relation relative to a named
-                                   event or anchor (e.g. ``ordering:before:release-v1``)
+    - ``ordering:<op>:<anchor>`` — a bounded ordering relation: ``op`` must be one of
+                                   ``before``, ``after``, or ``during``; ``<anchor>``
+                                   must be a non-empty, non-whitespace reference point
+                                   (e.g. ``ordering:before:release-v1``)
 
-    Fail-closed: any string that does not match one of these patterns, or has an empty
-    expression after the prefix, returns ``None`` so that WHEN is not satisfied merely
-    because ``context.when`` is a non-empty arbitrary string.
+    Fail-closed: any string that does not match one of these patterns exactly, has an
+    unknown operator, an empty/whitespace-only anchor, or an empty expression after the
+    prefix returns ``None`` so that WHEN is not satisfied merely because ``context.when``
+    is a non-empty arbitrary string.
     """
     sep = value.find(":")
     if sep < 1:
@@ -235,10 +274,26 @@ def parse_when_expression(value: str) -> WhenCondition | None:
     payload = value[sep + 1 :]
     if kind_str not in _WHEN_EXPRESSION_KINDS:
         return None
-    if kind_str in {"event", "criterion", "ordering"}:
+    if kind_str in {"event", "criterion"}:
         if not payload:
             return None
         return WhenCondition(WhenKind(kind_str), expression=payload)
+    if kind_str == "ordering":
+        if not payload:
+            return None
+        # Validate structured format: operator:anchor where operator is known and anchor
+        # is non-empty, non-whitespace.  _validate_ordering_expression enforces the same
+        # invariant at the domain level; the parser validates first (fail-closed layer 1).
+        op_sep = payload.find(":")
+        if op_sep < 1:
+            return None
+        operator = payload[:op_sep]
+        anchor = payload[op_sep + 1 :]
+        if operator not in _ORDERING_OPERATORS:
+            return None
+        if not anchor.strip():
+            return None
+        return WhenCondition(WhenKind.ORDERING, expression=payload)
     # interval: "<start>,<end>" where at least one must be a timezone-aware ISO timestamp
     comma = payload.find(",")
     if comma < 0:

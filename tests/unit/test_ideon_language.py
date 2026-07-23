@@ -814,6 +814,52 @@ def test_ordering_when_condition_domain_validation() -> None:
         WhenCondition(WhenKind.ORDERING)
 
 
+def test_ordering_expression_validated_for_operator_and_anchor() -> None:
+    """WhenCondition(ORDERING) validates the structured 'operator:anchor' format.
+
+    Valid operators are exactly 'before', 'after', 'during'.  The anchor must be
+    non-empty and non-whitespace.  Unknown operators, missing anchors, whitespace-only
+    anchors, and expressions without a ':' separator are rejected by both the domain
+    invariant (_validate_ordering_expression) and parse_when_expression."""
+    from af.domain.ideons.temporal import WhenCondition, WhenKind, parse_when_expression
+
+    # All three valid operators with a non-empty anchor
+    for op in ("before", "after", "during"):
+        expr = f"{op}:sprint-1"
+        cond = WhenCondition(WhenKind.ORDERING, expression=expr)
+        assert cond.kind is WhenKind.ORDERING
+        assert cond.expression == expr
+        parsed = parse_when_expression(f"ordering:{expr}")
+        assert parsed is not None
+        assert parsed.kind is WhenKind.ORDERING
+
+    # Unknown operator — domain invariant and parser both reject
+    with pytest.raises(ValueError, match="operator must be one of"):
+        WhenCondition(WhenKind.ORDERING, expression="banana:release-v1")
+    assert parse_when_expression("ordering:banana:release-v1") is None
+
+    # Missing anchor (empty after operator colon)
+    with pytest.raises(ValueError, match="anchor must be non-empty"):
+        WhenCondition(WhenKind.ORDERING, expression="before:")
+    assert parse_when_expression("ordering:before:") is None
+
+    # Whitespace-only anchor
+    with pytest.raises(ValueError, match="anchor must be non-empty"):
+        WhenCondition(WhenKind.ORDERING, expression="after:   ")
+    assert parse_when_expression("ordering:after:   ") is None
+
+    # No separator in payload — no ':' to split operator from anchor
+    with pytest.raises(ValueError, match="no ':' separator"):
+        WhenCondition(WhenKind.ORDERING, expression="before")
+    assert parse_when_expression("ordering:before") is None
+
+    # Parser: opaque non-ordering payload without structured form
+    assert parse_when_expression("ordering:banana") is None
+
+    # Parser: empty operator (starts with ':')
+    assert parse_when_expression("ordering::anchor") is None
+
+
 def test_where_is_role_driven_not_lexeme_driven() -> None:
     """WHERE must be driven by declared spatial roles, not by bare location lexemes.
 
@@ -936,3 +982,82 @@ def test_context_where_and_dict_candidates_resolve_same_spatial_role() -> None:
     assert inquiry_dict.get(Question.WHERE).status is InquiryStatus.SATISFIED
     assert inquiry_dict.get(Question.WHEN).status is InquiryStatus.SATISFIED
     assert inquiry_dict.get(Question.WHERN).status is InquiryStatus.SATISFIED
+
+
+def test_whern_where_open_when_satisfied_propagates_missing_location() -> None:
+    """WHERE=OPEN + WHEN=SATISFIED → WHERN=OPEN; WHERE constituent evidence
+    ('missing:location') is preserved in WHERN record, not collapsed to 'missing:where'.
+
+    This covers the WHERE=OPEN column of the WHERE x WHEN state matrix when WHEN
+    is satisfied.  The spatial role is declared on the predicate but no location
+    filler exists in the dictionary and no context.where is supplied."""
+    spatial_only = SenseEntry(
+        entry_id="move.to-location",
+        ideon_key=30,
+        ideon_revision=REVISION,
+        profile_id=PROFILE.identifier,
+        forms=("moves",),
+        lexeme="move",
+        sense="move.to-location",
+        semantic_type="action",
+        question_slot=Question.WHAT,
+        semantic_roles=("agent", "location"),
+    )
+    no_filler_dict = LogicDictionary((spatial_only,))
+    forms = LosslessFormEncoder().encode("moves", PROFILE)
+
+    # WHERE=OPEN, WHEN=SATISFIED (event expression) → WHERN=OPEN
+    ctx = ContextGraph.from_dict({"when": "event:door-opened"})
+    inquiry = InquiryEngine().query(forms, no_filler_dict.candidates(forms, ctx), ctx)
+
+    where_result = inquiry.get(Question.WHERE)
+    when_result = inquiry.get(Question.WHEN)
+    whern_result = inquiry.get(Question.WHERN)
+
+    assert where_result.status is InquiryStatus.OPEN
+    assert "missing:location" in where_result.evidence
+    assert when_result.status is InquiryStatus.SATISFIED
+    assert whern_result.status is InquiryStatus.OPEN
+    # constituent WHERE evidence must be preserved in WHERN record
+    assert "missing:location" in whern_result.evidence
+    # generic signal must not replace the constituent evidence
+    assert "missing:where" not in whern_result.evidence
+
+
+def test_whern_where_open_when_absent_propagates_missing_location_and_when() -> None:
+    """WHERE=OPEN + WHEN absent → WHERN=OPEN; both 'missing:location' (from WHERE)
+    and 'missing:when' are present in WHERN evidence.
+
+    This covers the WHERE=OPEN column of the WHERE x WHEN state matrix when WHEN
+    is also absent.  Both constituents must be visible in the WHERN record."""
+    spatial_only = SenseEntry(
+        entry_id="move.to-location",
+        ideon_key=31,
+        ideon_revision=REVISION,
+        profile_id=PROFILE.identifier,
+        forms=("moves",),
+        lexeme="move",
+        sense="move.to-location",
+        semantic_type="action",
+        question_slot=Question.WHAT,
+        semantic_roles=("agent", "location"),
+    )
+    no_filler_dict = LogicDictionary((spatial_only,))
+    forms = LosslessFormEncoder().encode("moves", PROFILE)
+
+    # WHERE=OPEN, WHEN absent → WHERN=OPEN (non-material)
+    ctx = ContextGraph()
+    inquiry = InquiryEngine().query(forms, no_filler_dict.candidates(forms, ctx), ctx)
+
+    where_result = inquiry.get(Question.WHERE)
+    when_result = inquiry.get(Question.WHEN)
+    whern_result = inquiry.get(Question.WHERN)
+
+    assert where_result.status is InquiryStatus.OPEN
+    assert "missing:location" in where_result.evidence
+    assert when_result.status is InquiryStatus.NOT_APPLICABLE
+    assert whern_result.status is InquiryStatus.OPEN
+    assert whern_result.material is False
+    # Both constituent signals must appear in WHERN evidence
+    assert "missing:location" in whern_result.evidence
+    assert "missing:when" in whern_result.evidence
