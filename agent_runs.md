@@ -854,3 +854,49 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #017 - Final Evidence-Binding and Launcher Correction
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Blocker-only rereview of the clean production-MVP readiness branch after Run #016
+- Findings covering manifest read/hash consistency, digest visibility, outer uv configuration,
+  malformed archive member types, and precise Node test-count reporting
+
+### Outputs
+- Bound manifest parsing and SHA-256 reporting to the same file-descriptor byte buffer and
+  printed both manifest and canonical-policy digests in validate, report, and check text output
+- Added no-config/no-env-file flags plus an allowlisted environment for every locked release
+  launcher while preserving only append-only CI context required by governance validation
+- Rejected dot-path sdist members and wheel files whose archive mode claims they are directories,
+  with focused negative regressions for both malformed cases
+- Clarified Run #016's Node result: Node's TAP summary reports one passing test file, and that
+  file contains nine named `test()` cases; all nine completed without failure
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 69 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 335 passed with 90.67 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Clean commit-snapshot package validation: passed for `0.1.0a0`
+- Sdist SHA-256: `fe0921018f97c38e504f746911ebeb41a57b73f919ef99c2ef5405a168545247`
+- Wheel SHA-256: `97860cb20124483cf12b3169674c7f7b89f4eceedfbd92d07628d4ae141e07f8`
+
+### Issues Encountered
+- The Node 22 TAP reporter aggregates the explicit file argument as one top-level subtest even
+  though the file defines nine named cases; this entry records both facts instead of treating
+  the file-level count as the case count
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Roadmap: https://github.com/alexanderholman/AgentFramework/issues/3
+- Release certification: https://github.com/alexanderholman/AgentFramework/issues/34
+- Script: `[SCRIPT:af-dev]`
+
+---
