@@ -449,7 +449,7 @@ def _validate_archive_name(name: str, archive: str) -> PurePosixPath:
     if not name or "\\" in name:
         raise ArtifactError(f"{archive} contains an unsafe path")
     path = PurePosixPath(name)
-    if path.is_absolute() or ".." in path.parts:
+    if not path.parts or path.is_absolute() or ".." in path.parts:
         raise ArtifactError(f"{archive} contains an unsafe path: {name}")
     return path
 
@@ -529,7 +529,11 @@ def _inspect_wheel(root: Path, wheel: Path, *, identity: ProjectIdentity) -> Non
                 path = _validate_archive_name(item.filename, "wheel")
                 mode = (item.external_attr >> 16) & 0xFFFF
                 file_type = stat.S_IFMT(mode)
-                if file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
+                if item.is_dir():
+                    supported_type = file_type in (0, stat.S_IFDIR)
+                else:
+                    supported_type = file_type in (0, stat.S_IFREG)
+                if not supported_type:
                     raise ArtifactError(f"wheel contains unsupported member: {item.filename}")
                 normalized = path.as_posix().rstrip("/")
                 if normalized in member_names:
@@ -1029,17 +1033,19 @@ def _require_fields(value: Mapping[str, object], required: frozenset[str], locat
         raise ManifestError(f"{location} is missing required {noun}: {', '.join(missing)}")
 
 
-def _load_yaml(path: Path) -> object:
+def _read_yaml(path: Path) -> tuple[object, bytes]:
     try:
-        size = path.stat().st_size
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise ManifestError("manifest is not a readable regular file") from exc
-    if not path.is_file() or path.is_symlink():
-        raise ManifestError("manifest is not a readable regular file")
-    if size > MAX_MANIFEST_BYTES:
-        raise ManifestError(f"manifest exceeds {MAX_MANIFEST_BYTES} bytes")
     try:
-        text = path.read_text(encoding="utf-8")
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ManifestError("manifest is not a readable regular file")
+            contents = handle.read(MAX_MANIFEST_BYTES + 1)
+        if len(contents) > MAX_MANIFEST_BYTES:
+            raise ManifestError(f"manifest exceeds {MAX_MANIFEST_BYTES} bytes")
+        text = contents.decode("utf-8")
         depth = 0
         for index, token in enumerate(yaml.scan(text), start=1):
             if index > MAX_YAML_TOKENS:
@@ -1065,13 +1071,18 @@ def _load_yaml(path: Path) -> object:
                 depth = max(0, depth - 1)
             elif isinstance(token, ScalarToken) and len(token.value) > MAX_YAML_SCALAR_LENGTH:
                 raise ManifestError("YAML scalar length exceeds the limit")
-        return yaml.load(text, Loader=StrictSafeLoader)
+        return yaml.load(text, Loader=StrictSafeLoader), contents
     except UnicodeDecodeError as exc:
         raise ManifestError("manifest must be UTF-8") from exc
     except yaml.YAMLError as exc:
         raise ManifestError("manifest contains invalid YAML") from exc
     except RecursionError as exc:
         raise ManifestError("YAML nesting exceeds the limit") from exc
+
+
+def _load_yaml(path: Path) -> object:
+    document, _ = _read_yaml(path)
+    return document
 
 
 def _resolve_inside_root(root: Path, reference: str, location: str) -> Path:
@@ -1280,7 +1291,8 @@ def load_manifest(path: Path, root: Path) -> Manifest:
     except (OSError, ValueError) as exc:
         raise ManifestError("manifest must resolve within the repository root") from exc
 
-    document = _as_mapping(_load_yaml(manifest_path), "root")
+    loaded, manifest_bytes = _read_yaml(manifest_path)
+    document = _as_mapping(loaded, "root")
     _reject_unknown_fields(document, ROOT_FIELDS, "root")
     _require_fields(document, ROOT_FIELDS, "root")
     schema_version = _as_nonempty_string(document["schema_version"], "schema_version")
@@ -1309,7 +1321,7 @@ def load_manifest(path: Path, root: Path) -> Manifest:
         schema_version=schema_version,
         profile_id=profile_id,
         policy_sha256=policy_sha256,
-        manifest_sha256=_sha256(manifest_path),
+        manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
         gates=gates,
     )
 
@@ -1321,6 +1333,8 @@ def _render_text(report: Mapping[str, object]) -> str:
     lines = [
         f"Production MVP {report['profile']}: {status}",
         "Production certification: not performed (certifies_production: false)",
+        f"Manifest SHA-256: {report['manifest_sha256']}",
+        f"Policy SHA-256: {report['policy_sha256']}",
         f"Blocking gates: {report['blocking_gates']}",
     ]
     blockers = report["blockers"]
@@ -1414,6 +1428,8 @@ def main() -> int:
             f"Valid production MVP declaration manifest: {manifest.profile_id}; "
             "production certification not performed"
         )
+        print(f"Manifest SHA-256: {manifest.manifest_sha256}")
+        print(f"Policy SHA-256: {manifest.policy_sha256}")
         return 0
     if args.json:
         print(json.dumps(report, sort_keys=True, separators=(",", ":")))

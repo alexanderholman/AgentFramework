@@ -155,6 +155,7 @@ def _write_distribution_fixture(
     extra_wheel_path: str | None = None,
     symlink_wheel_path: str | None = None,
     duplicate_wheel_path: str | None = None,
+    directory_mode_wheel_path: str | None = None,
     duplicate_sdist_path: str | None = None,
     omit_dependency_metadata: bool = False,
     omit_optional_dependency_metadata: bool = False,
@@ -171,6 +172,7 @@ def _write_distribution_fixture(
     omit_record_member: bool = False,
     tamper_sdist_path: str | None = None,
     fifo_sdist_path: str | None = None,
+    dot_sdist_member: bool = False,
 ) -> tuple[Path, Path]:
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     version = project["version"]
@@ -261,7 +263,13 @@ def _write_distribution_fixture(
         wheel_files[f"{dist_info}/RECORD"] = record_buffer.getvalue().encode()
     with zipfile.ZipFile(wheel, "w") as archive:
         for name, content in wheel_files.items():
-            archive.writestr(name, content)
+            if name == directory_mode_wheel_path:
+                directory_mode = zipfile.ZipInfo(name)
+                directory_mode.create_system = 3
+                directory_mode.external_attr = (stat.S_IFDIR | 0o755) << 16
+                archive.writestr(directory_mode, content)
+            else:
+                archive.writestr(name, content)
         if symlink_wheel_path is not None:
             link = zipfile.ZipInfo(symlink_wheel_path)
             link.create_system = 3
@@ -313,6 +321,12 @@ def _write_distribution_fixture(
             info.type = tarfile.FIFOTYPE
             info.mode = 0o644
             archive.addfile(info)
+        if dot_sdist_member:
+            payload = b"invalid\n"
+            info = tarfile.TarInfo(".")
+            info.size = len(payload)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(payload))
     return sdist, wheel
 
 
@@ -321,12 +335,15 @@ def test_repository_manifest_is_valid_but_honestly_blocked() -> None:
     reported = _run("--action", "report", "--json")
 
     assert validated.returncode == 0
+    assert "Manifest SHA-256:" in validated.stdout
+    assert "Policy SHA-256:" in validated.stdout
     assert reported.returncode == 0
     report = json.loads(reported.stdout)
     assert report["profile"] == "private-single-node-stdio-deterministic"
     assert report["declarations_complete"] is False
     assert "ready" not in report
     assert report["certifies_production"] is False
+    assert report["manifest_sha256"] == hashlib.sha256(REPOSITORY_MANIFEST.read_bytes()).hexdigest()
     assert report["blocking_gates"] >= 20
     assert "security.authentication-boundary" in report["blockers"]
     assert "data.backup-restore" in report["blockers"]
@@ -471,6 +488,18 @@ def test_distribution_inspection_rejects_wheel_symlink(tmp_path: Path) -> None:
         raise AssertionError("wheel symlink was accepted")
 
 
+def test_distribution_inspection_rejects_file_with_directory_mode(tmp_path: Path) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, directory_mode_wheel_path="af/__init__.py")
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "wheel contains unsupported member: af/__init__.py" in str(exc)
+    else:
+        raise AssertionError("wheel file carrying directory mode was accepted")
+
+
 def test_distribution_inspection_rejects_duplicate_wheel_member(tmp_path: Path) -> None:
     module = _load_module()
     sdist, wheel = _write_distribution_fixture(tmp_path, duplicate_wheel_path="af/__init__.py")
@@ -505,6 +534,18 @@ def test_distribution_inspection_rejects_sdist_fifo(tmp_path: Path) -> None:
         assert "sdist contains unsupported member" in str(exc)
     else:
         raise AssertionError("sdist FIFO was accepted")
+
+
+def test_distribution_inspection_rejects_dot_sdist_member(tmp_path: Path) -> None:
+    module = _load_module()
+    sdist, wheel = _write_distribution_fixture(tmp_path, dot_sdist_member=True)
+
+    try:
+        module.inspect_distribution(REPO_ROOT, sdist, wheel)
+    except module.ManifestError as exc:
+        assert "sdist contains an unsafe path: ." in str(exc)
+    else:
+        raise AssertionError("sdist dot member was accepted")
 
 
 def test_distribution_inspection_requires_record_hashes(tmp_path: Path) -> None:
@@ -840,6 +881,8 @@ def test_check_uses_zero_one_two_exit_contract(tmp_path: Path) -> None:
 
     assert blocked.returncode == 1
     assert "DECLARATIONS INCOMPLETE" in blocked.stdout
+    assert "Manifest SHA-256:" in blocked.stdout
+    assert "Policy SHA-256:" in blocked.stdout
     assert "operations.health-readiness" in blocked.stdout
     assert ready.returncode == 0
     assert "DECLARATIONS COMPLETE" in ready.stdout

@@ -7,10 +7,24 @@ import argparse
 import os
 import shlex
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-LOCKED_RUN = ("uv", "run", "--offline", "--locked", "--no-sources", "--extra", "dev")
+LOCKED_RUN = (
+    "uv",
+    "run",
+    "--no-config",
+    "--no-env-file",
+    "--offline",
+    "--locked",
+    "--no-sources",
+    "--extra",
+    "dev",
+)
+LOCKED_ACTIONS = frozenset(
+    {"check", "package", "release-check", "release-report", "release-validate"}
+)
 
 ACTIONS: dict[str, tuple[tuple[str, ...], ...]] = {
     "sync": (("uv", "sync", "--locked", "--extra", "dev"),),
@@ -75,6 +89,36 @@ def render(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
+def execution_environment(action: str) -> dict[str, str]:
+    """Return a bounded environment for locked release actions."""
+    if action not in LOCKED_ACTIONS:
+        environment = os.environ.copy()
+        environment.setdefault("UV_CACHE_DIR", str(Path(".cache/uv").resolve()))
+        return environment
+
+    environment = {
+        name: value
+        for name in ("HOME", "LANG", "LC_ALL", "PATH", "SSL_CERT_FILE")
+        if (value := os.environ.get(name))
+    }
+    environment.update(
+        {name: value for name, value in os.environ.items() if name.startswith("AF_APPEND_ONLY_")}
+    )
+    environment.update(
+        {
+            "PYTHONNOUSERSITE": "1",
+            "UV_CACHE_DIR": str(Path(".cache/uv").resolve()),
+            "UV_LOCKED": "1",
+            "UV_NO_CONFIG": "1",
+            "UV_NO_PROGRESS": "1",
+            "UV_NO_SOURCES": "1",
+            "UV_OFFLINE": "1",
+            "UV_PYTHON": sys.executable,
+        }
+    )
+    return environment
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--action", choices=sorted(ACTIONS), required=True)
@@ -93,8 +137,7 @@ def main() -> int:
         print("Dry run only. Re-run with --execute to apply.")
         return 0
 
-    environment = os.environ.copy()
-    environment.setdefault("UV_CACHE_DIR", str(Path(".cache/uv").resolve()))
+    environment = execution_environment(args.action)
 
     for command in commands:
         completed = subprocess.run(command, check=False, env=environment)

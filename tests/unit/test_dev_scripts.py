@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import yaml
 
@@ -12,6 +15,15 @@ REPO_ROOT = Path(__file__).parents[2]
 AF_DEV = REPO_ROOT / "scripts" / "af_dev.py"
 ROUTE_AND_RUN = REPO_ROOT / "scripts" / "route_and_run.py"
 SCRIPT_REGISTRY = REPO_ROOT / "scripts" / "registry.yaml"
+
+
+def _load_af_dev() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("af_dev_script", AF_DEV)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_af_dev_sync_preview_uses_locked_lockfile() -> None:
@@ -38,11 +50,12 @@ def test_af_dev_check_preview_lints_all_maintained_python_scripts() -> None:
 
     assert completed.returncode == 0
     assert (
-        "uv run --offline --locked --no-sources --extra dev "
+        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
         "ruff format --check src/af tests scripts"
     ) in completed.stdout
     assert (
-        "uv run --offline --locked --no-sources --extra dev ruff check src/af tests scripts"
+        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
+        "ruff check src/af tests scripts"
     ) in completed.stdout
     assert "node --test tests/opencode/route-gate.test.mjs" in completed.stdout
 
@@ -58,11 +71,11 @@ def test_af_dev_check_preview_validates_release_manifest_and_package() -> None:
 
     assert completed.returncode == 0
     assert (
-        "uv run --offline --locked --no-sources --extra dev "
+        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
         "python scripts/release_gates.py --action validate"
     ) in completed.stdout
     assert (
-        "uv run --offline --locked --no-sources --extra dev "
+        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
         "python scripts/release_gates.py --action package --execute"
     ) in completed.stdout
 
@@ -75,7 +88,7 @@ def test_release_gate_workflow_is_registered() -> None:
     )
 
     assert release_gate["command"] == (
-        "uv run --offline --locked --no-sources --extra dev "
+        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
         "python scripts/release_gates.py --action '<action>'"
     )
     assert set(release_gate["capabilities"]) >= {
@@ -84,10 +97,33 @@ def test_release_gate_workflow_is_registered() -> None:
     }
     assert release_gate["parameters"] == ["action"]
     assert release_package["command"] == (
-        "uv run --offline --locked --no-sources --extra dev "
+        "uv run --no-config --no-env-file --offline --locked --no-sources --extra dev "
         "python scripts/release_gates.py --action package --execute"
     )
     assert "package-validation" in release_package["capabilities"]
+
+
+def test_locked_release_environment_rejects_inherited_tool_overrides(
+    monkeypatch: Any,
+) -> None:
+    module = _load_af_dev()
+    monkeypatch.setenv("GITHUB_TOKEN", "secret")
+    monkeypatch.setenv("PIP_INDEX_URL", "https://user:secret@example.invalid/simple")
+    monkeypatch.setenv("UV_CONFIG_FILE", "/tmp/untrusted-uv.toml")
+    monkeypatch.setenv("UV_INDEX_URL", "https://user:secret@example.invalid/simple")
+    monkeypatch.setenv("UV_PYTHON", "/tmp/untrusted-python")
+    monkeypatch.setenv("AF_APPEND_ONLY_BASE_REF", "origin/master")
+
+    environment = module.execution_environment("check")
+
+    assert environment["UV_NO_CONFIG"] == "1"
+    assert environment["UV_OFFLINE"] == "1"
+    assert environment["UV_PYTHON"] == sys.executable
+    assert environment["AF_APPEND_ONLY_BASE_REF"] == "origin/master"
+    assert "GITHUB_TOKEN" not in environment
+    assert "PIP_INDEX_URL" not in environment
+    assert "UV_CONFIG_FILE" not in environment
+    assert "UV_INDEX_URL" not in environment
 
 
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:

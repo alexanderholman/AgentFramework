@@ -13,18 +13,18 @@ current gaps without executing commands from the manifest:
 
 ```bash
 # [SCRIPT:release-gates] Validate the manifest itself.
-uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action validate
+uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action validate
 
 # Report current status. A valid but blocked report exits zero.
-uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report
-uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report --json
+uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report
+uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action report --json
 
 # Check declaration completeness. This does not verify evidence or authorize production.
-uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action check
+uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action check
 
 # Preview, then execute the temporary wheel-from-sdist package smoke.
-uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package
-uv run --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package --execute
+uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package
+uv run --no-config --no-env-file --offline --locked --no-sources --extra dev python scripts/release_gates.py --action package --execute
 ```
 
 Malformed manifest input or an internal validation failure exits `2`. The package action
