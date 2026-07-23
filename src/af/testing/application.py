@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Self, cast
+from typing import ClassVar, Self, cast
 
 from af.application.bus import (
     ApplicationBus,
@@ -134,6 +134,8 @@ class _OverrideProvider(ServiceProvider):
 class TestApplication:
     """Owned isolated application used by framework and extension tests."""
 
+    __test__: ClassVar[bool] = False
+
     def __init__(self, application: AFApplication) -> None:
         if not isinstance(application, AFApplication):
             raise TypeError("test application requires an AFApplication")
@@ -217,6 +219,8 @@ class TestApplication:
 class TestApplicationBuilder:
     """Build fresh AF applications with explicit providers, handlers, and overrides."""
 
+    __test__: ClassVar[bool] = False
+
     def __init__(
         self,
         *,
@@ -225,7 +229,9 @@ class TestApplicationBuilder:
     ) -> None:
         if settings is not None and config is not None:
             raise ValueError("provide test settings or config, not both")
-        self._settings = settings or (None if config is not None else Settings())
+        self._settings = settings or (
+            None if config is not None else Settings(database_url="sqlite+pysqlite:///:memory:")
+        )
         self._config = config
         self._providers: list[ServiceProvider] = []
         self._handlers: list[tuple[type[Message], Handler]] = []
