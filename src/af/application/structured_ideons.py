@@ -30,6 +30,7 @@ from af.domain.ideons.structured import (
     StructuredInterpretationRecord,
     structured_record,
 )
+from af.domain.ideons.temporal import WhenCondition
 
 
 _OPERATOR_BY_VALUE: dict[str, QOperator] = {operator.value: operator for operator in QOperator}
@@ -149,7 +150,7 @@ def _when_expression(result: InquiryResult, context: ContextGraph) -> QExpressio
     if len(members) == 1:
         return members[0]
 
-    # Context fields describe one jointly applicable context by default.  Callers may
+    # Context fields describe one jointly applicable context by default. Callers may
     # declare another bounded composition explicitly through ``when-operator``.
     operator_value = context.get("when-operator") or QOperator.ALL.value
     operator = _OPERATOR_BY_VALUE.get(operator_value)
@@ -172,16 +173,34 @@ def _when_expression(result: InquiryResult, context: ContextGraph) -> QExpressio
     )
 
 
+def _whern_status(where: QExpression, when: QExpression) -> InquiryStatus:
+    statuses = (where.status, when.status)
+    if statuses == (InquiryStatus.NOT_APPLICABLE, InquiryStatus.NOT_APPLICABLE):
+        return InquiryStatus.NOT_APPLICABLE
+    if InquiryStatus.CONTESTED in statuses:
+        return InquiryStatus.CONTESTED
+    if InquiryStatus.OPEN in statuses or InquiryStatus.NOT_APPLICABLE in statuses:
+        return InquiryStatus.OPEN
+    return InquiryStatus.SATISFIED
+
+
 def _structured_result(result: InquiryResult, expression: QExpression) -> StructuredInquiryResult:
     # An invalid explicit operator is an unresolved material opening, even though the
     # compatibility engine could validate each constituent independently.
     status = expression.status
-    material = result.material or (
+    temporal_composition_open = (
         result.question is Question.WHEN and status is InquiryStatus.OPEN
     )
+    material = result.material or temporal_composition_open
     required_information = result.required_information
-    if status is InquiryStatus.OPEN and required_information is None:
+    if temporal_composition_open and required_information is None:
         required_information = "the composition operator joining temporal conditions"
+    elif (
+        result.question is Question.WHERN
+        and status is InquiryStatus.OPEN
+        and required_information is None
+    ):
+        required_information = "resolved WHERE and WHEN constituents for WHERN"
     return StructuredInquiryResult(
         question=result.question,
         status=status,
@@ -207,18 +226,19 @@ def structure_inquiries(state: InquiryState, context: ContextGraph) -> InquirySt
         elif result.question is Question.WHEN:
             expression = _when_expression(result, context)
         elif result.question is Question.WHERN:
+            where = expressions[Question.WHERE]
+            when = expressions[Question.WHEN]
             constituents = tuple(
-                expressions[question]
-                for question in (Question.WHERE, Question.WHEN)
-                if question in expressions
-                and expressions[question].status is not InquiryStatus.NOT_APPLICABLE
+                expression
+                for expression in (where, when)
+                if expression.status is not InquiryStatus.NOT_APPLICABLE
             )
             expression = (
                 QGroup(
                     Question.WHERN,
                     QOperator.ALL,
                     constituents,
-                    result.status,
+                    _whern_status(where, when),
                     role=result.role,
                     evidence=result.evidence,
                 )
@@ -295,7 +315,9 @@ def _project_expression(
     return nodes, edges
 
 
-def project_inquiry_expressions(inquiry: InquiryState) -> tuple[tuple[IdeonNode, ...], tuple[IdeonEdge, ...]]:
+def project_inquiry_expressions(
+    inquiry: InquiryState,
+) -> tuple[tuple[IdeonNode, ...], tuple[IdeonEdge, ...]]:
     """Project every authoritative expression into typed graph nodes and edges."""
 
     nodes: list[IdeonNode] = []
@@ -337,10 +359,8 @@ class StructuredIdeonService(IdeonService):
         *,
         source_id: str | None = None,
         rights: str | None = None,
-        reference_when: object | None = None,
+        reference_when: WhenCondition | None = None,
     ) -> IdeonGraph:
-        # The base method validates the concrete temporal-reference type.  Keep the
-        # override broad enough to avoid coupling this integration module to its parser.
         graph = super().construct_graph(
             forms,
             candidates,
@@ -348,7 +368,7 @@ class StructuredIdeonService(IdeonService):
             inquiry,
             source_id=source_id,
             rights=rights,
-            reference_when=reference_when,  # type: ignore[arg-type]
+            reference_when=reference_when,
         )
         inquiry_nodes, inquiry_edges = project_inquiry_expressions(inquiry)
         return IdeonGraph(
