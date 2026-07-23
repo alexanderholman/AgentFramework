@@ -215,9 +215,10 @@ def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypat
     uv_probe.write_text(
         "import pathlib\n"
         "import sys\n"
-        "pathlib.Path(sys.argv[1]).write_text(\n"
-        "    pathlib.Path(sys.argv[1]).read_text(encoding='utf-8') + sys.argv[2] + '\\n'\n"
-        "    if pathlib.Path(sys.argv[1]).exists()\n"
+        "log_path = pathlib.Path(sys.argv[1])\n"
+        "log_path.write_text(\n"
+        "    log_path.read_text(encoding='utf-8') + sys.argv[2] + '\\n'\n"
+        "    if log_path.exists()\n"
         "    else sys.argv[2] + '\\n',\n"
         "    encoding='utf-8',\n"
         ")\n",

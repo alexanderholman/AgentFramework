@@ -111,7 +111,7 @@ def resolve_locked_uv_executable() -> str:
         raise RuntimeError("locked release actions require uv on inherited PATH")
     try:
         return str(Path(executable).resolve(strict=True))
-    except (OSError, RuntimeError) as exc:
+    except OSError as exc:
         raise RuntimeError("locked release actions require an accessible uv executable") from exc
 
 
