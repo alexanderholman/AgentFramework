@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
-from inspect import isawaitable
+from inspect import isasyncgen, isawaitable, isgenerator
 from typing import Protocol, cast
 
 from af.framework.application import ApplicationState
@@ -158,11 +158,11 @@ def _normalize_cases[T](
 
 def _run_case[T](case: ConformanceCase[T], fixture: T) -> None:
     result = case.exercise(fixture)
-    if isawaitable(result):
+    if isawaitable(result) or isgenerator(result) or isasyncgen(result):
         close = getattr(result, "close", None)
         if callable(close):
             close()
-        raise TypeError("conformance cases must be synchronous")
+        raise TypeError("conformance cases must run synchronously without yielding")
 
 
 class ProviderConformanceSuite:
