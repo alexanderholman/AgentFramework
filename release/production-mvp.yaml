@@ -371,7 +371,7 @@ gates:
     verification: "automated"
     state: "pending"
     evidence: []
-    next_action: "Complete and integrate scoped lifecycle work from issues 9 and 10, then add process-level shutdown tests."
+    next_action: "Build on the scoped-lifetime foundation completed in issue 9, finish issue 10 lifecycle work, and add process-level shutdown tests."
     issues:
       - "https://github.com/alexanderholman/AgentFramework/issues/9"
       - "https://github.com/alexanderholman/AgentFramework/issues/10"

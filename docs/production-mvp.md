@@ -193,9 +193,10 @@ Before release:
 8. Retain the prior signed artifact/configuration, prove schema compatibility, and complete
    separate timed artifact-rollback and data-restore drills.
 
-Issue [#9](https://github.com/alexanderholman/AgentFramework/issues/9) and the following
-application lifecycle work are prerequisites for honest drain and shutdown evidence. This
-readiness profile does not duplicate that implementation.
+The scoped-lifetime foundation completed in issue
+[#9](https://github.com/alexanderholman/AgentFramework/issues/9) and the remaining application
+lifecycle work are prerequisites for honest drain and shutdown evidence. This readiness
+profile does not duplicate that implementation.
 
 ### Accessibility outside this profile
 
@@ -232,8 +233,8 @@ candidate proves that it passed.
 
 1. **Keep the release contract green:** validate this manifest and package artifacts in the
    normal source gate while the readiness check remains honestly blocked.
-2. **Finish the application foundation:** complete issues #9, #10, and #14 for scopes,
-   lifecycle, health, and observability.
+2. **Finish the application foundation:** build on completed issue #9 and complete issues #10
+   and #14 for lifecycle, health, and observability.
 3. **Close the data and identity boundary:** complete the profile-relevant portions of issues
    #17 and #31, including migrations, backup/restore, retention, and operator access.
 4. **Complete candidate prerequisites:** service definition, preflight, hard capacity limits,
