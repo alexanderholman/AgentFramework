@@ -276,30 +276,43 @@ def test_when_condition_satisfied_by_criterion_without_timestamp() -> None:
 
 
 def test_whern_is_composite_of_where_and_when_components() -> None:
-    """Whern is the WHERE+WHEN composite.  WHERN(P) is satisfied only when both the
-    spatial/domain component (context.where or satisfied location candidates) and the
-    temporal/conditional component (context.when or context.time) are present.
-    A contested WHERE propagates into WHERN as OPEN (non-material) with 'where:contested';
-    no location candidates yields OPEN (non-material) with 'missing:where'."""
+    """WHERN(P) is satisfied only when both the spatial/domain component
+    (context.where or satisfied location candidates) and the temporal/conditional
+    component (context.when in ``kind:expression`` format or context.time) are present.
+
+    context.when must follow the bounded ``kind:expression`` format to satisfy WHEN;
+    arbitrary strings fail closed.  A contested WHERE propagates into WHERN as
+    CONTESTED when WHEN is satisfied; it propagates into OPEN with 'where:contested'
+    in evidence when WHEN is missing.
+    """
     forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
     dictionary = reference_dictionary()
 
-    # Both WHERE (context.where) and WHEN provided: WHERN SATISFIED
-    ctx_both = ContextGraph.from_dict({"where": "london", "when": "task-complete"})
+    # Both WHERE (context.where) and WHEN (criterion format) provided: WHERN SATISFIED
+    ctx_both = ContextGraph.from_dict({"when": "criterion:task-complete", "where": "london"})
     inquiry_both = InquiryEngine().query(
         forms, dictionary.candidates(forms, ctx_both), ctx_both
     )
-    assert inquiry_both.get(Question.WHERN).status is InquiryStatus.SATISFIED
     assert inquiry_both.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inquiry_both.get(Question.WHERN).status is InquiryStatus.SATISFIED
 
-    # Only WHEN provided with contested location candidates:
-    # WHERE is CONTESTED (bank ambiguous); WHERN OPEN (non-material) with contested WHERE
-    ctx_when_only = ContextGraph.from_dict({"when": "task-complete"})
+    # Arbitrary string for context.when fails closed: WHEN NOT_APPLICABLE
+    ctx_plain = ContextGraph.from_dict({"when": "task-complete", "where": "london"})
+    inquiry_plain = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_plain), ctx_plain
+    )
+    assert inquiry_plain.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+
+    # Only WHEN (criterion) provided with contested location candidates:
+    # WHERE is CONTESTED (bank ambiguous); WHERN CONTESTED (propagates from WHERE)
+    ctx_when_only = ContextGraph.from_dict({"when": "criterion:task-complete"})
     inquiry_when_only = InquiryEngine().query(
         forms, dictionary.candidates(forms, ctx_when_only), ctx_when_only
     )
-    assert inquiry_when_only.get(Question.WHERN).status is InquiryStatus.OPEN
-    assert inquiry_when_only.get(Question.WHERN).material is False
+    assert inquiry_when_only.get(Question.WHERE).status is InquiryStatus.CONTESTED
+    assert inquiry_when_only.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inquiry_when_only.get(Question.WHERN).status is InquiryStatus.CONTESTED
+    assert inquiry_when_only.get(Question.WHERN).material is True
     assert "where:contested" in inquiry_when_only.get(Question.WHERN).evidence
 
     # Only WHEN provided with no location candidates: WHERN OPEN (non-material), missing:where
@@ -314,7 +327,7 @@ def test_whern_is_composite_of_where_and_when_components() -> None:
     assert inquiry_no_loc.get(Question.WHERN).material is False
     assert "missing:where" in inquiry_no_loc.get(Question.WHERN).evidence
 
-    # Only WHERE provided (context.where, no WHEN): WHERN OPEN (non-material), missing when
+    # Only WHERE provided (context.where, no WHEN): WHERN OPEN (non-material), missing:when
     ctx_where_only = ContextGraph.from_dict({"where": "london"})
     inquiry_where_only = InquiryEngine().query(
         forms, dictionary.candidates(forms, ctx_where_only), ctx_where_only
@@ -452,20 +465,22 @@ def test_invalid_time_string_does_not_satisfy_when() -> None:
 
 
 def test_whern_constituent_state_propagates_contested_where() -> None:
-    """A contested WHERE plus a satisfied WHEN must produce WHERN OPEN (non-material)
-    with 'where:contested' in evidence, not NOT_APPLICABLE.  WHERN can only be
-    SATISFIED when WHERE is fully resolved (not contested)."""
+    """WHERN must propagate CONTESTED from a contested WHERE constituent.
+    A contested WHERE plus a satisfied WHEN yields WHERN CONTESTED (material=True),
+    not OPEN.  WHERN can only be SATISFIED when WHERE is fully resolved (not contested).
+    A contested WHERE with no WHEN yields WHERN OPEN (missing:when).
+    This is the complete WHERE x WHEN state matrix for the contested-WHERE column."""
     forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
     dictionary = reference_dictionary()
 
-    # WHERE CONTESTED (bank ambiguous) + WHEN SATISFIED → WHERN OPEN (non-material)
+    # WHERE CONTESTED (bank ambiguous) + WHEN SATISFIED → WHERN CONTESTED (material)
     ctx = ContextGraph.from_dict({"time": "2026-01-01T00:00:00Z"})
     inquiry = InquiryEngine().query(forms, dictionary.candidates(forms, ctx), ctx)
 
     assert inquiry.get(Question.WHERE).status is InquiryStatus.CONTESTED
     assert inquiry.get(Question.WHEN).status is InquiryStatus.SATISFIED
-    assert inquiry.get(Question.WHERN).status is InquiryStatus.OPEN
-    assert inquiry.get(Question.WHERN).material is False
+    assert inquiry.get(Question.WHERN).status is InquiryStatus.CONTESTED
+    assert inquiry.get(Question.WHERN).material is True
     assert "where:contested" in inquiry.get(Question.WHERN).evidence
 
     # Resolving WHERE (domain=river) + WHEN SATISFIED → WHERN SATISFIED
@@ -486,7 +501,88 @@ def test_whern_constituent_state_propagates_contested_where() -> None:
     assert inquiry_no_when.get(Question.WHERE).status is InquiryStatus.CONTESTED
     assert inquiry_no_when.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
     assert inquiry_no_when.get(Question.WHERN).status is InquiryStatus.OPEN
+    assert inquiry_no_when.get(Question.WHERN).material is False
     assert "missing:when" in inquiry_no_when.get(Question.WHERN).evidence
+
+
+def test_whern_complete_state_matrix() -> None:
+    """Complete WHERE x WHEN state matrix for WHERN.
+
+    SATISFIED only when WHERE fully satisfied and WHEN satisfied.
+    CONTESTED when WHERE contested and WHEN satisfied.
+    OPEN (non-material) when WHERE present/contested + WHEN missing, or WHEN + no WHERE.
+    NOT_APPLICABLE when neither WHERE nor WHEN is present.
+    """
+    forms = LosslessFormEncoder().encode("sat on the bank", PROFILE)
+    forms_no_loc = LosslessFormEncoder().encode("sat", PROFILE)
+    dictionary = reference_dictionary()
+
+    # WHERE SATISFIED + WHEN SATISFIED → WHERN SATISFIED
+    ctx_sat_sat = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-01-01T00:00:00Z"}
+    )
+    inq_sat_sat = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_sat_sat), ctx_sat_sat
+    )
+    assert inq_sat_sat.get(Question.WHERE).status is InquiryStatus.SATISFIED
+    assert inq_sat_sat.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inq_sat_sat.get(Question.WHERN).status is InquiryStatus.SATISFIED
+
+    # WHERE CONTESTED + WHEN SATISFIED → WHERN CONTESTED
+    ctx_con_sat = ContextGraph.from_dict({"time": "2026-01-01T00:00:00Z"})
+    inq_con_sat = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_con_sat), ctx_con_sat
+    )
+    assert inq_con_sat.get(Question.WHERE).status is InquiryStatus.CONTESTED
+    assert inq_con_sat.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inq_con_sat.get(Question.WHERN).status is InquiryStatus.CONTESTED
+    assert inq_con_sat.get(Question.WHERN).material is True
+
+    # WHERE SATISFIED + WHEN NOT_APPLICABLE → WHERN OPEN (missing:when)
+    ctx_sat_na = ContextGraph.from_dict({"actor": "alice", "domain": "river"})
+    inq_sat_na = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_sat_na), ctx_sat_na
+    )
+    assert inq_sat_na.get(Question.WHERE).status is InquiryStatus.SATISFIED
+    assert inq_sat_na.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+    assert inq_sat_na.get(Question.WHERN).status is InquiryStatus.OPEN
+    assert inq_sat_na.get(Question.WHERN).material is False
+    assert "missing:when" in inq_sat_na.get(Question.WHERN).evidence
+
+    # WHERE CONTESTED + WHEN NOT_APPLICABLE → WHERN OPEN (where:contested, missing:when)
+    ctx_con_na = ContextGraph.from_dict({})
+    inq_con_na = InquiryEngine().query(
+        forms, dictionary.candidates(forms, ctx_con_na), ctx_con_na
+    )
+    assert inq_con_na.get(Question.WHERE).status is InquiryStatus.CONTESTED
+    assert inq_con_na.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+    assert inq_con_na.get(Question.WHERN).status is InquiryStatus.OPEN
+    assert inq_con_na.get(Question.WHERN).material is False
+    assert "where:contested" in inq_con_na.get(Question.WHERN).evidence
+    assert "missing:when" in inq_con_na.get(Question.WHERN).evidence
+
+    # WHERE NOT_APPLICABLE + WHEN SATISFIED → WHERN OPEN (missing:where)
+    ctx_na_sat = ContextGraph.from_dict({"time": "2026-01-01T00:00:00Z"})
+    inq_na_sat = InquiryEngine().query(
+        forms_no_loc,
+        dictionary.candidates(forms_no_loc, ctx_na_sat),
+        ctx_na_sat,
+    )
+    assert inq_na_sat.get(Question.WHERE).status is InquiryStatus.NOT_APPLICABLE
+    assert inq_na_sat.get(Question.WHEN).status is InquiryStatus.SATISFIED
+    assert inq_na_sat.get(Question.WHERN).status is InquiryStatus.OPEN
+    assert inq_na_sat.get(Question.WHERN).material is False
+    assert "missing:where" in inq_na_sat.get(Question.WHERN).evidence
+
+    # WHERE NOT_APPLICABLE + WHEN NOT_APPLICABLE → WHERN NOT_APPLICABLE
+    inq_na_na = InquiryEngine().query(
+        forms_no_loc,
+        dictionary.candidates(forms_no_loc, ContextGraph()),
+        ContextGraph(),
+    )
+    assert inq_na_na.get(Question.WHERE).status is InquiryStatus.NOT_APPLICABLE
+    assert inq_na_na.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+    assert inq_na_na.get(Question.WHERN).status is InquiryStatus.NOT_APPLICABLE
 
 
 def test_who_satisfied_by_non_agent_role() -> None:
@@ -520,3 +616,106 @@ def test_who_satisfied_by_non_agent_role() -> None:
     )
     assert inquiry_sat.get(Question.WHO).status is InquiryStatus.SATISFIED
     assert inquiry_sat.get(Question.WHO).role == "experiencer"
+
+
+def test_parse_when_expression_valid_and_fail_closed() -> None:
+    """_parse_when_expression validates bounded kind:expression format.
+    Valid forms return a WhenCondition; arbitrary strings fail closed (return None)."""
+    from af.domain.ideons.inquiry import _parse_when_expression
+
+    # Event kind
+    cond = _parse_when_expression("event:door-opened")
+    assert cond is not None
+    assert cond.kind is WhenKind.EVENT
+    assert cond.expression == "door-opened"
+
+    # Criterion kind
+    cond = _parse_when_expression("criterion:task-complete")
+    assert cond is not None
+    assert cond.kind is WhenKind.CRITERION
+    assert cond.expression == "task-complete"
+
+    # Interval kind (half-open: only start)
+    cond = _parse_when_expression("interval:2026-01-01T00:00:00Z,")
+    assert cond is not None
+    assert cond.kind is WhenKind.INTERVAL
+    assert cond.interval_start is not None
+    assert cond.interval_end is None
+
+    # Arbitrary string — fail closed
+    assert _parse_when_expression("task-complete") is None
+    assert _parse_when_expression("") is None
+    assert _parse_when_expression("unknown:value") is None
+    # Timezone-naive interval — fail closed
+    assert _parse_when_expression("interval:2026-01-01T00:00:00,") is None
+    # Empty expression — fail closed
+    assert _parse_when_expression("event:") is None
+    assert _parse_when_expression("criterion:") is None
+    # Fully open interval (both ends empty) — fail closed
+    assert _parse_when_expression("interval:,") is None
+
+
+def test_who_remains_open_when_only_some_required_roles_satisfied() -> None:
+    """WHO must not close after the first matching role.
+    When a predicate declares multiple who-typed roles (e.g. agent + affected),
+    supplying only one context field leaves WHO open until all required roles are
+    present.  Evidence names every missing role."""
+    multi_role_entry = entry(
+        "give.transitive",
+        17,
+        "gives",
+        "action",
+        Question.WHAT,
+        semantic_roles=("agent", "affected"),
+    )
+    dictionary = LogicDictionary((multi_role_entry,))
+    forms = LosslessFormEncoder().encode("gives", PROFILE)
+
+    # Only actor supplied (satisfies agent) but affected is still missing → WHO OPEN
+    ctx_agent_only = ContextGraph.from_dict({"actor": "alice"})
+    candidates_agent = dictionary.candidates(forms, ctx_agent_only)
+    inquiry_agent = InquiryEngine().query(forms, candidates_agent, ctx_agent_only)
+
+    assert inquiry_agent.get(Question.WHO).status is InquiryStatus.OPEN
+    assert inquiry_agent.get(Question.WHO).material is True
+    assert "missing:affected" in inquiry_agent.get(Question.WHO).evidence
+
+    # Both actor and affected supplied → WHO SATISFIED
+    ctx_both = ContextGraph.from_dict({"actor": "alice", "affected": "book"})
+    candidates_both = dictionary.candidates(forms, ctx_both)
+    inquiry_both = InquiryEngine().query(forms, candidates_both, ctx_both)
+
+    assert inquiry_both.get(Question.WHO).status is InquiryStatus.SATISFIED
+    assert inquiry_both.get(Question.WHO).material is False
+
+    # Neither supplied → WHO OPEN (all roles missing)
+    candidates_none = dictionary.candidates(forms, ContextGraph())
+    inquiry_none = InquiryEngine().query(forms, candidates_none, ContextGraph())
+
+    assert inquiry_none.get(Question.WHO).status is InquiryStatus.OPEN
+    assert inquiry_none.get(Question.WHO).material is True
+    assert "missing:actor" in inquiry_none.get(Question.WHO).evidence
+    assert "missing:affected" in inquiry_none.get(Question.WHO).evidence
+
+
+def test_when_satisfied_by_event_expression_without_timestamp() -> None:
+    """WHEN is satisfied by a valid event:expression without any datetime value.
+    WHEN is also satisfied by a criterion:expression.
+    Arbitrary strings without a kind prefix fail closed."""
+    forms = LosslessFormEncoder().encode("sat", PROFILE)
+    dictionary = reference_dictionary()
+
+    # event: prefix → WHEN SATISFIED
+    ctx_event = ContextGraph.from_dict({"when": "event:door-opened"})
+    inq_event = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_event), ctx_event)
+    assert inq_event.get(Question.WHEN).status is InquiryStatus.SATISFIED
+
+    # criterion: prefix → WHEN SATISFIED
+    ctx_crit = ContextGraph.from_dict({"when": "criterion:approval-granted"})
+    inq_crit = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_crit), ctx_crit)
+    assert inq_crit.get(Question.WHEN).status is InquiryStatus.SATISFIED
+
+    # Arbitrary string without prefix → WHEN NOT_APPLICABLE (fail closed)
+    ctx_plain = ContextGraph.from_dict({"when": "approval-granted"})
+    inq_plain = InquiryEngine().query(forms, dictionary.candidates(forms, ctx_plain), ctx_plain)
+    assert inq_plain.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE

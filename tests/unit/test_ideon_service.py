@@ -10,6 +10,7 @@ from af.domain.ideons import (
     IdeonGraph,
     IdeonIdentity,
     IdeonKind,
+    NodeKind,
     Property,
 )
 from af.domain.ideons.dictionary import LogicDictionary
@@ -467,3 +468,129 @@ def test_interpretation_graph_is_surface_bound() -> None:
         InterpretRequest("the bank sat on", "source-a", "internal-test-fixture")
     )
     assert same_surface_a.ideon_revision != different_surface.ideon_revision
+
+
+def test_temporal_qualification_linked_to_predicate_via_edge() -> None:
+    """End-to-end: the temporal-qualification node is connected to each predicate
+    SENSE node via a 'qualifies-predicate' IdeonEdge in the resolved graph.
+    The node carries 'when-kind', 'when-value', and 'tense' properties.
+    This proves the temporal qualification is structurally attached to the
+    proposition it qualifies, not floating in isolation."""
+    from af.domain.ideons import IdeonEdge  # noqa: F401
+
+    service, store = reference_service()
+    ctx = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-01-01T00:00:00Z"}
+    )
+
+    record = service.interpret(
+        InterpretRequest("sat on the bank", "fixture:tq-edge", "internal-test-fixture", ctx)
+    )
+    graph = store.resolve(
+        next(r for r in store.revisions(record.ideon_key) if r.revision == record.ideon_revision)
+    )
+
+    # Temporal-qualification node must be present with tense, when-kind, when-value
+    tq_node = next((n for n in graph.nodes if n.node_id == "temporal-qualification"), None)
+    assert tq_node is not None
+    prop_by_name = {p.name: p.value for p in tq_node.properties}
+    assert prop_by_name["when-kind"] == "timestamp"
+    assert "tense" in prop_by_name
+
+    # Must have at least one 'qualifies-predicate' edge from temporal-qualification
+    tq_edges = [
+        e for e in graph.edges
+        if e.source == "temporal-qualification" and e.relation == "qualifies-predicate"
+    ]
+    assert tq_edges, "temporal-qualification must be linked to at least one predicate node"
+    # Each target must be a SENSE node (predicate)
+    node_by_id = {n.node_id: n for n in graph.nodes}
+    for edge in tq_edges:
+        target_node = node_by_id[edge.target]
+        assert target_node.kind is NodeKind.SENSE
+
+
+def test_temporal_qualification_tense_past_present_projected() -> None:
+    """End-to-end: past/present/projected tense is correctly stored in the graph
+    when a reference_when is supplied alongside an event timestamp.
+    Different reference times produce different tense values and different revisions."""
+    from datetime import UTC, datetime
+
+    from af.domain.ideons.temporal import WhenCondition, WhenKind
+
+    service, store = reference_service()
+    ctx_river = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-06-01T00:00:00Z"}
+    )
+
+    ref_past = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 7, 1, tzinfo=UTC))
+    ref_same = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 6, 1, tzinfo=UTC))
+    ref_future = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 5, 1, tzinfo=UTC))
+
+    def get_tense(ref: WhenCondition) -> str:
+        rec = service.interpret(
+            InterpretRequest(
+                "sat on the bank",
+                f"fixture:tense-{ref.instant.date() if ref.instant else 'x'}",
+                "internal-test-fixture",
+                ctx_river,
+                reference_when=ref,
+            )
+        )
+        g = store.resolve(
+            next(r for r in store.revisions(rec.ideon_key) if r.revision == rec.ideon_revision)
+        )
+        tq = next((n for n in g.nodes if n.node_id == "temporal-qualification"), None)
+        assert tq is not None
+        return next(p.value for p in tq.properties if p.name == "tense")
+
+    assert get_tense(ref_past) == "was"
+    assert get_tense(ref_same) == "is"
+    assert get_tense(ref_future) == "projected"
+
+
+def test_temporal_qualification_with_non_timestamp_condition() -> None:
+    """End-to-end: a criterion condition in context.when produces a temporal-qualification
+    node with when-kind=criterion (no datetime required).
+    The WHEN satisfaction and graph edge are verified through interpret() and resolve()."""
+    service, store = reference_service()
+    ctx = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "when": "criterion:task-approved"}
+    )
+
+    record = service.interpret(
+        InterpretRequest("sat on the bank", "fixture:criterion-tq", "internal-test-fixture", ctx)
+    )
+    assert record.inquiries.get(Question.WHEN).status is InquiryStatus.SATISFIED
+
+    graph = store.resolve(
+        next(r for r in store.revisions(record.ideon_key) if r.revision == record.ideon_revision)
+    )
+    tq_node = next((n for n in graph.nodes if n.node_id == "temporal-qualification"), None)
+    assert tq_node is not None
+    prop_by_name = {p.name: p.value for p in tq_node.properties}
+    assert prop_by_name["when-kind"] == "criterion"
+    assert prop_by_name["when-value"] == "task-approved"
+    assert "tense" in prop_by_name
+
+    # Edge from temporal-qualification to predicate SENSE node
+    tq_edges = [e for e in graph.edges if e.source == "temporal-qualification"]
+    assert tq_edges, "criterion temporal-qualification must be linked to predicate"
+
+
+def test_temporal_qualification_absent_when_invalid_context_when() -> None:
+    """A plain (non-prefixed) context.when string fails closed: WHEN stays NOT_APPLICABLE,
+    no temporal-qualification node is added, no edges are created."""
+    service, store = reference_service()
+    ctx = ContextGraph.from_dict({"actor": "alice", "domain": "river", "when": "task-approved"})
+
+    record = service.interpret(
+        InterpretRequest("sat on the bank", "fixture:invalid-when", "internal-test-fixture", ctx)
+    )
+    assert record.inquiries.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+
+    graph = store.resolve(
+        next(r for r in store.revisions(record.ideon_key) if r.revision == record.ideon_revision)
+    )
+    assert not any(n.node_id == "temporal-qualification" for n in graph.nodes)
+    assert not any(e.relation == "qualifies-predicate" for e in graph.edges)

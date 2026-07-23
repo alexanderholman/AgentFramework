@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from af.domain.ideons import (
     IdentityRole,
+    IdeonEdge,
     IdeonGraph,
     IdeonIdentity,
     IdeonKind,
@@ -17,7 +18,7 @@ from af.domain.ideons import (
 )
 from af.domain.ideons.dictionary import LogicDictionary
 from af.domain.ideons.forms import LosslessFormEncoder
-from af.domain.ideons.inquiry import DecisionEngine, InquiryEngine
+from af.domain.ideons.inquiry import DecisionEngine, InquiryEngine, _parse_when_expression
 from af.domain.ideons.principia import SetStack
 from af.domain.ideons.records import (
     CandidateSet,
@@ -31,6 +32,37 @@ from af.domain.ideons.records import (
     Question,
     ShouldAssessment,
 )
+from af.domain.ideons.temporal import (
+    Tense,
+    WhenCondition,
+    WhenKind,
+    render_tense,
+)
+
+
+def _make_when_condition_from_context(context: ContextGraph) -> WhenCondition | None:
+    """Extract a validated ``WhenCondition`` from context fields, fail-closed.
+
+    Priority:
+    1. ``context.time`` — validated as a timezone-aware ISO 8601 timestamp.
+    2. ``context.when`` — validated as a ``kind:expression`` string.
+
+    Returns ``None`` when neither field is valid.
+    """
+    from datetime import datetime
+
+    time_val = context.get("time")
+    if time_val is not None:
+        try:
+            dt = datetime.fromisoformat(time_val)
+            if dt.tzinfo is not None:
+                return WhenCondition(WhenKind.TIMESTAMP, instant=dt)
+        except (ValueError, OverflowError):
+            pass
+    when_val = context.get("when")
+    if when_val is not None:
+        return _parse_when_expression(when_val)
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +74,13 @@ class InterpretRequest:
     should: ShouldAssessment | None = None
     action_requested: bool = False
     media_complete: bool = True
+    reference_when: WhenCondition | None = None
+    """Optional reference temporal perspective for tense computation.
+
+    When provided alongside a timestamp or condition in ``context``, the engine
+    computes ``WAS / IS / PROJECTED`` by calling ``render_tense(event, reference_when)``.
+    When absent, the tense defaults to ``IS`` (present/observational perspective).
+    """
 
     def __post_init__(self) -> None:
         if not isinstance(self.surface, str) or not self.surface:
@@ -50,6 +89,10 @@ class InterpretRequest:
             raise ValueError("source id must not be empty")
         if not self.rights:
             raise ValueError("rights declaration must not be empty")
+        if self.reference_when is not None and not isinstance(
+            self.reference_when, WhenCondition
+        ):
+            raise TypeError("reference_when must be a WhenCondition or None")
 
 
 class IdeonService:
@@ -118,6 +161,7 @@ class IdeonService:
         *,
         source_id: str | None = None,
         rights: str | None = None,
+        reference_when: WhenCondition | None = None,
     ) -> IdeonGraph:
         """Build an interpretation graph for the supplied utterance.
 
@@ -128,17 +172,23 @@ class IdeonService:
         explicitly declared via ``IdeonIdentity``; use ``InterpretationRecord`` for the
         occurrence-level provenance (source, rights, span).
 
-        When WHEN is satisfied a typed ``temporal-qualification`` node is added to the
-        graph, attaching ``WhenCondition``-compatible properties (``when-kind``,
-        ``when-value``) to the interpretation rather than leaving temporal context
-        as an untyped string in the generic context node only.
+        When WHEN is satisfied, a typed ``temporal-qualification`` node is added with
+        ``when-kind``, ``when-value``, and ``tense`` properties.  The tense is computed
+        by ``render_tense(event_when, reference_when)`` when a reference perspective is
+        supplied and the kinds are comparable; otherwise it defaults to ``IS``
+        (observational/present perspective).  A directed ``IdeonEdge`` with relation
+        ``qualifies-predicate`` connects the ``temporal-qualification`` node to each
+        predicate (action/state/relation) SENSE node in the graph, making the temporal
+        qualification structurally attached to the proposition it qualifies.
         """
         nodes: list[IdeonNode] = []
+        edges: list[IdeonEdge] = []
         roles: list[IdentityRole] = []
         order: list[int] = []
         roots: list[str] = []
         selected_keys: list[int] = []
         unresolved_identity: list[Property] = []
+        predicate_node_ids: list[str] = []  # SENSE nodes for predicates (action/state/relation)
         for form_index, candidate_set in enumerate(candidates):
             form = forms.forms[form_index]
             form_node_id = f"form-{form_index}"
@@ -183,6 +233,8 @@ class IdeonService:
                 )
                 order.append(ref.key)
                 selected_keys.append(ref.key)
+                if candidate.entry.semantic_type in {"action", "state", "relation"}:
+                    predicate_node_ids.append(node_id)
 
         nodes.append(
             IdeonNode(
@@ -193,27 +245,62 @@ class IdeonService:
         )
 
         # Add a typed temporal-qualification node when WHEN is satisfied.
-        # This applies the WhenCondition model globally to the interpretation graph
-        # rather than leaving the temporal context as an untyped string only.
+        # The node carries ``when-kind``, ``when-value``, and ``tense`` properties,
+        # and is linked to every predicate SENSE node via a ``qualifies-predicate`` edge.
         when_result = inquiry.get(Question.WHEN)
         if when_result.status is InquiryStatus.SATISFIED:
-            tq_props: list[Property] = []
-            time_val = context.get("time")
-            when_val = context.get("when")
-            if time_val:
-                tq_props.extend([
-                    Property("when-kind", "timestamp"),
-                    Property("when-value", time_val),
-                ])
-            elif when_val:
-                tq_props.extend([
-                    Property("when-kind", "criterion"),
-                    Property("when-value", when_val),
-                ])
-            if tq_props:
+            event_when = _make_when_condition_from_context(context)
+            if event_when is not None:
+                import contextlib
+
+                # Determine tense: compare against reference_when if available.
+                tense = Tense.IS
+                if reference_when is not None:
+                    with contextlib.suppress(ValueError):
+                        tense = render_tense(event_when, reference_when)
+
+                # Build the WhenCondition representation for graph properties.
+                when_value: str
+                if event_when.kind is WhenKind.TIMESTAMP:
+                    when_value = event_when.instant.isoformat() if event_when.instant else ""
+                elif event_when.kind is WhenKind.INTERVAL:
+                    start = (
+                        event_when.interval_start.isoformat()
+                        if event_when.interval_start
+                        else ""
+                    )
+                    end = (
+                        event_when.interval_end.isoformat()
+                        if event_when.interval_end
+                        else ""
+                    )
+                    when_value = f"{start},{end}"
+                else:
+                    when_value = event_when.expression or ""
+
+                tq_node_id = "temporal-qualification"
                 nodes.append(
-                    IdeonNode("temporal-qualification", NodeKind.VALUE, properties=tuple(tq_props))
+                    IdeonNode(
+                        tq_node_id,
+                        NodeKind.VALUE,
+                        properties=(
+                            Property("tense", tense.value),
+                            Property("when-kind", event_when.kind.value),
+                            Property("when-value", when_value),
+                        ),
+                    )
                 )
+                # Attach temporal qualification to each predicate SENSE node.
+                for pred_id in predicate_node_ids:
+                    edges.append(
+                        IdeonEdge(
+                            source=tq_node_id,
+                            relation="qualifies-predicate",
+                            target=pred_id,
+                            source_role="temporal-qualification",
+                            target_role="predicate",
+                        )
+                    )
 
         opening_ids = tuple(
             f"{result.question.value}:{result.role or 'unspecified'}"
@@ -250,6 +337,7 @@ class IdeonService:
         return IdeonGraph(
             identity=identity,
             nodes=tuple(nodes),
+            edges=tuple(edges),
             openings=opening_ids,
             annotations=tuple(annotations),
             provenance=tuple(provenance),
@@ -290,6 +378,7 @@ class IdeonService:
             inquiry,
             source_id=request.source_id,
             rights=request.rights,
+            reference_when=request.reference_when,
         )
         ref = self.intern(graph)
         selected = tuple(
