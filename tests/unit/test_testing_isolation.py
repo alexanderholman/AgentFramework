@@ -42,9 +42,8 @@ def test_process_state_guard_detects_and_restores_environment() -> None:
     key = "AF_TEST_PROCESS_STATE_GUARD_SECRET"
     previous = os.environ.pop(key, None)
     try:
-        with pytest.raises(ProcessStateLeak) as captured:
-            with ProcessStateGuard():
-                os.environ[key] = "must-not-appear-in-error"
+        with pytest.raises(ProcessStateLeak) as captured, ProcessStateGuard():
+            os.environ[key] = "must-not-appear-in-error"
 
         assert captured.value.surfaces == ("environment",)
         assert key not in os.environ
@@ -60,10 +59,9 @@ def test_process_state_guard_restores_working_directory_and_warning_policy(
     original = os.getcwd()
     target = os.fspath(tmp_path)
 
-    with pytest.raises(ProcessStateLeak) as captured:
-        with ProcessStateGuard():
-            os.chdir(target)
-            warnings.filterwarnings("ignore", message="af-test-isolation")
+    with pytest.raises(ProcessStateLeak) as captured, ProcessStateGuard():
+        os.chdir(target)
+        warnings.filterwarnings("ignore", message="af-test-isolation")
 
     assert os.getcwd() == original
     assert captured.value.surfaces == ("warnings", "working-directory")
@@ -79,10 +77,9 @@ def test_process_state_guard_detects_new_live_threads_without_disclosing_names()
 
     thread = threading.Thread(target=worker, name="sensitive-thread-name")
     try:
-        with pytest.raises(ProcessStateLeak) as captured:
-            with ProcessStateGuard():
-                thread.start()
-                assert started.wait(timeout=2)
+        with pytest.raises(ProcessStateLeak) as captured, ProcessStateGuard():
+            thread.start()
+            assert started.wait(timeout=2)
 
         assert captured.value.surfaces == ("threads",)
         assert "sensitive-thread-name" not in str(captured.value)
