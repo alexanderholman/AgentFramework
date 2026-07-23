@@ -982,3 +982,42 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #020 - Closed Scope-Issue Status Refresh
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Issue #9 closed by the scoped-container work integrated from pull request #51
+- Final pre-publication review of release blocker descriptions against current GitHub state
+
+### Outputs
+- Updated the graceful-shutdown next action and implementation order to treat issue #9 as the
+  completed scoped-lifetime foundation while keeping issue #10 lifecycle work blocked
+- Preserved the canonical gate policy digest because only current state/next-action guidance
+  changed; the complete manifest digest now binds the refreshed text
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 72 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 544 passed with 90.07 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Manifest SHA-256: `0c961d5c7ed6309c567876fbf2ccba54bdd7a01f197a6b84a629e65c8ee4ca10`
+- Policy SHA-256: `9f9dfb0d3621390654253c60aae169a76fb35f28f0f6ced69fa772f03592ae50`
+- Sdist SHA-256: `00a30cb265817c3dcc0823a5e1da115d4906e6d596e39279478625546ab32f0b`
+- Wheel SHA-256: `8fb5124dfbe508c5392fe46ff7c25977460a32f2cc60f453a3f7611380ba3eb6`
+
+### Issues Encountered
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Closed scope issue: https://github.com/alexanderholman/AgentFramework/issues/9
+- Remaining lifecycle issue: https://github.com/alexanderholman/AgentFramework/issues/10
+- Script: `[SCRIPT:af-dev]`
+
+---
