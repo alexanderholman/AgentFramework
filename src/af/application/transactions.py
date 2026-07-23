@@ -64,8 +64,6 @@ class TransactionMiddleware:
         if not callable(getattr(transaction, "__aenter__", None)) or not callable(
             getattr(transaction, "__aexit__", None)
         ):
-            raise InvalidDispatchContract(
-                "transaction resolver returned an invalid async boundary"
-            )
+            raise InvalidDispatchContract("transaction resolver returned an invalid async boundary")
         async with transaction:
             return await call_next(request)
