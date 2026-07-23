@@ -25,8 +25,16 @@ from af.testing.fakes import (
     FakeSubsystems,
     FakeTransport,
 )
+from af.testing.isolation import (
+    ApplicationLeakReport,
+    ProcessStateGuard,
+    ProcessStateLeak,
+    assert_test_application_clean,
+    inspect_test_application,
+)
 
 __all__ = (
+    "ApplicationLeakReport",
     "BindingOverride",
     "ConformanceCase",
     "ConformanceEvidence",
@@ -46,8 +54,12 @@ __all__ = (
     "FakeSubsystems",
     "FakeTransport",
     "IntegrationUnavailable",
+    "ProcessStateGuard",
+    "ProcessStateLeak",
     "ProviderConformanceSuite",
     "RealServiceHook",
     "TestApplication",
     "TestApplicationBuilder",
+    "assert_test_application_clean",
+    "inspect_test_application",
 )
