@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
+import tests.fixtures.conformance_extension as fixture
 from af.testing import (
     ConformanceEvidence,
     IntegrationUnavailable,
     TestApplicationBuilder,
 )
-from tests.fixtures import conformance_extension as fixture
 
 
 def test_external_fixture_package_runs_provider_and_driver_conformance() -> None:
