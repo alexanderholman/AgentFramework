@@ -56,6 +56,12 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
+      - name: Materialize formatter output
+        run: |
+          uv run ruff format \
+            src/af/application/structured_ideons.py \
+            tests/unit/test_ideon_structured_runtime.py
+
       - name: Run the repeatable AF quality gate
         shell: bash
         run: |
@@ -73,5 +79,7 @@ jobs:
           path: |
             af-quality.log
             af-quality.status
+            src/af/application/structured_ideons.py
+            tests/unit/test_ideon_structured_runtime.py
           if-no-files-found: error
           retention-days: 1
