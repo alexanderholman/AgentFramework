@@ -94,3 +94,5 @@ jobs:
 
           git commit -m "chore: merge master into production MVP readiness"
           git push origin HEAD:feature/production-mvp-readiness
+
+# This second push exists so the branch-local workflow definition is present before its trigger.
