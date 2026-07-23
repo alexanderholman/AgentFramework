@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import StrEnum
 from inspect import isasyncgenfunction, isawaitable, iscoroutinefunction
 from types import MappingProxyType
-from typing import Generic, TypeVar, cast
+from typing import cast
 
 from af.framework.container import ProviderRegistrar, Qualifier, ServiceProvider
 from af.framework.managers import (
@@ -38,7 +38,6 @@ __all__ = (
 _NAME = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
 _MAX_PROBES = 128
 _MAX_HOOKS = 128
-T = TypeVar("T")
 _UNSET = object()
 
 
@@ -144,7 +143,7 @@ class RealServiceHook:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class DriverConformanceFixture(Generic[T]):
+class DriverConformanceFixture[T]:
     """One named-driver registration exercised through a real AF Manager."""
 
     name: str
@@ -284,7 +283,7 @@ def run_provider_conformance(fixture: ProviderConformanceFixture) -> Conformance
     return ConformanceReport(fixture.name, ConformanceKind.PROVIDER, tuple(checks))
 
 
-class _DriverFixtureProvider(ServiceProvider, Generic[T]):
+class _DriverFixtureProvider[T](ServiceProvider):
     provider_id = "af.testing.conformance.driver"
 
     def __init__(
@@ -311,13 +310,13 @@ class _DriverFixtureProvider(ServiceProvider, Generic[T]):
 
 
 @dataclass(slots=True)
-class _DriverRun(Generic[T]):
+class _DriverRun[T]:
     manager: Manager[T]
     driver: T
     observation: object | None
 
 
-def _run_driver_once(fixture: DriverConformanceFixture[T]) -> _DriverRun[T]:
+def _run_driver_once[T](fixture: DriverConformanceFixture[T]) -> _DriverRun[T]:
     registration = fixture.registration_factory()
     if not isinstance(registration, DriverRegistration):
         raise ConformanceFailure("driver factory did not return a DriverRegistration")
@@ -400,7 +399,7 @@ def _run_real_service_hooks(
     return tuple(completed), ()
 
 
-def run_driver_conformance(
+def run_driver_conformance[T](
     fixture: DriverConformanceFixture[T],
     *,
     include_real_services: bool = False,
