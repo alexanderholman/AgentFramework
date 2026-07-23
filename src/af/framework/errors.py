@@ -146,12 +146,12 @@ class InvalidSelectionProposal(AFError, ValueError):
 
 
 class InvalidBinding(AFError):
-    """Raised when a dependency binding would be replaced implicitly."""
+    """Raised when a dependency-container declaration or lifecycle contract is invalid."""
 
 
 def _safe_type_label(value: object) -> str:
     if type(value) is str:
-        return "tag" if value.startswith("tag:") else "string token"
+        return "string token"
     candidate = value if isinstance(value, type) else type(value)
     try:
         label = type.__getattribute__(candidate, "__name__")
@@ -163,8 +163,9 @@ def _safe_type_label(value: object) -> str:
 
 
 class ServiceNotBound(AFError):
-    def __init__(self, token: object) -> None:
-        super().__init__(f"service is not bound: {_safe_type_label(token)}")
+    def __init__(self, token: object, *, tag: bool = False) -> None:
+        label = "tag" if tag else _safe_type_label(token)
+        super().__init__(f"service is not bound: {label}")
 
 
 class CircularDependency(AFError):

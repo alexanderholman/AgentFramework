@@ -417,6 +417,13 @@ def test_service_not_bound_message_is_informative_and_non_secret_bearing() -> No
     assert "string token" in str_message
     assert "secret-service-name" not in str_message
 
+    # The tag namespace does not reserve prefixes from ordinary string tokens.
+    with pytest.raises(ServiceNotBound) as prefixed_str_err:
+        container.resolve_token("tag:secret-service-name")
+    prefixed_str_message = str(prefixed_str_err.value)
+    assert "string token" in prefixed_str_message
+    assert "tag:secret-service-name" not in prefixed_str_message
+
     # Type token miss: still uses the type name (existing behaviour)
     with pytest.raises(ServiceNotBound) as type_err:
         container.resolve(Store)

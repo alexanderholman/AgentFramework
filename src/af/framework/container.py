@@ -615,7 +615,7 @@ class Container:
         with self._registry_lock:
             keys = self._tags.get(name)
         if keys is None:
-            raise ServiceNotBound(f"tag:{name}")
+            raise ServiceNotBound(name, tag=True)
         return tuple(self.resolve_token(key) for key in keys)
 
     async def resolve_tagged_async(self, name: str) -> tuple[object, ...]:
@@ -624,7 +624,7 @@ class Container:
         with self._registry_lock:
             keys = self._tags.get(name)
         if keys is None:
-            raise ServiceNotBound(f"tag:{name}")
+            raise ServiceNotBound(name, tag=True)
         values: list[object] = []
         for key in keys:
             values.append(await self.resolve_token_async(key))
