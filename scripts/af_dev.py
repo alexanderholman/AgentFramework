@@ -184,7 +184,7 @@ def main() -> int:
         try:
             commands = pin_locked_uv_commands(commands, resolve_locked_uv_executable())
         except RuntimeError as exc:
-            print(str(exc), file=sys.stderr)
+            print(f"action '{args.action}' failed: {exc}", file=sys.stderr)
             return 2
 
     environment = execution_environment(args.action)

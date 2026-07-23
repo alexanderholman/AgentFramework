@@ -211,10 +211,26 @@ def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypat
     inherited_bin = tmp_path / "inherited-bin"
     inherited_bin.mkdir()
     uv_log = tmp_path / "uv.log"
+    uv_probe = tmp_path / "uv_probe.py"
+    uv_probe.write_text(
+        "import pathlib\n"
+        "import sys\n"
+        "pathlib.Path(sys.argv[1]).write_text(\n"
+        "    pathlib.Path(sys.argv[1]).read_text(encoding='utf-8') + sys.argv[2] + '\\n'\n"
+        "    if pathlib.Path(sys.argv[1]).exists()\n"
+        "    else sys.argv[2] + '\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n",
+        encoding="utf-8",
+    )
 
     inherited_uv = inherited_bin / "uv"
     inherited_uv.write_text(
-        f"#!/bin/sh\nprintf 'inherited\\n' >> {shlex.quote(str(uv_log))}\nexit 0\n",
+        (
+            "#!/bin/sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(uv_probe))} "
+            f"{shlex.quote(str(uv_log))} inherited\n"
+        ),
         encoding="utf-8",
     )
     inherited_uv.chmod(0o755)
@@ -223,10 +239,18 @@ def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypat
     project_bin.mkdir(parents=True)
     project_uv = project_bin / "uv"
     project_uv.write_text(
-        f"#!/bin/sh\nprintf 'project\\n' >> {shlex.quote(str(uv_log))}\nexit 33\n",
+        (
+            "#!/bin/sh\n"
+            f"{shlex.quote(sys.executable)} {shlex.quote(str(uv_probe))} "
+            f"{shlex.quote(str(uv_log))} project\n"
+            "exit 33\n"
+        ),
         encoding="utf-8",
     )
     project_uv.chmod(0o755)
+
+    assert module.ACTIONS["check"][0][0] == "uv"
+    assert module.ACTIONS["package"][0][0] == "uv"
 
     monkeypatch.setattr(module, "PROJECT_ENV_BIN", project_bin)
     monkeypatch.setenv("PATH", os.pathsep.join((str(inherited_bin), "/usr/bin", "/bin")))
