@@ -43,7 +43,7 @@ class _ValueProvider(ServiceProvider):
 
 def test_provider_conformance_runs_each_case_in_a_fresh_owned_application() -> None:
     provider_names: list[str] = []
-    application_ids: list[int] = []
+    applications: list[object] = []
 
     def provider() -> ServiceProvider:
         name = f"provider-{len(provider_names) + 1}"
@@ -51,8 +51,8 @@ def test_provider_conformance_runs_each_case_in_a_fresh_owned_application() -> N
         return _ValueProvider(name)
 
     def inspect(application: TestApplication) -> None:
-        application_ids.append(id(application.application))
-        assert application.resolve(_Value).name in provider_names
+        applications.append(application.application)
+        assert application.resolve(_Value).name == f"provider-{len(applications)}"
 
     suite = ProviderConformanceSuite(
         "value-provider",
@@ -72,7 +72,7 @@ def test_provider_conformance_runs_each_case_in_a_fresh_owned_application() -> N
     assert report.evidence is ConformanceEvidence.ISOLATED
     assert report.certifies_production is False
     assert provider_names == ["provider-1", "provider-2"]
-    assert len(set(application_ids)) == 2
+    assert applications[0] is not applications[1]
 
 
 def test_driver_conformance_uses_a_fresh_fixture_and_always_cleans_up() -> None:
