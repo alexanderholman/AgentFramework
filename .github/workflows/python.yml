@@ -56,5 +56,17 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Run the repeatable AF quality gate
-        run: python scripts/af_dev.py --action check --execute
+      - name: Validate release metadata
+        run: uv run --locked --extra dev python scripts/release_gates.py --action validate
+
+      - name: Check formatting
+        run: uv run --locked --extra dev ruff format --check src/af tests scripts
+
+      - name: Lint
+        run: uv run --locked --extra dev ruff check src/af tests scripts
+
+      - name: Typecheck
+        run: uv run --locked --extra dev mypy src
+
+      - name: Focused test host tests
+        run: uv run --locked --extra dev pytest tests/unit/test_testing_application.py -q
