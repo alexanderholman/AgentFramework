@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -116,6 +117,7 @@ def test_locked_release_environment_rejects_inherited_tool_overrides(
     assert environment["UV_NO_CONFIG"] == "1"
     assert environment["UV_OFFLINE"] == "1"
     assert environment["UV_PYTHON"] == sys.executable
+    assert environment["PATH"].split(os.pathsep)[0] == str(module.PROJECT_ENV_BIN)
     assert environment["AF_APPEND_ONLY_BASE_REF"] == "origin/master"
     assert "GITHUB_TOKEN" not in environment
     assert "PIP_INDEX_URL" not in environment
@@ -123,6 +125,15 @@ def test_locked_release_environment_rejects_inherited_tool_overrides(
     assert "UV_INDEX_URL" not in environment
     assert "UV_NO_SYNC" not in environment
     assert "UV_PROJECT_ENVIRONMENT" not in environment
+    nested_python = subprocess.run(
+        ["python3", "-c", "import yaml"],
+        capture_output=True,
+        check=False,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+    )
+    assert nested_python.returncode == 0
 
 
 def test_release_report_json_uses_the_sanitized_locked_launcher() -> None:
@@ -142,6 +153,11 @@ def test_release_report_json_uses_the_sanitized_locked_launcher() -> None:
 
 
 def test_locked_release_launcher_ignores_inherited_uv_environment(tmp_path: Path) -> None:
+    uv_executable = shutil.which("uv")
+    assert uv_executable is not None
+    isolated_bin = tmp_path / "bin"
+    isolated_bin.mkdir()
+    (isolated_bin / "uv").symlink_to(Path(uv_executable).resolve())
     invalid_environment = tmp_path / "not-a-virtual-environment"
     invalid_environment.write_text("invalid\n", encoding="utf-8")
     environment = os.environ.copy()
@@ -153,6 +169,7 @@ def test_locked_release_launcher_ignores_inherited_uv_environment(tmp_path: Path
             "UV_PROJECT_ENVIRONMENT": str(invalid_environment),
         }
     )
+    environment["PATH"] = os.pathsep.join((str(isolated_bin), "/usr/bin", "/bin"))
 
     completed = subprocess.run(
         [sys.executable, str(AF_DEV), "--action", "release-validate", "--execute"],

@@ -36,7 +36,7 @@ run_test() {
 
 warn_if_agents_dir_missing() {
     local agent_count
-    agent_count=$(uv run python3 - <<'PY'
+    agent_count=$(run_uv_python python3 - <<'PY'
 from pathlib import Path
 
 import yaml
@@ -58,7 +58,7 @@ check_agent_files_exist() {
         return 0
     fi
 
-    uv run python3 - <<'PY'
+    run_uv_python python3 - <<'PY'
 from pathlib import Path
 
 import yaml

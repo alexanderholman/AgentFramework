@@ -11,6 +11,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ENV_BIN = PROJECT_ROOT / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+
 LOCKED_RUN = (
     "uv",
     "run",
@@ -125,6 +128,10 @@ def execution_environment(action: str) -> dict[str, str]:
             "UV_OFFLINE": "1",
             "UV_PYTHON": sys.executable,
         }
+    )
+    inherited_path = environment.get("PATH", "")
+    environment["PATH"] = os.pathsep.join(
+        part for part in (str(PROJECT_ENV_BIN), inherited_path) if part
     )
     return environment
 
