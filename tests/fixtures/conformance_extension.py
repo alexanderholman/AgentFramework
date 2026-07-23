@@ -81,6 +81,7 @@ PROVIDER_SUITE = ProviderConformanceSuite(
 class FixtureDriver:
     """Minimal stateful driver used to prove per-case fixture isolation."""
 
+    serial: int
     values: dict[str, str] = field(default_factory=dict)
 
     def write(self, key: str, value: str) -> None:
@@ -92,13 +93,13 @@ class FixtureDriver:
 
 @contextmanager
 def driver_fixture() -> Iterator[FixtureDriver]:
-    driver = FixtureDriver()
-    identity = id(driver)
-    DRIVER_EVENTS.append(("open", identity))
+    serial = (len(DRIVER_EVENTS) // 2) + 1
+    driver = FixtureDriver(serial)
+    DRIVER_EVENTS.append(("open", serial))
     try:
         yield driver
     finally:
-        DRIVER_EVENTS.append(("close", identity))
+        DRIVER_EVENTS.append(("close", serial))
 
 
 def _writes_and_reads(driver: FixtureDriver) -> None:
