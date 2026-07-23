@@ -799,3 +799,58 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #016 - Production-MVP Readiness Contract and Artifact Gate
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Request to prepare the focused pull request needed to define a safe production MVP
+- Existing roadmap authority in issue #3, release-certification scope in issue #34, and active
+  lifecycle implementation in issue #9 that this work was required not to duplicate
+- Independent security, package, automation, and documentation reviews of the complete branch
+
+### Outputs
+- Defined a canonical, explicitly not-ready private profile with one Linux node, tenant,
+  SQLite database, live MCP-stdio process, deterministic routes, quiesced CLI maintenance, and
+  no AF network listener or model execution
+- Added 33 blocking release declarations spanning scope, quality, runtime, artifacts, security,
+  SQLite durability/recovery, operations, accessibility boundaries, evidence, and approval
+- Added declaration-only deterministic reporting with canonical-policy and full-manifest
+  digests, explicit non-certification output, strict YAML/path handling, and stable exit codes
+- Added a clean-commit package gate that builds wheel-from-sdist with locked uv-offline tooling,
+  strictly validates metadata, licenses, entry points, archive members, source bytes, and
+  `RECORD`, installs the exact wheel, loads both installed targets, and smokes deterministic
+  routes outside the checkout
+- Added SPEC-016 through SPEC-018 and DEC-030 through DEC-032 to preserve the narrowed scope,
+  candidate sequencing, external evidence boundary, and honest no-egress limitations
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 69 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 332 passed with 90.67 percent coverage
+- Node protocol test: 1 passed
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Clean commit-snapshot package validation: passed for `0.1.0a0`
+- Sdist SHA-256: `e17700db491717e0eadb5edceacc181ec3f236b62a924f0ee11f251cb7201fe0`
+- Wheel SHA-256: `3c2747275e2c68aed95b42a021976b341dbc9fc00fac2f0853cbd31c107c5f8f`
+
+### Issues Encountered
+- Final review found that the first policy encoded loopback despite excluding every listener;
+  the canonical profile was corrected to stdio-only with one database/process in total
+- Hatchling emits optional dependencies and explicit extras in core metadata; package identity
+  validation was extended to compare those normalized declarations and explicit license files
+- Build isolation language initially overstated no-egress guarantees; documentation now limits
+  the implemented claim to uv-offline/no-config execution and keeps OS no-egress blocked
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Roadmap: https://github.com/alexanderholman/AgentFramework/issues/3
+- Release certification: https://github.com/alexanderholman/AgentFramework/issues/34
+- Script: `[SCRIPT:af-dev]`
+
+---
