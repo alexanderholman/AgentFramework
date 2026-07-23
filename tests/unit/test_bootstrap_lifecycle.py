@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import af.bootstrap as bootstrap
+from af.application.ideons import IdeonService
 from af.bootstrap import create_application, create_application_async
 from af.config import Settings
 from af.framework.application import Application, ApplicationState
@@ -78,6 +79,28 @@ def test_default_sqlite_is_boot_owned_application_state_and_disposed_once(
             root.close()
         else:
             lifecycle.shutdown()
+
+
+def test_default_ideon_runtime_is_constructed_during_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    original_create = bootstrap.create_reference_ideon_runtime
+
+    def create_runtime():
+        events.append("create")
+        return original_create()
+
+    monkeypatch.setattr(bootstrap, "create_reference_ideon_runtime", create_runtime)
+    lifecycle = Application(Container(), (bootstrap._IdeonProvider(None),))
+
+    lifecycle.register()
+
+    assert events == []
+    lifecycle.boot()
+    assert events == ["create"]
+    assert isinstance(lifecycle.container.resolve(IdeonService), IdeonService)
+    lifecycle.shutdown()
 
 
 def test_application_assembly_failure_rolls_back_started_providers() -> None:
