@@ -56,5 +56,20 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Run the repeatable AF quality gate
-        run: python scripts/af_dev.py --action check --execute
+      - name: Verify Ruff formatting
+        run: uv run ruff format --check src/af tests scripts
+
+      - name: Run Ruff lint
+        run: uv run ruff check src/af tests scripts
+
+      - name: Run strict mypy
+        run: uv run mypy src
+
+      - name: Run tests and branch coverage
+        run: uv run pytest --cov=af --cov-report=term-missing --cov-fail-under=90
+
+      - name: Run Node route-gate tests
+        run: node --test tests/opencode/route-gate.test.mjs
+
+      - name: Validate append-only governance
+        run: ./validate_agents.sh
