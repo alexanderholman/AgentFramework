@@ -70,3 +70,6 @@ class Database:
             expire_on_commit=False,
         )
         Base.metadata.create_all(self.engine)
+
+    def close(self) -> None:
+        self.engine.dispose()

@@ -7,10 +7,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import af.interfaces.http as http_module
 from af.bootstrap import AFApplication, create_application
 from af.config import Settings
 from af.domain.tasks import Task
-from af.framework.errors import InvalidPrompt
+from af.framework.application import ApplicationState
+from af.framework.container import Container, ProviderRegistrar, ServiceProvider
+from af.framework.errors import InvalidPrompt, InvalidProviderConfiguration
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
@@ -1111,3 +1114,73 @@ def test_graphql_sanitizes_task_presentation_failures() -> None:
     assert response.status_code == 200
     assert "SECRET" not in response.text
     assert response.json()["errors"][0]["message"] == "internal GraphQL adapter error"
+
+
+def test_http_host_owns_only_internally_created_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owned = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    monkeypatch.setattr(http_module, "create_application", lambda: owned)
+    with TestClient(create_http_app(), base_url=f"http://{TEST_HOST}"):
+        pass
+    assert owned.lifecycle.state is ApplicationState.SHUTDOWN
+
+    injected = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    with TestClient(create_http_app(injected), base_url=f"http://{TEST_HOST}"):
+        pass
+    assert injected.lifecycle.state is ApplicationState.SERVING
+    injected.shutdown()
+
+
+def test_http_construction_failure_closes_internally_created_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owned = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    monkeypatch.setattr(http_module, "create_application", lambda: owned)
+
+    with pytest.raises(InvalidProviderConfiguration):
+        create_http_app(bind_host="0.0.0.0", allowed_hosts=())
+
+    assert owned.lifecycle.state is ApplicationState.SHUTDOWN
+
+
+def test_http_construction_failure_bridges_owned_async_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Provider(ServiceProvider):
+        provider_id = "test.http-async-shutdown"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            del registrar
+
+        async def shutdown(self, container: Container) -> None:
+            del container
+            events.append("shutdown")
+
+    owned = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(Provider(),),
+    )
+    monkeypatch.setattr(http_module, "create_application", lambda: owned)
+
+    with pytest.raises(InvalidProviderConfiguration):
+        create_http_app(bind_host="0.0.0.0", allowed_hosts=())
+
+    assert owned.lifecycle.state is ApplicationState.SHUTDOWN
+    assert events == ["shutdown"]

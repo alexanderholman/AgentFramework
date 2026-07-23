@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
@@ -18,9 +21,16 @@ from af.domain.classifiers import (
 from af.domain.procedures import CharacterCountProcedure, HelloProcedure
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier
-from af.framework.container import Container, Scope, ServiceProvider
+from af.framework.application import Application
+from af.framework.container import (
+    Container,
+    ProviderRegistrar,
+    ProviderResourceRegistry,
+    Scope,
+    ServiceProvider,
+)
 from af.framework.contracts import ReuseStore, Selector, TraceRepository
-from af.framework.errors import InvalidProviderConfiguration
+from af.framework.errors import AsyncLifecycleRequired, InvalidProviderConfiguration
 from af.framework.pipeline import PipelineAgent
 from af.framework.reuse import InMemoryReuseStore, ReplayRegressionGate
 from af.framework.routing import LadderRouter, ProcedureRegistry, RoutingPolicy
@@ -37,6 +47,8 @@ from af.infrastructure.tracing import SqlAlchemyTraceRepository
 
 
 class _PersistenceProvider(ServiceProvider):
+    provider_id = "af.persistence"
+
     def __init__(
         self,
         settings: Settings,
@@ -47,25 +59,58 @@ class _PersistenceProvider(ServiceProvider):
         self._task_repository = task_repository
         self._trace_repository = trace_repository
 
-    def register(self, container: Container) -> None:
+    def register(self, container: ProviderRegistrar) -> None:
+        if self._task_repository is not None:
+            task_repository = self._task_repository
+            container.bind(
+                TaskRepository,
+                lambda _: task_repository,
+                scope=Scope.APPLICATION,
+                owned=False,
+            )
+        if self._trace_repository is not None:
+            trace_repository = self._trace_repository
+            container.bind(
+                TraceRepository,
+                lambda _: trace_repository,
+                scope=Scope.APPLICATION,
+                owned=False,
+            )
         if self._task_repository is not None and self._trace_repository is not None:
-            container.instance(TaskRepository, self._task_repository)
-            container.instance(TraceRepository, self._trace_repository)
             return
 
-        database = Database(self._settings.database_url)
-        container.instance(Database, database)
-        container.instance(
-            TaskRepository,
-            self._task_repository or SqlAlchemyTaskRepository(database),
+        container.bind(
+            Database,
+            lambda _: Database(self._settings.database_url),
+            scope=Scope.APPLICATION,
         )
-        container.instance(
-            TraceRepository,
-            self._trace_repository or SqlAlchemyTraceRepository(database),
-        )
+        if self._task_repository is None:
+            container.bind(
+                TaskRepository,
+                lambda current: SqlAlchemyTaskRepository(current.resolve(Database)),
+                scope=Scope.APPLICATION,
+            )
+        if self._trace_repository is None:
+            container.bind(
+                TraceRepository,
+                lambda current: SqlAlchemyTraceRepository(current.resolve(Database)),
+                scope=Scope.APPLICATION,
+            )
+
+    def boot(
+        self,
+        container: Container,
+        resources: ProviderResourceRegistry,
+    ) -> None:
+        del resources
+        if self._task_repository is None or self._trace_repository is None:
+            container.resolve(Database)
 
 
 class _FrameworkProvider(ServiceProvider):
+    provider_id = "af.framework"
+    dependencies = ("af.persistence",)
+
     def __init__(
         self,
         reuse_store: ReuseStore | None,
@@ -78,47 +123,114 @@ class _FrameworkProvider(ServiceProvider):
         self._selector_metadata = selector_metadata
         self._selector_confidence_threshold = selector_confidence_threshold
 
-    def register(self, container: Container) -> None:
-        registry = ProcedureRegistry()
-        registry.register(HelloProcedure())
-        registry.register(CharacterCountProcedure())
-        classifier = ClassifierChain(
-            [HelloClassifier(), CharacterCountClassifier(), UnknownClassifier()]
+    def register(self, container: ProviderRegistrar) -> None:
+        def create_registry(_: object) -> ProcedureRegistry:
+            registry = ProcedureRegistry()
+            registry.register(HelloProcedure())
+            registry.register(CharacterCountProcedure())
+            return registry
+
+        def create_classifier(_: object) -> ClassifierChain:
+            return ClassifierChain(
+                [HelloClassifier(), CharacterCountClassifier(), UnknownClassifier()]
+            )
+
+        container.bind(
+            ProcedureRegistry,
+            create_registry,
+            scope=Scope.APPLICATION,
         )
-        verifier = DeterministicVerifier()
-        reuse_store = self._reuse_store or InMemoryReuseStore()
-        traces = container.resolve_token(TraceRepository)
-        router = LadderRouter(registry, RoutingPolicy())
-        agent = PipelineAgent(
-            classifier=classifier,
-            registry=registry,
-            router=router,
-            verifier=verifier,
-            traces=traces,
-            regression_gate=ReplayRegressionGate(),
-            reuse_store=reuse_store,
-            selector=self._selector,
-            selector_metadata=self._selector_metadata,
-            selector_confidence_threshold=self._selector_confidence_threshold,
+        container.bind(
+            ClassifierChain,
+            create_classifier,
+            scope=Scope.APPLICATION,
         )
-        container.instance(ProcedureRegistry, registry)
-        container.instance(DeterministicVerifier, verifier)
-        container.instance(ReuseStore, reuse_store)
-        container.instance(PipelineAgent, agent)
-        container.instance(DeterministicAgentRouter, DeterministicAgentRouter())
+        container.bind(
+            DeterministicVerifier,
+            lambda _: DeterministicVerifier(),
+            scope=Scope.APPLICATION,
+        )
+        if self._reuse_store is None:
+            container.bind(
+                ReuseStore,
+                lambda _: InMemoryReuseStore(),
+                scope=Scope.APPLICATION,
+            )
+        else:
+            reuse_store = self._reuse_store
+            container.bind(
+                ReuseStore,
+                lambda _: reuse_store,
+                scope=Scope.APPLICATION,
+                owned=False,
+            )
+        container.bind(
+            LadderRouter,
+            lambda current: LadderRouter(
+                current.resolve(ProcedureRegistry),
+                RoutingPolicy(),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            PipelineAgent,
+            lambda current: PipelineAgent(
+                classifier=current.resolve(ClassifierChain),
+                registry=current.resolve(ProcedureRegistry),
+                router=current.resolve(LadderRouter),
+                verifier=current.resolve(DeterministicVerifier),
+                traces=current.resolve_token(TraceRepository),
+                regression_gate=ReplayRegressionGate(),
+                reuse_store=current.resolve_token(ReuseStore),
+                selector=self._selector,
+                selector_metadata=self._selector_metadata,
+                selector_confidence_threshold=self._selector_confidence_threshold,
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            DeterministicAgentRouter,
+            lambda _: DeterministicAgentRouter(),
+            scope=Scope.APPLICATION,
+        )
 
 
 class _IdeonProvider(ServiceProvider):
+    provider_id = "af.ideons"
+
     def __init__(self, service: IdeonService | None) -> None:
         self._service = service
 
-    def register(self, container: Container) -> None:
-        service = self._service or create_reference_ideon_runtime().service
-        container.instance(IdeonService, service)
+    def register(self, container: ProviderRegistrar) -> None:
+        if self._service is not None:
+            service = self._service
+            container.bind(
+                IdeonService,
+                lambda _: service,
+                scope=Scope.APPLICATION,
+                owned=False,
+            )
+            return
+        container.bind(
+            IdeonService,
+            lambda _: create_reference_ideon_runtime().service,
+            scope=Scope.APPLICATION,
+        )
+
+    def boot(
+        self,
+        container: Container,
+        resources: ProviderResourceRegistry,
+    ) -> None:
+        del resources
+        container.resolve(IdeonService)
 
 
 class _ApplicationProvider(ServiceProvider):
-    def register(self, container: Container) -> None:
+    provider_id = "af.application"
+    dependencies = ("af.framework", "af.ideons")
+
+    def register(self, container: ProviderRegistrar) -> None:
         container.bind(
             IdeonController,
             lambda current: IdeonController(current.resolve(IdeonService)),
@@ -130,7 +242,7 @@ class _ApplicationProvider(ServiceProvider):
                 current.resolve(PipelineAgent),
                 current.resolve_token(TaskRepository),
             ),
-            scope=Scope.SINGLETON,
+            scope=Scope.APPLICATION,
         )
         container.bind(
             TaskController,
@@ -140,7 +252,7 @@ class _ApplicationProvider(ServiceProvider):
         container.bind(
             AgentRoutingService,
             lambda current: AgentRoutingService(current.resolve(DeterministicAgentRouter)),
-            scope=Scope.SINGLETON,
+            scope=Scope.APPLICATION,
         )
         container.bind(
             AgentRoutingController,
@@ -160,6 +272,20 @@ class AFApplication:
     verifier: DeterministicVerifier
     agent_routes: AgentRoutingController
     ideons: IdeonController
+    lifecycle: Application
+
+    def shutdown(self) -> None:
+        _shutdown_lifecycle_at_sync_boundary(self.lifecycle)
+
+    async def ashutdown(self) -> None:
+        await self.lifecycle.ashutdown()
+
+
+@dataclass(frozen=True, slots=True)
+class _ApplicationBuild:
+    settings: Settings
+    config: ConfigSnapshot
+    lifecycle: Application
 
 
 def create_application(
@@ -171,8 +297,75 @@ def create_application(
     ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
+    providers: Iterable[ServiceProvider] = (),
 ) -> AFApplication:
     """Build an isolated application; tests and hosts can replace any provider."""
+    _assert_sync_bootstrap_context()
+    build = _prepare_application(
+        settings=settings,
+        config=config,
+        task_repository=task_repository,
+        trace_repository=trace_repository,
+        ideon_service=ideon_service,
+        reuse_store=reuse_store,
+        selector=selector,
+        providers=providers,
+    )
+    try:
+        build.lifecycle.start()
+        return _assemble_application(build)
+    except BaseException:
+        with suppress(BaseException):
+            _shutdown_lifecycle_at_sync_boundary(build.lifecycle)
+        raise
+
+
+async def create_application_async(
+    *,
+    settings: Settings | None = None,
+    config: ConfigSnapshot | None = None,
+    task_repository: TaskRepository | None = None,
+    trace_repository: TraceRepository | None = None,
+    ideon_service: IdeonService | None = None,
+    reuse_store: ReuseStore | None = None,
+    selector: Selector | None = None,
+    providers: Iterable[ServiceProvider] = (),
+) -> AFApplication:
+    """Build an application whose providers may use asynchronous lifecycle hooks."""
+    build = _prepare_application(
+        settings=settings,
+        config=config,
+        task_repository=task_repository,
+        trace_repository=trace_repository,
+        ideon_service=ideon_service,
+        reuse_store=reuse_store,
+        selector=selector,
+        providers=providers,
+    )
+    try:
+        await build.lifecycle.astart()
+        return _assemble_application(build)
+    except BaseException:
+        try:
+            await build.lifecycle.ashutdown()
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            pass
+        raise
+
+
+def _prepare_application(
+    *,
+    settings: Settings | None,
+    config: ConfigSnapshot | None,
+    task_repository: TaskRepository | None,
+    trace_repository: TraceRepository | None,
+    ideon_service: IdeonService | None,
+    reuse_store: ReuseStore | None,
+    selector: Selector | None,
+    providers: Iterable[ServiceProvider],
+) -> _ApplicationBuild:
     if settings is not None and config is not None:
         raise ValueError("provide settings or config, not both")
     resolved_config = (
@@ -195,10 +388,10 @@ def create_application(
         raise InvalidProviderConfiguration(
             "remote selector requires AF_ALLOW_REMOTE_INFERENCE=true"
         )
-    container = Container()
-    container.instance(Settings, resolved_settings)
-    container.instance(ConfigSnapshot, resolved_config)
-    providers: tuple[ServiceProvider, ...] = (
+    root = Container()
+    root.instance(Settings, resolved_settings)
+    root.instance(ConfigSnapshot, resolved_config)
+    application_providers: tuple[ServiceProvider, ...] = (
         _PersistenceProvider(resolved_settings, task_repository, trace_repository),
         _FrameworkProvider(
             reuse_store,
@@ -208,16 +401,33 @@ def create_application(
         ),
         _IdeonProvider(ideon_service),
         _ApplicationProvider(),
+        *tuple(providers),
     )
-    for provider in providers:
-        provider.register(container)
-    container.freeze()
-    for provider in providers:
-        provider.boot(container)
+    lifecycle = Application(root, application_providers)
+    return _ApplicationBuild(resolved_settings, resolved_config, lifecycle)
 
+
+def _shutdown_lifecycle_at_sync_boundary(lifecycle: Application) -> None:
+    try:
+        lifecycle.shutdown()
+        return
+    except AsyncLifecycleRequired:
+        pass
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(lifecycle.ashutdown())
+        return
+    raise AsyncLifecycleRequired(
+        "application shutdown requires awaiting AFApplication.ashutdown"
+    ) from None
+
+
+def _assemble_application(build: _ApplicationBuild) -> AFApplication:
+    container = build.lifecycle.container
     return AFApplication(
-        settings=resolved_settings,
-        config=resolved_config,
+        settings=build.settings,
+        config=build.config,
         container=container,
         agent=container.resolve(PipelineAgent),
         tasks=container.resolve(TaskController),
@@ -225,6 +435,7 @@ def create_application(
         verifier=container.resolve(DeterministicVerifier),
         agent_routes=container.resolve(AgentRoutingController),
         ideons=container.resolve(IdeonController),
+        lifecycle=build.lifecycle,
     )
 
 
@@ -255,3 +466,13 @@ def _resolve_selector_confidence_threshold(value: object) -> float:
             "selector confidence threshold must be a finite probability in [0, 1]"
         )
     return threshold
+
+
+def _assert_sync_bootstrap_context() -> None:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    raise AsyncLifecycleRequired(
+        "create_application cannot run inside an event loop; use create_application_async"
+    )

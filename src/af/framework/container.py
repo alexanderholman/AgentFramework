@@ -6,10 +6,10 @@ import asyncio
 import builtins
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from contextlib import AbstractContextManager, nullcontext, suppress
+from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from contextvars import (
     Context as ContextVarsContext,
 )
@@ -52,6 +52,8 @@ __all__ = (
     "Container",
     "Factory",
     "InvocationKind",
+    "ProviderRegistrar",
+    "ProviderResourceRegistry",
     "Qualifier",
     "Resolver",
     "Scope",
@@ -158,6 +160,56 @@ class Resolver(Protocol):
     def resolve_tagged(self, name: str) -> tuple[object, ...]: ...
 
     async def resolve_tagged_async(self, name: str) -> tuple[object, ...]: ...
+
+
+class ProviderRegistrar(Protocol):
+    """Declaration-only capability exposed during provider registration."""
+
+    def bind(
+        self,
+        token: object,
+        factory: Factory,
+        *,
+        qualifier: Qualifier | str | None = None,
+        scope: Scope = Scope.TRANSIENT,
+        owned: bool = True,
+        replace: bool = False,
+    ) -> None: ...
+
+    def bind_async(
+        self,
+        token: object,
+        factory: AsyncFactory,
+        *,
+        qualifier: Qualifier | str | None = None,
+        scope: Scope = Scope.TRANSIENT,
+        owned: bool = True,
+        replace: bool = False,
+    ) -> None: ...
+
+    def alias(
+        self,
+        alias: object,
+        target: object,
+        *,
+        alias_qualifier: Qualifier | str | None = None,
+        target_qualifier: Qualifier | str | None = None,
+        replace: bool = False,
+    ) -> None: ...
+
+    def tag(self, name: str, *services: ServiceKey | object) -> None: ...
+
+
+class ProviderResourceRegistry(Protocol):
+    """Boot-time ownership boundary supplied by the application lifecycle."""
+
+    def own(
+        self,
+        value: object,
+        *,
+        close: Callable[[], object] | None = None,
+        aclose: Callable[[], Awaitable[object]] | None = None,
+    ) -> None: ...
 
 
 class _ResolverLease:
@@ -360,6 +412,9 @@ class Container:
         self._children: list[Container] = []
         self._resources: list[_ResourceRecord] = []
         self._owned_resource_ids: set[int] = set()
+        self._ownership_lock = RLock()
+        self._container_owned_resources: dict[int, object] = {}
+        self._externally_owned_resources: dict[int, object] = {}
         self._state = "active"
         self._condition = Condition(RLock())
         self._inflight: set[object] = set()
@@ -367,6 +422,7 @@ class Container:
         self._async_inflight: dict[object, asyncio.Task[object]] = {}
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._frozen = False
+        self._provider_registration_depth = 0
         self._active_factories = 0
         self._active_constructions = 0
         self._close_future: Future[None] = Future()
@@ -499,6 +555,10 @@ class Container:
         owned: bool = False,
         replace: bool = False,
     ) -> None:
+        if self._root()._provider_registration_depth:
+            raise InvalidBinding("instances cannot be adopted during provider registration")
+        if self._root()._frozen:
+            raise InvalidBinding("container declarations are frozen")
         self._assert_registry_owner()
         key = self._key(token, qualifier)
         binding = _Binding(
@@ -732,6 +792,8 @@ class Container:
 
     def freeze(self) -> None:
         self._assert_registry_mutation_outside_factory()
+        if self._root()._provider_registration_depth:
+            raise InvalidBinding("providers cannot freeze container declarations")
         if self._parent is not None:
             raise InvalidBinding("only the root container can freeze declarations")
         with self._registry_lock, self._condition:
@@ -758,6 +820,56 @@ class Container:
             self._contextual.clear()
             self._contextual.update(canonical_contextual)
             self._frozen = True
+
+    @contextmanager
+    def provider_registration(self) -> Iterator[None]:
+        """Block resolution and scope creation while providers declare bindings."""
+        if self._parent is not None:
+            raise InvalidBinding("provider registration requires the root container")
+        self._assert_active()
+        with self._registry_lock:
+            if self._frozen:
+                raise InvalidBinding("container declarations are frozen")
+            self._provider_registration_depth += 1
+        try:
+            yield
+        finally:
+            with self._registry_lock:
+                self._provider_registration_depth -= 1
+
+    def requires_async_disposal(self) -> bool:
+        """Return whether closing this hierarchy requires ``aclose``."""
+        return self._requires_async_disposal()
+
+    @property
+    def shutdown_timeout(self) -> float:
+        """Maximum cleanup budget configured for this container hierarchy."""
+        return self._shutdown_timeout
+
+    def owns_resource(self, value: object) -> bool:
+        """Return whether this container hierarchy already owns ``value``."""
+        return self._root()._owns_resource_in_tree(value)
+
+    def claim_external_resource(self, value: object) -> bool:
+        """Reserve ``value`` for a lifecycle owner outside the container."""
+        root = self._root()
+        resource_id = id(value)
+        with root._ownership_lock:
+            if root._container_owned_resources.get(resource_id) is value:
+                return False
+            existing = root._externally_owned_resources.get(resource_id)
+            if existing is not None:
+                return existing is value
+            root._externally_owned_resources[resource_id] = value
+            return True
+
+    def release_external_resource(self, value: object) -> None:
+        """Release a prior external lifecycle reservation."""
+        root = self._root()
+        resource_id = id(value)
+        with root._ownership_lock:
+            if root._externally_owned_resources.get(resource_id) is value:
+                root._externally_owned_resources.pop(resource_id, None)
 
     def resolve(self, token: type[T], *, qualifier: Qualifier | str | None = None) -> T:
         self._begin_resolution()
@@ -1410,6 +1522,8 @@ class Container:
         with self._condition:
             if not self._hierarchy_is_active():
                 raise ScopeDisposed("container scope is disposed")
+            if self._root()._provider_registration_depth:
+                raise InvalidBinding("services cannot be resolved during provider registration")
             if self._scope is Scope.INVOCATION and not self._has_invocation_authority():
                 raise ScopeUnavailable("invocation scope must be entered as the active invocation")
             self._active_resolutions += 1
@@ -1548,7 +1662,7 @@ class Container:
         )
 
     def _record_resource_locked(self, resource: _ResourceRecord | None) -> None:
-        if resource is None or id(resource.value) in self._owned_resource_ids:
+        if resource is None:
             return
         if (
             resource.loop is not None
@@ -1556,7 +1670,16 @@ class Container:
             and self._async_loop is not resource.loop
         ):
             raise InvalidBinding("asynchronous resource belongs to another event loop")
-        self._owned_resource_ids.add(id(resource.value))
+        root = self._root()
+        resource_id = id(resource.value)
+        with root._ownership_lock:
+            if root._externally_owned_resources.get(resource_id) is resource.value:
+                return
+            existing = root._container_owned_resources.get(resource_id)
+            if existing is resource.value or resource_id in self._owned_resource_ids:
+                return
+            root._container_owned_resources[resource_id] = resource.value
+        self._owned_resource_ids.add(resource_id)
         self._resources.append(resource)
         if resource.loop is not None:
             self._async_loop = resource.loop
@@ -1691,6 +1814,8 @@ class Container:
             root._active_factories -= 1
 
     def _assert_scope_creation_allowed(self) -> None:
+        if self._root()._provider_registration_depth:
+            raise InvalidBinding("lifecycle scopes cannot be created during provider registration")
         if any(
             frame.active and frame.registry is self._registry_identity
             for frame in _RESOLUTION_STACK.get()
@@ -2404,11 +2529,20 @@ class Container:
             child._assert_async_cleanup_loop(loop)
 
     def _assert_shutdown_outside_factory(self) -> None:
+        if self._root()._provider_registration_depth:
+            raise InvalidBinding("providers cannot close the container during registration")
         if any(
             frame.active and frame.registry is self._registry_identity
             for frame in _RESOLUTION_STACK.get()
         ):
             raise InvalidBinding("factory cannot close its container hierarchy")
+
+    def _owns_resource_in_tree(self, value: object) -> bool:
+        with self._condition:
+            if any(resource.value is value for resource in self._resources):
+                return True
+            children = tuple(self._children)
+        return any(child._owns_resource_in_tree(value) for child in children)
 
     @staticmethod
     def _current_asyncio_task() -> asyncio.Task[Any] | None:
@@ -2468,6 +2602,16 @@ class Container:
         parent = self._parent
         is_root = parent is None
         with self._condition:
+            root = self._root()
+            with root._ownership_lock:
+                if is_root:
+                    root._container_owned_resources.clear()
+                    root._externally_owned_resources.clear()
+                else:
+                    for resource in self._resources:
+                        resource_id = id(resource.value)
+                        if root._container_owned_resources.get(resource_id) is resource.value:
+                            root._container_owned_resources.pop(resource_id, None)
             if isinstance(failure, asyncio.CancelledError):
                 self._disposal_cancelled = True
             elif isinstance(failure, ScopeDisposalError):
@@ -2753,11 +2897,24 @@ class Container:
 
 
 class ServiceProvider(ABC):
-    """Register related bindings; `boot` is available for post-registration hooks."""
+    """Declarative bindings plus explicit application lifecycle hooks."""
+
+    provider_id: str = ""
+    dependencies: tuple[str, ...] = ()
+    deferred: bool = False
 
     @abstractmethod
-    def register(self, container: Container) -> None:
+    def register(self, container: ProviderRegistrar) -> None:
         raise NotImplementedError
 
-    def boot(self, container: Container) -> None:
+    def boot(
+        self,
+        container: Container,
+        resources: ProviderResourceRegistry,
+    ) -> None | Awaitable[None]:
+        del container, resources
+        return None
+
+    def shutdown(self, container: Container) -> None | Awaitable[None]:
         del container
+        return None
