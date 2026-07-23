@@ -742,6 +742,7 @@ def test_package_build_is_a_dry_run_without_execute() -> None:
     assert completed.returncode == 0
     assert "create a clean commit-derived source snapshot with git archive" in completed.stdout
     assert "uv build --offline --no-sources --no-build-isolation" in completed.stdout
+    assert "--no-create-gitignore" not in completed.stdout
     assert "build the wheel from that sdist" in completed.stdout
     assert "uv pip install --offline --no-deps" in completed.stdout
     assert "Dry run only. Re-run with --execute to build and smoke the package." in completed.stdout

@@ -132,7 +132,6 @@ UV_BUILD_OPTIONS = (
     "--offline",
     "--no-sources",
     "--no-build-isolation",
-    "--no-create-gitignore",
 )
 PACKAGE_SMOKE = """
 from importlib.metadata import distributions
