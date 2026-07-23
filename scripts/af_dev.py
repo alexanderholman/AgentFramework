@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -102,6 +103,31 @@ def render(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
+def resolve_locked_uv_executable() -> str:
+    """Resolve the uv executable from the inherited PATH for locked release actions."""
+    inherited_path = os.environ.get("PATH", "")
+    executable = shutil.which("uv", path=inherited_path)
+    if executable is None:
+        raise RuntimeError("locked release actions require uv on inherited PATH")
+    try:
+        return str(Path(executable).resolve(strict=True))
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("locked release actions require an accessible uv executable") from exc
+
+
+def pin_locked_uv_commands(
+    commands: tuple[tuple[str, ...], ...], uv_executable: str
+) -> tuple[tuple[str, ...], ...]:
+    """Pin uv invocations in locked commands to a resolved absolute executable path."""
+    pinned: list[tuple[str, ...]] = []
+    for command in commands:
+        if command and command[0] == "uv":
+            pinned.append((uv_executable, *command[1:]))
+        else:
+            pinned.append(command)
+    return tuple(pinned)
+
+
 def execution_environment(action: str) -> dict[str, str]:
     """Return a bounded environment for locked release actions."""
     if action not in LOCKED_ACTIONS:
@@ -153,6 +179,13 @@ def main() -> int:
     if not args.execute:
         print("Dry run only. Re-run with --execute to apply.")
         return 0
+
+    if args.action in LOCKED_ACTIONS:
+        try:
+            commands = pin_locked_uv_commands(commands, resolve_locked_uv_executable())
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
 
     environment = execution_environment(args.action)
 

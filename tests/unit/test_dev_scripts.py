@@ -184,6 +184,68 @@ def test_locked_release_launcher_ignores_inherited_uv_environment(tmp_path: Path
     assert "production certification not performed" in completed.stdout
 
 
+def test_locked_release_uv_resolution_prefers_inherited_path(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_af_dev()
+    inherited_bin = tmp_path / "inherited-bin"
+    inherited_bin.mkdir()
+    inherited_uv = inherited_bin / "uv"
+    inherited_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    inherited_uv.chmod(0o755)
+
+    project_bin = tmp_path / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    project_uv = project_bin / "uv"
+    project_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    project_uv.chmod(0o755)
+
+    monkeypatch.setattr(module, "PROJECT_ENV_BIN", project_bin)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(inherited_bin), "/usr/bin", "/bin")))
+
+    assert module.resolve_locked_uv_executable() == str(inherited_uv.resolve())
+
+
+def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypatch: Any) -> None:
+    module = _load_af_dev()
+    inherited_bin = tmp_path / "inherited-bin"
+    inherited_bin.mkdir()
+    uv_log = tmp_path / "uv.log"
+
+    inherited_uv = inherited_bin / "uv"
+    inherited_uv.write_text(
+        f"#!/bin/sh\nprintf 'inherited\\n' >> {shlex.quote(str(uv_log))}\nexit 0\n",
+        encoding="utf-8",
+    )
+    inherited_uv.chmod(0o755)
+
+    project_bin = tmp_path / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    project_uv = project_bin / "uv"
+    project_uv.write_text(
+        f"#!/bin/sh\nprintf 'project\\n' >> {shlex.quote(str(uv_log))}\nexit 33\n",
+        encoding="utf-8",
+    )
+    project_uv.chmod(0o755)
+
+    monkeypatch.setattr(module, "PROJECT_ENV_BIN", project_bin)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(inherited_bin), "/usr/bin", "/bin")))
+    monkeypatch.setattr(
+        module,
+        "ACTIONS",
+        {
+            **module.ACTIONS,
+            "check": (("uv", "--version"),),
+            "package": (("uv", "--version"),),
+        },
+    )
+    monkeypatch.setattr(sys, "argv", [str(AF_DEV), "--action", "check", "--execute"])
+    assert module.main() == 0
+    monkeypatch.setattr(sys, "argv", [str(AF_DEV), "--action", "package", "--execute"])
+    assert module.main() == 0
+    assert uv_log.read_text(encoding="utf-8").splitlines() == ["inherited", "inherited"]
+
+
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:
     capture_script = tmp_path / "capture_args.py"
     captured_path = tmp_path / "captured.json"
