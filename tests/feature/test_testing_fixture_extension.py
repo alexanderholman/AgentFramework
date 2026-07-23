@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-
 import tests.fixtures.conformance_extension as fixture
+
 from af.testing import (
     ConformanceEvidence,
     IntegrationUnavailable,
