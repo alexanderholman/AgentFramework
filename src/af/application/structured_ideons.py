@@ -362,10 +362,24 @@ def _predicate_node_ids(candidates: tuple[CandidateSet, ...]) -> tuple[str, ...]
     return tuple(node_ids)
 
 
-def _remove_legacy_temporal_projection(
+def _reconcile_temporal_projection(
     graph: IdeonGraph,
+    inquiry: InquiryState,
 ) -> tuple[tuple[IdeonNode, ...], tuple[IdeonEdge, ...]]:
-    """Remove the flat temporal node superseded by the recursive WHEN expression."""
+    """Keep global perspective for one WHEN leaf, remove it for composed WHEN values.
+
+    The base service's temporal node still carries useful global WAS / IS / PROJECTED
+    perspective for one condition relative to a supplied reference.  For a recursive WHEN
+    group, however, that flat projection can only represent one member and historically
+    marked ordinary multiplicity as contested.  The recursive expression is authoritative
+    for groups, so the lossy flat node and its edges are removed in that case.
+    """
+
+    when_result = inquiry.get(Question.WHEN)
+    if not isinstance(when_result, StructuredInquiryResult) or when_result.expression is None:
+        raise TypeError("temporal reconciliation requires a structured WHEN result")
+    if not isinstance(when_result.expression, QGroup):
+        return graph.nodes, graph.edges
 
     nodes = tuple(node for node in graph.nodes if node.node_id != _LEGACY_TEMPORAL_NODE_ID)
     edges = tuple(
@@ -412,7 +426,7 @@ class StructuredIdeonService(IdeonService):
             rights=rights,
             reference_when=reference_when,
         )
-        base_nodes, base_edges = _remove_legacy_temporal_projection(graph)
+        base_nodes, base_edges = _reconcile_temporal_projection(graph, inquiry)
         inquiry_nodes, inquiry_edges = project_inquiry_expressions(inquiry)
 
         when_result = inquiry.get(Question.WHEN)
