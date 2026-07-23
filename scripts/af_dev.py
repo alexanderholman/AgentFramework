@@ -156,10 +156,10 @@ def _is_nested_release_package_command(command: Sequence[str]) -> bool:
     )
 
 
-def pin_locked_uv_commands(
+def pin_locked_release_tools(
     commands: tuple[tuple[str, ...], ...], uv_executable: str, git_executable: str | None = None
 ) -> tuple[tuple[str, ...], ...]:
-    """Pin uv invocations in locked commands to a resolved absolute executable path."""
+    """Pin trusted release executables; git is optional unless nested package commands exist."""
     pinned: list[tuple[str, ...]] = []
     for command in commands:
         updated = command
@@ -236,7 +236,7 @@ def main() -> int:
                 if any(_is_nested_release_package_command(command) for command in commands)
                 else None
             )
-            commands = pin_locked_uv_commands(
+            commands = pin_locked_release_tools(
                 commands, resolve_locked_uv_executable(), git_executable
             )
         except RuntimeError as exc:

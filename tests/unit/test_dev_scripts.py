@@ -333,9 +333,7 @@ def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypat
     assert uv_log.read_text(encoding="utf-8").splitlines() == ["inherited", "inherited"]
 
 
-def test_locked_release_nested_package_uses_only_inherited_uv_and_git(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_nested_package_uses_inherited_executables(tmp_path: Path, monkeypatch: Any) -> None:
     module = _load_af_dev()
     inherited_bin = tmp_path / "inherited-bin"
     inherited_bin.mkdir()

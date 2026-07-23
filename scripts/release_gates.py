@@ -863,7 +863,7 @@ def _release_environment(temporary_root: Path) -> dict[str, str]:
 def build_and_validate_distribution(
     root: Path, uv_command: str = "uv", git_command: str = "git"
 ) -> ArtifactSummary:
-    """Build wheel-from-sdist, install it temporarily, and run deterministic smoke checks."""
+    """Build wheel-from-sdist using resolved absolute uv/git executables, then run smoke checks."""
     try:
         root = root.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
