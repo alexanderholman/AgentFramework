@@ -55,9 +55,10 @@ class WhenKind(StrEnum):
     ORDERING  — a bounded ordering relation relative to a named event or anchor
                 (``expression`` field contains a validated relational expression of the form
                 ``before:<X>``, ``after:<X>``, or ``during:<X>`` where the operator is
-                exactly one of those three keywords and ``<X>`` is a non-empty, non-whitespace
-                anchor; expressions with unknown operators or empty/whitespace-only anchors
-                are rejected by both the parser and the domain invariant).
+                exactly one of ``before``, ``after``, or ``during`` and ``<X>`` is a
+                non-empty, non-whitespace anchor; expressions with unknown operators or
+                empty/whitespace-only anchors are rejected by both the parser and the
+                domain invariant).
     """
 
     TIMESTAMP = "timestamp"
@@ -289,7 +290,7 @@ def parse_when_expression(value: str) -> WhenCondition | None:
         # invariant at the domain level; the parser validates first (fail-closed layer 1).
         op_sep = payload.find(":")
         if op_sep <= 0:
-            # op_sep == -1: no separator; op_sep == 0: empty operator (starts with ':')
+            # -1: no separator found; 0: empty operator (leading colon)
             return None
         operator = payload[:op_sep]
         anchor = payload[op_sep + 1 :]
