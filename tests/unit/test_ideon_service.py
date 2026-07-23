@@ -714,3 +714,74 @@ def test_uncomparable_event_interval_with_timestamp_reference_yields_contested()
         f"got {prop_by_name['tense']!r}"
     )
     assert prop_by_name["when-kind"] == "interval"
+
+
+def test_no_reference_when_yields_unanchored_tense_for_all_when_kinds() -> None:
+    """Regression: absent reference_when must yield tense='unanchored' for every WHEN kind.
+
+    IS is reserved for a justified present/equal standpoint computed by render_tense.
+    event:, criterion:, interval:, and ordering: conditions do not imply present tense
+    by themselves; a timestamp without a reference perspective also has no standpoint.
+    This test covers all four non-trivially-satisfying kinds plus a raw timestamp context.
+    """
+    service, store = reference_service()
+
+    def get_tense_no_ref(ctx: ContextGraph, source_id: str) -> str:
+        rec = service.interpret(
+            InterpretRequest("sat on the bank", source_id, "internal-test-fixture", ctx)
+        )
+        g = store.resolve(
+            next(r for r in store.revisions(rec.ideon_key) if r.revision == rec.ideon_revision)
+        )
+        tq = next((n for n in g.nodes if n.node_id == "temporal-qualification"), None)
+        assert tq is not None, f"temporal-qualification missing for source={source_id!r}"
+        return next(p.value for p in tq.properties if p.name == "tense")
+
+    # EVENT — no reference standpoint → must not infer IS
+    ctx_event = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "when": "event:door-opens"}
+    )
+    tense_event = get_tense_no_ref(ctx_event, "fixture:unanchored-event")
+    assert tense_event == "unanchored", (
+        f"EVENT with no reference must yield tense='unanchored', got {tense_event!r}"
+    )
+
+    # CRITERION — condition clause; does not prove the proposition holds now
+    ctx_criterion = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "when": "criterion:task-approved"}
+    )
+    tense_criterion = get_tense_no_ref(ctx_criterion, "fixture:unanchored-criterion")
+    assert tense_criterion == "unanchored", (
+        f"CRITERION with no reference must yield tense='unanchored', got {tense_criterion!r}"
+    )
+
+    # INTERVAL — time range; standpoint relative to interval is unknown without reference
+    ctx_interval = ContextGraph.from_dict(
+        {
+            "actor": "alice",
+            "domain": "river",
+            "when": "interval:2026-01-01T00:00:00Z,2026-12-31T00:00:00Z",
+        }
+    )
+    tense_interval = get_tense_no_ref(ctx_interval, "fixture:unanchored-interval")
+    assert tense_interval == "unanchored", (
+        f"INTERVAL with no reference must yield tense='unanchored', got {tense_interval!r}"
+    )
+
+    # ORDERING — relational anchor; before/after/during relative to an event is not a tense
+    ctx_ordering = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "when": "ordering:before:release-v1"}
+    )
+    tense_ordering = get_tense_no_ref(ctx_ordering, "fixture:unanchored-ordering")
+    assert tense_ordering == "unanchored", (
+        f"ORDERING with no reference must yield tense='unanchored', got {tense_ordering!r}"
+    )
+
+    # TIMESTAMP — even an exact instant has no standpoint without a declared reference
+    ctx_timestamp = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-06-01T00:00:00Z"}
+    )
+    tense_timestamp = get_tense_no_ref(ctx_timestamp, "fixture:unanchored-timestamp")
+    assert tense_timestamp == "unanchored", (
+        f"TIMESTAMP with no reference must yield tense='unanchored', got {tense_timestamp!r}"
+    )

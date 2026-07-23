@@ -33,7 +33,6 @@ from af.domain.ideons.records import (
     ShouldAssessment,
 )
 from af.domain.ideons.temporal import (
-    Tense,
     WhenCondition,
     WhenKind,
     parse_when_expression,
@@ -81,7 +80,10 @@ class InterpretRequest:
 
     When provided alongside a timestamp or condition in ``context``, the engine
     computes ``WAS / IS / PROJECTED`` by calling ``render_tense(event, reference_when)``.
-    When absent, the tense defaults to ``IS`` (present/observational perspective).
+    When absent, the tense is recorded as ``"unanchored"`` — the WHEN condition is
+    preserved in the graph but no tense standpoint can be asserted without a declared
+    reference.  ``IS`` is only emitted when ``render_tense`` determines a present/equal
+    standpoint from a supplied reference.
     """
 
     def __post_init__(self) -> None:
@@ -175,10 +177,12 @@ class IdeonService:
         When WHEN is satisfied, a typed ``temporal-qualification`` node is added with
         ``when-kind``, ``when-value``, and ``tense`` properties.  The tense is computed
         by ``render_tense(event_when, reference_when)`` when a reference perspective is
-        supplied and the kinds are comparable; otherwise it defaults to ``IS``
-        (observational/present perspective).  A directed ``IdeonEdge`` with relation
-        ``qualifies-predicate`` connects the ``temporal-qualification`` node to each
-        predicate (action/state/relation) SENSE node in the graph, making the temporal
+        supplied and the kinds are comparable.  When no reference perspective is supplied,
+        the tense is ``"unanchored"`` — the WHEN condition is structurally present but no
+        temporal standpoint can be asserted; ``IS`` is reserved for a justified
+        present/equal comparison from a supplied reference.  A directed ``IdeonEdge`` with
+        relation ``qualifies-predicate`` connects the ``temporal-qualification`` node to
+        each predicate (action/state/relation) SENSE node in the graph, making the temporal
         qualification structurally attached to the proposition it qualifies.
         """
         nodes: list[IdeonNode] = []
@@ -251,14 +255,17 @@ class IdeonService:
         # Tense resolution rules:
         # - When ``reference_when`` is supplied and kinds are comparable, ``render_tense``
         #   determines the tense (WAS / IS / PROJECTED).
-        # - When ``reference_when`` is None, the tense defaults to ``IS`` (observational
-        #   perspective with no temporal standpoint declared).
+        # - When ``reference_when`` is None, the tense is ``"unanchored"``: the WHEN
+        #   condition is structurally present but no tense standpoint can be asserted.
+        #   IS is reserved for a justified present/equal standpoint from render_tense;
+        #   event:, criterion:, interval:, and ordering: conditions do not imply present
+        #   tense by themselves, and even a plain timestamp has no standpoint without a
+        #   declared reference.
         # - When ``reference_when`` is supplied but the kinds are incompatible (e.g.
         #   TIMESTAMP event vs CRITERION reference, or INTERVAL vs TIMESTAMP), the tense
         #   is left as ``"contested"`` — the qualification is present but the standpoint
         #   cannot be computed.  The graph node is still emitted so the temporal fact is
-        #   not silently lost; callers must treat a ``tense="contested"`` property as
-        #   unresolved rather than as present-tense IS.
+        #   not silently lost; callers must treat ``tense="contested"`` as unresolved.
         when_result = inquiry.get(Question.WHEN)
         if when_result.status is InquiryStatus.SATISFIED:
             event_when = _make_when_condition_from_context(context)
@@ -266,7 +273,13 @@ class IdeonService:
                 # Determine tense: compare against reference_when if available.
                 tense_value: str
                 if reference_when is None:
-                    tense_value = Tense.IS.value
+                    # No reference perspective declared: the WHEN condition is structurally
+                    # present but the tense is unanchored.  IS is reserved for a justified
+                    # present/equal standpoint confirmed by render_tense; event:, criterion:,
+                    # interval:, and ordering: conditions do not imply present tense by
+                    # themselves, and even a plain timestamp has no standpoint without a
+                    # declared reference.
+                    tense_value = "unanchored"
                 else:
                     try:
                         tense_value = render_tense(event_when, reference_when).value

@@ -103,13 +103,10 @@ def _validate_ordering_expression(expression: str) -> None:
     anchor = expression[sep + 1 :]
     if operator not in _ORDERING_OPERATORS:
         raise ValueError(
-            f"ORDERING operator must be one of {sorted(_ORDERING_OPERATORS)!r}; "
-            f"got {operator!r}"
+            f"ORDERING operator must be one of {sorted(_ORDERING_OPERATORS)!r}; got {operator!r}"
         )
     if not anchor.strip():
-        raise ValueError(
-            "ORDERING expression anchor must be non-empty and non-whitespace"
-        )
+        raise ValueError("ORDERING expression anchor must be non-empty and non-whitespace")
 
 
 @dataclass(frozen=True, slots=True)
