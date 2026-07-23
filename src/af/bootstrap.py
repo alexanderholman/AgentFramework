@@ -202,13 +202,28 @@ class _IdeonProvider(ServiceProvider):
         self._service = service
 
     def register(self, container: ProviderRegistrar) -> None:
-        service = self._service or create_reference_ideon_runtime().service
+        if self._service is not None:
+            service = self._service
+            container.bind(
+                IdeonService,
+                lambda _: service,
+                scope=Scope.APPLICATION,
+                owned=False,
+            )
+            return
         container.bind(
             IdeonService,
-            lambda _: service,
+            lambda _: create_reference_ideon_runtime().service,
             scope=Scope.APPLICATION,
-            owned=False,
         )
+
+    def boot(
+        self,
+        container: Container,
+        resources: ProviderResourceRegistry,
+    ) -> None:
+        del resources
+        container.resolve(IdeonService)
 
 
 class _ApplicationProvider(ServiceProvider):
