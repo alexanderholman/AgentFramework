@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Self, cast
@@ -66,7 +66,7 @@ class BindingOverride:
         )
 
 
-def _value_factory(value: object):
+def _value_factory(value: object) -> Callable[[object], object]:
     def factory(_: object) -> object:
         return value
 
@@ -284,12 +284,11 @@ class TestApplicationBuilder:
 
     def _composition_providers(self) -> tuple[ServiceProvider, ...]:
         declared = tuple(self._providers)
-        custom_ids = tuple(
-            provider_id
-            for provider in declared
-            if type(provider_id := getattr(provider, "provider_id", None)) is str
-            and provider_id
-        )
+        custom_ids: list[str] = []
+        for provider in declared:
+            provider_id = getattr(provider, "provider_id", None)
+            if type(provider_id) is str and provider_id:
+                custom_ids.append(provider_id)
         bus = _BusProvider(
             tuple(self._handlers),
             tuple(self._middleware),
