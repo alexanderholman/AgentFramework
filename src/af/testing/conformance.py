@@ -13,6 +13,7 @@ from typing import Protocol, cast
 from af.framework.application import ApplicationState
 from af.framework.container import ServiceProvider
 from af.testing.application import TestApplication, TestApplicationBuilder
+from af.testing.isolation import ProcessStateGuard, assert_test_application_clean
 
 __all__ = (
     "ConformanceCase",
@@ -185,21 +186,22 @@ class ProviderConformanceSuite:
         if not callable(provider_factory) or not callable(builder_factory):
             raise ValueError("provider conformance factories must be callable")
         for case in self._cases:
-            provider = provider_factory()
-            builder = builder_factory()
-            if not isinstance(provider, ServiceProvider):
-                raise TypeError("provider fixture did not return a ServiceProvider")
-            if not isinstance(builder, TestApplicationBuilder):
-                raise TypeError("builder fixture did not return a TestApplicationBuilder")
-            application = builder.provider(provider).build()
-            try:
-                _run_case(case, application)
-            finally:
+            with ProcessStateGuard():
+                provider = provider_factory()
+                builder = builder_factory()
+                if not isinstance(provider, ServiceProvider):
+                    raise TypeError("provider fixture did not return a ServiceProvider")
+                if not isinstance(builder, TestApplicationBuilder):
+                    raise TypeError("builder fixture did not return a TestApplicationBuilder")
+                application = builder.provider(provider).build()
                 try:
-                    if application.state is not ApplicationState.SHUTDOWN:
-                        application.shutdown()
+                    _run_case(case, application)
                 finally:
-                    application.assert_clean()
+                    try:
+                        if application.state is not ApplicationState.SHUTDOWN:
+                            application.shutdown()
+                    finally:
+                        assert_test_application_clean(application)
         return ConformanceReport(
             self._name,
             tuple(case.name for case in self._cases),
@@ -233,11 +235,12 @@ class DriverConformanceSuite[T]:
         if not callable(fixture_factory):
             raise ValueError("driver fixture factory must be callable")
         for case in self._cases:
-            fixture = fixture_factory()
-            if not isinstance(fixture, AbstractContextManager):
-                raise TypeError("driver fixture did not return a context manager")
-            with fixture as driver:
-                _run_case(case, driver)
+            with ProcessStateGuard():
+                fixture = fixture_factory()
+                if not isinstance(fixture, AbstractContextManager):
+                    raise TypeError("driver fixture did not return a context manager")
+                with fixture as driver:
+                    _run_case(case, driver)
         return ConformanceReport(
             self._name,
             tuple(case.name for case in self._cases),
