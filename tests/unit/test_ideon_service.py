@@ -16,6 +16,7 @@ from af.domain.ideons.dictionary import LogicDictionary
 from af.domain.ideons.records import (
     ContextGraph,
     Decision,
+    InquiryStatus,
     LanguageProfileRef,
     Question,
     SenseEntry,
@@ -369,3 +370,100 @@ def test_declared_equivalent_paraphrases_share_key_but_retain_exact_revisions() 
     assert first.key == paraphrase.key
     assert first.revision != paraphrase.revision
     assert store.resolve(first).annotations != store.resolve(paraphrase).annotations
+
+
+def test_temporal_qualification_node_in_graph_when_when_is_satisfied() -> None:
+    """End-to-end: a valid context.time produces a typed 'temporal-qualification' node
+    in the interpretation graph, proving the WhenCondition model is applied globally.
+    Different temporal contexts produce different graph revisions; an invalid timestamp
+    does not produce a temporal-qualification node (fail-closed)."""
+    service, store = reference_service()
+    ctx_with_time = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "2026-01-01T00:00:00Z"}
+    )
+    ctx_without_time = ContextGraph.from_dict({"actor": "alice", "domain": "river"})
+    ctx_invalid_time = ContextGraph.from_dict(
+        {"actor": "alice", "domain": "river", "time": "not-a-date"}
+    )
+
+    record_time = service.interpret(
+        InterpretRequest(
+            "sat on the bank", "fixture:e2e-time", "internal-test-fixture", ctx_with_time
+        )
+    )
+    record_no_time = service.interpret(
+        InterpretRequest(
+            "sat on the bank", "fixture:e2e-no-time", "internal-test-fixture", ctx_without_time
+        )
+    )
+    record_invalid = service.interpret(
+        InterpretRequest(
+            "sat on the bank", "fixture:e2e-invalid", "internal-test-fixture", ctx_invalid_time
+        )
+    )
+
+    # Valid timestamp produces a different graph revision than no timestamp
+    assert record_time.ideon_revision != record_no_time.ideon_revision
+
+    # The graph with a valid time includes a temporal-qualification node
+    graph_with = store.resolve(
+        next(
+            r for r in store.revisions(record_time.ideon_key)
+            if r.revision == record_time.ideon_revision
+        )
+    )
+    tq_node = next(
+        (node for node in graph_with.nodes if node.node_id == "temporal-qualification"),
+        None,
+    )
+    assert tq_node is not None
+    prop_names = {p.name for p in tq_node.properties}
+    assert "when-kind" in prop_names
+    assert "when-value" in prop_names
+    assert any(p.name == "when-kind" and p.value == "timestamp" for p in tq_node.properties)
+
+    # Graph without timestamp has no temporal-qualification node
+    graph_without = store.resolve(
+        next(
+            r for r in store.revisions(record_no_time.ideon_key)
+            if r.revision == record_no_time.ideon_revision
+        )
+    )
+    assert not any(n.node_id == "temporal-qualification" for n in graph_without.nodes)
+
+    # Invalid timestamp: WHEN fails closed → no temporal-qualification node
+    graph_invalid = store.resolve(
+        next(
+            r for r in store.revisions(record_invalid.ideon_key)
+            if r.revision == record_invalid.ideon_revision
+        )
+    )
+    assert not any(n.node_id == "temporal-qualification" for n in graph_invalid.nodes)
+    # Invalid timestamp leaves WHEN NOT_APPLICABLE (fail-closed)
+    forms_invalid = service.encode_forms("sat on the bank")
+    candidates_invalid = service.lookup_senses(forms_invalid, ctx_invalid_time)
+    inquiry_invalid = service.query_openings(forms_invalid, candidates_invalid, ctx_invalid_time)
+    assert inquiry_invalid.get(Question.WHEN).status is InquiryStatus.NOT_APPLICABLE
+
+
+def test_interpretation_graph_is_surface_bound() -> None:
+    """The interpretation graph includes surface FORM nodes (interpretation graph
+    contract).  Same surface from different sources yields the same revision.
+    Different surfaces (even if semantically related) produce different revisions
+    unless declared equivalent via IdeonIdentity."""
+    service, _ = reference_service()
+
+    # Same surface, different sources: same graph revision (already tested separately)
+    same_surface_a = service.interpret(
+        InterpretRequest("sat on the bank", "source-a", "internal-test-fixture")
+    )
+    same_surface_b = service.interpret(
+        InterpretRequest("sat on the bank", "source-b", "internal-test-fixture")
+    )
+    assert same_surface_a.ideon_revision == same_surface_b.ideon_revision
+
+    # Different word order (different FORM sequence): different revision
+    different_surface = service.interpret(
+        InterpretRequest("the bank sat on", "source-a", "internal-test-fixture")
+    )
+    assert same_surface_a.ideon_revision != different_surface.ideon_revision

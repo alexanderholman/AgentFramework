@@ -25,8 +25,10 @@ from af.domain.ideons.records import (
     DecisionTrace,
     FormSequence,
     InquiryState,
+    InquiryStatus,
     InterpretationRecord,
     LanguageProfileRef,
+    Question,
     ShouldAssessment,
 )
 
@@ -117,6 +119,20 @@ class IdeonService:
         source_id: str | None = None,
         rights: str | None = None,
     ) -> IdeonGraph:
+        """Build an interpretation graph for the supplied utterance.
+
+        **Interpretation graph contract**: this graph is surface-bound.  FORM nodes and
+        the ``surface`` annotation include the original surface text so that the same
+        surface from different sources yields the same graph revision.  Paraphrases of
+        semantically equivalent content produce different revisions unless equivalence is
+        explicitly declared via ``IdeonIdentity``; use ``InterpretationRecord`` for the
+        occurrence-level provenance (source, rights, span).
+
+        When WHEN is satisfied a typed ``temporal-qualification`` node is added to the
+        graph, attaching ``WhenCondition``-compatible properties (``when-kind``,
+        ``when-value``) to the interpretation rather than leaving temporal context
+        as an untyped string in the generic context node only.
+        """
         nodes: list[IdeonNode] = []
         roles: list[IdentityRole] = []
         order: list[int] = []
@@ -175,6 +191,29 @@ class IdeonService:
                 properties=tuple(Property(name, value) for name, value in context.values),
             )
         )
+
+        # Add a typed temporal-qualification node when WHEN is satisfied.
+        # This applies the WhenCondition model globally to the interpretation graph
+        # rather than leaving the temporal context as an untyped string only.
+        when_result = inquiry.get(Question.WHEN)
+        if when_result.status is InquiryStatus.SATISFIED:
+            tq_props: list[Property] = []
+            time_val = context.get("time")
+            when_val = context.get("when")
+            if time_val:
+                tq_props.extend([
+                    Property("when-kind", "timestamp"),
+                    Property("when-value", time_val),
+                ])
+            elif when_val:
+                tq_props.extend([
+                    Property("when-kind", "criterion"),
+                    Property("when-value", when_val),
+                ])
+            if tq_props:
+                nodes.append(
+                    IdeonNode("temporal-qualification", NodeKind.VALUE, properties=tuple(tq_props))
+                )
 
         opening_ids = tuple(
             f"{result.question.value}:{result.role or 'unspecified'}"

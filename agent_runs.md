@@ -947,3 +947,57 @@ role-driven WHO, and minimal procedures for WHY/HOW/COULD/WOULD.
 - PR review comment: #5052571328
 
 ---
+
+---
+
+## Run #019 — Ideon Integration Correction Pass
+**Date**: 2026-07-23
+**Agent**: Copilot Coding Agent
+**Triggered by**: PR review comment #5052915940 (Alexander Holman)
+
+### Scope
+Third correction pass on the deterministic Prime Language reference slice.  Addressed
+six remaining integration blockers: WHERN constituent-state propagation, fail-closed WHEN
+timestamp validation, multi-role WHO satisfaction, end-to-end typed temporal graph node,
+interpretation graph contract documentation, and stale terminology removal.
+
+### Changes Made
+- `src/af/domain/ideons/inquiry.py`: Added `_WHO_ROLE_CONTEXT_MAP` mapping semantic roles
+  to context fields.  Added `_is_valid_time_string()` for fail-closed ISO timestamp
+  validation.  Refactored WHO to use `required_who_roles` set and emit exact role name.
+  Fixed WHEN to use `time_val is not None and _is_valid_time_string(time_val)`.  Fixed
+  WHERN constituent-state propagation: contested WHERE + satisfied WHEN yields OPEN with
+  "where:contested"; all four branches restructured with pre-computed `t_ev`.
+- `src/af/application/ideons.py`: Added `InquiryStatus` and `Question` imports.  Added
+  typed `temporal-qualification` node (when-kind, when-value) to `construct_graph()` when
+  WHEN is satisfied.  Added interpretation graph contract docstring.
+- `tests/unit/test_ideon_language.py`: Renamed
+  `test_one_event_renders_as_was_is_or_projected_by_reference_whern` to
+  `test_render_tense_classifies_event_as_was_is_or_projected`.  Updated
+  `test_whern_is_composite_of_where_and_when_components` to reflect contested-WHERE
+  propagation.  Added: `test_invalid_time_string_does_not_satisfy_when`,
+  `test_whern_constituent_state_propagates_contested_where`,
+  `test_who_satisfied_by_non_agent_role`.
+- `tests/unit/test_ideon_service.py`: Added `InquiryStatus` import.  Added:
+  `test_temporal_qualification_node_in_graph_when_when_is_satisfied` (end-to-end),
+  `test_interpretation_graph_is_surface_bound`.
+- `specs.md`: Appended SPEC-019.
+- `decisions.md`: Appended DEC-033.
+- `agent_runs.md`: Appended Run #019.
+
+### Verified Results
+- `ruff check src tests scripts`: passed
+- `strict mypy src` (51 files): no issues
+- Unit + integration tests: 389 passed (1 pre-existing git-topology failure; CI authoritative)
+- Full gate (ruff + mypy + pytest + legacy): passed
+
+### Issues Encountered
+- Pre-existing: `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone).  GitHub CI is authoritative.
+
+### Related References
+- Spec: SPEC-019
+- Decision: DEC-033
+- PR review comment: #5052915940
+
+---

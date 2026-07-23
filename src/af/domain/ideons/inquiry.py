@@ -3,20 +3,24 @@
 All eleven questions are structurally present in every InquiryState with
 evidence-driven deterministic behaviour:
 
-- WHO   — satisfied when context actor is declared; open (material) when a viable
-          candidate carries an unfilled who-typed role (agent, subject, experiencer,
-          source, possessor, affected); not-applicable otherwise.
+- WHO   — satisfied when a context field corresponding to a required who-typed role is
+          declared (context.actor for agent, context.subject for subject, etc.); open
+          (material) when a viable candidate carries an unfilled who-typed role (agent,
+          subject, experiencer, source, possessor, affected) that is not satisfied by
+          any declared context field; not-applicable otherwise.
 - WHAT  — satisfied when every word-form has at least one viable dictionary candidate;
           open (material) when any word-form has no viable candidate.
 - WHERE — satisfied when exactly one location candidate is viable; contested (material)
           when multiple candidates remain; not-applicable when none are present.
-- WHEN  — satisfied when a temporal or conditional anchor is declared (context.time for
-          a timestamp witness; context.when for an event/criterion expression); not-
-          applicable otherwise.
-- WHERN — composite WHERE + WHEN.  Satisfied when both the spatial/domain component
-          (WHERE satisfied or context.where declared) and the temporal/conditional
-          component (WHEN satisfied) are present.  Open (non-material) with the
-          missing role identified when only one component is available.
+- WHEN  — satisfied when a valid temporal or conditional anchor is declared:
+          context.time must be a parseable, timezone-aware ISO 8601 timestamp; any
+          non-empty context.when expression satisfies WHEN as a condition clause.
+          Invalid context.time strings fail closed (WHEN remains not-applicable).
+- WHERN — composite WHERE + WHEN.  Satisfied when WHERE is fully satisfied and WHEN
+          is satisfied.  Open (non-material) with "where:contested" when WHERE is
+          contested and WHEN is satisfied.  Open (non-material) with missing role
+          identified when exactly one component is available.  Not-applicable when
+          neither is present.
 - IS    — satisfied when at least one predicate (action, state, relation) is present;
           open (material) when none are found.
 - WHY   — open (non-material) when a predicate is present that could have a causal
@@ -32,6 +36,7 @@ evidence-driven deterministic behaviour:
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
 from af.domain.ideons.records import (
@@ -51,6 +56,30 @@ from af.domain.ideons.records import (
 _WHO_TYPED_ROLES: frozenset[str] = frozenset(
     {"agent", "subject", "experiencer", "source", "possessor", "affected"}
 )
+
+# Maps semantic role names (from SenseEntry.semantic_roles) to the context field
+# that satisfies them.  Only roles present in this map participate in WHO resolution.
+_WHO_ROLE_CONTEXT_MAP: dict[str, str] = {
+    "agent": "actor",
+    "subject": "subject",
+    "experiencer": "experiencer",
+    "source": "source",
+    "possessor": "possessor",
+    "affected": "affected",
+}
+
+
+def _is_valid_time_string(value: str) -> bool:
+    """Return True if *value* is a parseable, timezone-aware ISO 8601 timestamp.
+
+    Fail-closed: any non-parseable string or naive datetime returns False so that
+    WHEN is not satisfied merely because context.time is a non-empty string.
+    """
+    try:
+        dt = datetime.fromisoformat(value)
+        return dt.tzinfo is not None
+    except (ValueError, OverflowError):
+        return False
 
 
 class InquiryEngine:
@@ -80,36 +109,56 @@ class InquiryEngine:
             for candidate in candidate_set.viable
         )
 
-        # Compute who-typed role presence: drives WHO.
-        # WHO is material-open only when a viable candidate has an unfilled who-typed
-        # role (agent, subject, experiencer, source, possessor, affected).  An
-        # impersonal state/process with no who-typed roles leaves WHO NOT_APPLICABLE
-        # even when a predicate is present.
-        has_who_typed_role = any(
-            bool(_WHO_TYPED_ROLES.intersection(candidate.entry.semantic_roles))
+        # Collect who-typed roles required by viable candidates.
+        # WHO is material-open only when a required who-typed role is declared on a
+        # viable candidate but not satisfied by any corresponding context field.
+        required_who_roles: set[str] = {
+            role
             for candidate_set in word_candidate_sets
             for candidate in candidate_set.viable
-        )
+            for role in candidate.entry.semantic_roles
+            if role in _WHO_TYPED_ROLES
+        }
+        has_who_typed_role = bool(required_who_roles)
 
-        # WHO
+        # Keep actor separately for COULD (capability assessment is agent-specific).
         actor = context.get("actor")
-        if actor:
+
+        # WHO: check each required who-typed role's mapped context field in order.
+        who_satisfied_role: str | None = None
+        who_satisfied_value: str | None = None
+        for semantic_role, context_field in _WHO_ROLE_CONTEXT_MAP.items():
+            if semantic_role not in required_who_roles:
+                continue
+            ctx_val = context.get(context_field)
+            if ctx_val:
+                who_satisfied_role = context_field
+                who_satisfied_value = ctx_val
+                break
+
+        if who_satisfied_role and who_satisfied_value:
             results[Question.WHO] = InquiryResult(
                 Question.WHO,
                 InquiryStatus.SATISFIED,
-                role="actor",
-                evidence=(f"context:actor={actor}",),
+                role=who_satisfied_role,
+                evidence=(f"context:{who_satisfied_role}={who_satisfied_value}",),
             )
         elif has_who_typed_role:
+            # Request the first required who-typed role that is not yet declared.
+            first_missing_role = next(
+                _WHO_ROLE_CONTEXT_MAP[r]
+                for r in _WHO_ROLE_CONTEXT_MAP
+                if r in required_who_roles
+            )
             results[Question.WHO] = InquiryResult(
                 Question.WHO,
                 InquiryStatus.OPEN,
-                role="actor",
-                required_information="the actor inherited by the utterance",
+                role=first_missing_role,
+                required_information=f"the {first_missing_role} of the utterance",
                 material=True,
-                evidence=("missing:actor",),
+                evidence=(f"missing:{first_missing_role}",),
             )
-        # else: leave WHO as NOT_APPLICABLE (impersonal or no predicate)
+        # else: leave WHO as NOT_APPLICABLE (impersonal, no predicate, or no who-typed role)
 
         # WHAT
         unknown = tuple(
@@ -159,48 +208,46 @@ class InquiryEngine:
             )
 
         # WHEN: condition-bearing temporal relation (timestamp, interval, event, criterion).
-        # Satisfied by context.time (timestamp witness) or context.when (event/criterion
-        # expression).  A timestamp is one possible witness; WHEN is not a scalar datetime.
+        # context.time must be a parseable, timezone-aware ISO timestamp — invalid strings
+        # fail closed and do not satisfy WHEN.  context.when satisfies WHEN as a condition
+        # clause or event expression.
         time_val = context.get("time")
         when_val = context.get("when")
-        when_satisfied = bool(time_val or when_val)
-        if when_satisfied:
-            when_evidence: tuple[str, ...] = tuple(
-                v
-                for v in (
-                    f"context:time={time_val}" if time_val else None,
-                    f"context:when={when_val}" if when_val else None,
-                )
-                if v is not None
+        time_valid = time_val is not None and _is_valid_time_string(time_val)
+        when_satisfied = time_valid or bool(when_val)
+        t_ev: tuple[str, ...] = tuple(
+            v
+            for v in (
+                f"context:time={time_val}" if time_valid else None,
+                f"context:when={when_val}" if when_val else None,
             )
+            if v is not None
+        )
+        if when_satisfied:
             results[Question.WHEN] = InquiryResult(
                 Question.WHEN,
                 InquiryStatus.SATISFIED,
                 role="temporal-condition",
-                evidence=when_evidence,
+                evidence=t_ev,
             )
 
         # WHERN: composite WHERE (spatial/domain) + WHEN (temporal/conditional).
-        # Satisfied only when both components are present.  Open (non-material) with the
-        # missing role identified when only one component is available.
+        # Satisfied only when WHERE is fully satisfied and WHEN is satisfied.
+        # A contested WHERE propagates as OPEN (non-material) when WHEN is satisfied,
+        # identifying the missing unambiguous location component.
         where_context = context.get("where")
-        where_component = (
-            results[Question.WHERE].status is InquiryStatus.SATISFIED
-            or where_context is not None
-        )
-        if where_component and when_satisfied:
+        where_result_status = results[Question.WHERE].status
+        where_satisfied_from_candidates = where_result_status is InquiryStatus.SATISFIED
+        where_contested_from_candidates = where_result_status is InquiryStatus.CONTESTED
+        where_context_present = where_context is not None
+        where_fully_satisfied = where_satisfied_from_candidates or where_context_present
+        where_present = where_fully_satisfied or where_contested_from_candidates
+
+        if where_fully_satisfied and when_satisfied:
             w_ev = (
                 (f"context:where={where_context}",)
-                if where_context
+                if where_context_present
                 else ("where:from-candidates",)
-            )
-            t_ev: tuple[str, ...] = tuple(
-                v
-                for v in (
-                    f"context:time={time_val}" if time_val else None,
-                    f"context:when={when_val}" if when_val else None,
-                )
-                if v is not None
             )
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
@@ -208,7 +255,17 @@ class InquiryEngine:
                 role="spatiotemporal-condition",
                 evidence=w_ev + t_ev,
             )
-        elif where_component:
+        elif where_contested_from_candidates and when_satisfied:
+            # WHERE is ambiguous; WHERN cannot be satisfied until location is resolved.
+            results[Question.WHERN] = InquiryResult(
+                Question.WHERN,
+                InquiryStatus.OPEN,
+                role="spatiotemporal-condition",
+                required_information="unambiguous location for WHERN",
+                material=False,
+                evidence=("where:contested", *t_ev),
+            )
+        elif where_present:
             results[Question.WHERN] = InquiryResult(
                 Question.WHERN,
                 InquiryStatus.OPEN,

@@ -1054,3 +1054,56 @@ four remaining semantic errors identified in review of SPEC-017.
 - SPEC-017 (Ideon Correction: Provenance Separation, Temporal Qualification, and Inquiry Scope)
 
 ---
+
+---
+
+## [SPEC-019] Ideon Correction: WHERN Constituent Propagation, Fail-Closed WHEN Validation, Multi-Role WHO, End-to-End Temporal Graph, Interpretation Graph Contract
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Third correction pass on the deterministic Prime Language reference slice, addressing
+six integration blockers identified in review of SPEC-018.
+
+### Requirements
+- MUST propagate WHERN constituent state from a contested WHERE: CONTESTED WHERE + satisfied
+  WHEN yields WHERN OPEN (non-material) with "where:contested" evidence, not NOT_APPLICABLE.
+  WHERN is satisfied only when WHERE is fully resolved (SATISFIED) and WHEN is satisfied.
+- MUST validate context.time as a parseable, timezone-aware ISO 8601 timestamp before
+  satisfying WHEN.  An invalid or timezone-naive string fails closed (WHEN remains
+  NOT_APPLICABLE).  Any non-empty context.when expression still satisfies WHEN as a
+  condition clause.
+- MUST expand WHO satisfaction beyond context.actor to all mapped who-typed context fields:
+  context.actor (agent), context.subject (subject), context.experiencer (experiencer),
+  context.source (source), context.possessor (possessor), context.affected (affected).
+  The emitted WHO role must be the actual context field name, not always "actor".
+  context.actor alone must NOT satisfy an experiencer-role candidate.
+- MUST attach a typed temporal-qualification node (when-kind, when-value properties) to
+  the interpretation graph when WHEN is satisfied, proving the WhenCondition model is
+  applied globally end-to-end rather than in domain tests alone.  Invalid timestamps must
+  not produce this node (fail-closed confirmed in graph output).
+- MUST document the interpretation graph contract explicitly: the graph is surface-bound;
+  same surface from different sources yields the same graph revision; different surfaces
+  produce different revisions unless equivalence is declared via IdeonIdentity.
+- MUST rename the stale test name containing "reference_whern" to remove the rejected
+  terminology.
+
+### Tests
+- **TEST-019-1**: WHERN OPEN (non-material, "where:contested") when WHERE contested + WHEN satisfied
+- **TEST-019-2**: WHERN SATISFIED when WHERE fully resolved + WHEN satisfied (matrix)
+- **TEST-019-3**: WHERN OPEN (missing:when) when WHERE contested + WHEN not satisfied
+- **TEST-019-4**: Invalid context.time string (non-parseable) → WHEN NOT_APPLICABLE
+- **TEST-019-5**: Timezone-naive context.time string → WHEN NOT_APPLICABLE
+- **TEST-019-6**: Valid timezone-aware ISO timestamp → WHEN SATISFIED
+- **TEST-019-7**: WHO satisfied by context.experiencer for experiencer-role candidate
+- **TEST-019-8**: context.actor alone does NOT satisfy an experiencer-role candidate
+- **TEST-019-9**: End-to-end: valid context.time produces temporal-qualification node in graph
+- **TEST-019-10**: End-to-end: invalid context.time produces no temporal-qualification node
+- **TEST-019-11**: Interpretation graph contract: same surface + different sources → same revision
+- **TEST-019-12**: Interpretation graph contract: different surfaces → different revisions
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018
+
+---

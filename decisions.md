@@ -1845,3 +1845,82 @@ contradicts the WHERN = WHERE+WHEN definition.
 - Modified: `tests/unit/test_ideon_service.py`
 
 ---
+
+---
+
+## [DEC-033] Ideon Correction: WHERN Constituent Propagation, Fail-Closed WHEN, Multi-Role WHO, Typed Temporal Graph Node
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-018 (DEC-032) identified six remaining integration blockers:
+1. WHERN constituent-state propagation was incomplete: contested WHERE + satisfied WHEN
+   incorrectly produced NOT_APPLICABLE instead of OPEN (non-material, contested WHERE).
+2. InquiryEngine satisfied WHEN from any non-empty context.time string, not a validated
+   timezone-aware ISO timestamp.  Invalid strings were accepted.
+3. WHO satisfaction checked only context.actor; other who-typed roles (subject, experiencer,
+   source, possessor, affected) could not satisfy WHO from context.
+4. TemporalQualification was defined and unit-tested in isolation; construct_graph() never
+   attached a typed temporal-qualification node to the interpretation graph.
+5. The interpretation graph contract (surface-bound) was undocumented; occurrences from
+   different sources sharing the same surface were tested but paraphrase separation was not.
+6. Stale test name retained "reference_whern" despite the rejected terminology.
+
+### Decision
+1. WHERN constituent-state propagation: a contested WHERE + satisfied WHEN yields WHERN
+   OPEN (non-material) with evidence "where:contested".  WHERN is satisfied only when
+   WHERE is SATISFIED (not contested) and WHEN is satisfied.  Contested WHERE with no WHEN
+   yields WHERN OPEN (non-material) with evidence "missing:when".
+2. WHEN validation: context.time must be a parseable, timezone-aware ISO 8601 timestamp
+   (`datetime.fromisoformat` + tzinfo check).  Fail-closed: invalid or timezone-naive
+   strings leave WHEN NOT_APPLICABLE.  context.when remains an unvalidated condition
+   expression (non-empty string is sufficient).
+3. WHO multi-role: `_WHO_ROLE_CONTEXT_MAP` maps each semantic role to its context field
+   (agent→actor, subject→subject, experiencer→experiencer, source→source,
+   possessor→possessor, affected→affected).  WHO is satisfied by the first matching
+   context field for a required role.  The emitted role is the actual context field name.
+   context.actor does NOT satisfy a candidate that requires only an experiencer role.
+4. End-to-end temporal node: `construct_graph()` adds an `IdeonNode("temporal-qualification",
+   NodeKind.VALUE, ...)` with `when-kind` and `when-value` properties when WHEN is
+   satisfied.  This propagates the WhenCondition model into the graph output.
+5. Interpretation graph contract documented in `construct_graph()` docstring: the graph is
+   surface-bound; paraphrase separation regression test added.
+6. Stale test renamed from `test_one_event_renders_as_was_is_or_projected_by_reference_whern`
+   to `test_render_tense_classifies_event_as_was_is_or_projected`.
+
+### Alternatives Considered
+- **Parse context.time into a WhenCondition before passing to InquiryEngine**: would require
+  adding typed fields to ContextGraph or a separate typed context object.  Deferred: the
+  current string-validated approach is fail-closed and consistent with ContextGraph's
+  string-only contract.
+- **Move surface forms out of the graph into InterpretationRecord**: valid architectural
+  alternative, but requires a larger refactor.  Chosen instead to document the interpretation
+  graph contract explicitly and add paraphrase separation tests.
+
+### Consequences
+- WHERN now correctly propagates contested-WHERE state rather than silently dropping it.
+- Invalid timestamps fail closed at the InquiryEngine boundary.
+- WHO resolution is role-specific: an experiencer entry is satisfied only by context.experiencer.
+- The interpretation graph always contains a typed temporal-qualification node when WHEN is
+  satisfied, making the temporal model observable end-to-end.
+- 5 new tests added (TEST-019-4 through TEST-019-12); existing WHERN composite test updated
+  to reflect correct contested-WHERE propagation.
+
+### Supersedes
+- DEC-032 (partial): the "WHERN OPEN with missing:where when only WHEN provided" description
+  in DEC-032 is superseded for the contested-WHERE case.  Prior decisions remain in record.
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019
+
+### Output References
+- Modified: `src/af/domain/ideons/inquiry.py`
+- Modified: `src/af/application/ideons.py`
+- Modified: `tests/unit/test_ideon_language.py`
+- Modified: `tests/unit/test_ideon_service.py`
+
+---
