@@ -900,3 +900,44 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #018 - Canonical Runner and Tar-Type Correction
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Package-gate rereview after Run #017
+- Findings that direct documented uv commands bypassed the sanitized runner and that legacy
+  tar contiguous-file members satisfy Python's broad `TarInfo.isfile()` predicate
+
+### Outputs
+- Routed every documented and registered release action through `[SCRIPT:af-dev]`, including a
+  dedicated JSON report action, so locked commands receive the bounded launcher environment
+- Added an executed regression proving inherited `UV_CONFIG_FILE`, `UV_NO_SYNC`, `UV_PYTHON`,
+  and `UV_PROJECT_ENVIRONMENT` cannot redirect canonical release validation
+- Required exact tar regular-file or directory type bytes for source snapshots and sdists and
+  added a negative contiguous-file archive regression
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 69 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 338 passed with 90.67 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Clean commit-snapshot package validation: passed for `0.1.0a0`
+- Sdist SHA-256: `451791bcc306751e90092303561dfc7258750e96b35ebb5e080b930cdb6c4dfd`
+- Wheel SHA-256: `e7c9906984faa44e37717ebd7584dda3c0b322f28ab3b4e022ad3f0ce384e57a`
+
+### Issues Encountered
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Roadmap: https://github.com/alexanderholman/AgentFramework/issues/3
+- Release certification: https://github.com/alexanderholman/AgentFramework/issues/34
+- Script: `[SCRIPT:af-dev]`
+
+---
