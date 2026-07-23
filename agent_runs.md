@@ -1021,3 +1021,44 @@ None
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #021 - CI Governance Environment Correction
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Pull request #52 Python workflow run `29970858948`
+- CI-only failure in the temporary-repository shell-injection regression because two governance
+  helpers invoked unanchored `uv run` and selected a Python environment without PyYAML
+
+### Outputs
+- Prepended the locked project environment to the bounded release-runner `PATH`
+- Routed the remaining agent-count and file-existence Python snippets through the existing
+  repository-anchored `run_uv_python` helper
+- Added regressions for nested Python dependency availability and inherited `PATH` values that
+  omit the project environment
+
+### Verified Results
+- Focused development/governance tests: 30 passed
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 72 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 544 passed with 90.07 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Sdist SHA-256: `7af3ca564e87781322b756bc19ec61b58ef89c90d01835e6bd9aeb71f1399e88`
+- Wheel SHA-256: `8fb5124dfbe508c5392fe46ff7c25977460a32f2cc60f453a3f7611380ba3eb6`
+
+### Issues Encountered
+- Local shells already placed `.venv/bin` first, masking the missing repository anchor; the CI
+  runner exposed the discrepancy by starting with only setup-Python and uv on `PATH`
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/52
+- Failed workflow run: https://github.com/alexanderholman/AgentFramework/actions/runs/29970858948
+- Script: `[SCRIPT:af-dev]`
+
+---
