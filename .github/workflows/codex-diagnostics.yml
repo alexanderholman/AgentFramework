@@ -1,0 +1,36 @@
+name: Codex diagnostics
+
+on:
+  push:
+    branches:
+      - codex/testing-application-host
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: format
+            command: uv run --locked --extra dev ruff format --check src/af tests scripts
+          - name: lint
+            command: uv run --locked --extra dev ruff check src/af tests scripts
+          - name: typecheck
+            command: uv run --locked --extra dev mypy src
+          - name: focused-tests
+            command: uv run --locked --extra dev pytest tests/unit/test_testing_application.py -q
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.command }}
