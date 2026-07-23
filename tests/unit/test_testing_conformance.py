@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -236,13 +236,24 @@ def test_suites_reject_invalid_factories_and_asynchronous_cases() -> None:
     async def asynchronous(_driver: str) -> None:
         return None
 
+    def generator(_driver: str) -> Iterator[None]:
+        yield
+
+    async def async_generator(_driver: str) -> AsyncIterator[None]:
+        yield
+
     @contextmanager
     def string_fixture() -> Iterator[str]:
         yield "value"
 
-    asynchronous_suite = DriverConformanceSuite(
-        "async-driver",
-        (ConformanceCase("async-case", asynchronous),),
-    )
-    with pytest.raises(TypeError, match="synchronous"):
-        asynchronous_suite.run(string_fixture)
+    for name, exercise in (
+        ("async-case", asynchronous),
+        ("generator-case", generator),
+        ("async-generator-case", async_generator),
+    ):
+        suite = DriverConformanceSuite(
+            "non-synchronous-driver",
+            (ConformanceCase(name, exercise),),
+        )
+        with pytest.raises(TypeError, match="synchronously without yielding"):
+            suite.run(string_fixture)
