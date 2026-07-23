@@ -38,6 +38,27 @@ def test_fake_clock_and_ids_are_deterministic_and_assertable() -> None:
         clock.advance(timedelta(seconds=-1))
 
 
+def test_fake_clock_ids_and_payload_snapshots_fail_clearly() -> None:
+    class Unsnapshotable:
+        def __deepcopy__(self, memo: object) -> object:
+            del memo
+            raise RuntimeError("private copy failure")
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        FakeClock(datetime(2026, 7, 23, 12, 0))
+    with pytest.raises(ValueError, match="fake identifier"):
+        FakeIds(("",))
+
+    ids = FakeIds(("remaining",))
+    with pytest.raises(AssertionError, match="retains 1"):
+        ids.assert_exhausted()
+    with pytest.raises(AssertionError, match="generated identifiers differ"):
+        ids.assert_generated("missing")
+
+    with pytest.raises(ValueError, match="deterministic snapshotting"):
+        FakeTransport().dispatch(Unsnapshotable(), destination="mcp")
+
+
 def test_fake_subsystems_assert_payload_destination_attempts_and_absence() -> None:
     fakes = FakeSubsystems()
     payload = {"task": "one"}
