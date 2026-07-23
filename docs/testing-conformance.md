@@ -14,6 +14,22 @@ incomplete shutdown or recorded cleanup failures.
 Multiple applications may run in one process. Application-scoped services, invocation state,
 handlers, repositories, and owned resources must not leak between them.
 
+### Leak evidence
+
+`assert_test_application_clean()` extends the public lifecycle assertion with count-only evidence
+that lifecycle-owned scopes, resource registries, tasks, construction and resolution flights, and
+pending cleanup work were released. Its report never includes service tokens, resource values,
+configuration, or failure details.
+
+`ProcessStateGuard` snapshots and restores a bounded set of process-global surfaces around a test
+case: the working directory, environment, Python warning policy, and newly live threads. Mutations
+fail as `ProcessStateLeak`; diagnostics contain only stable surface names and never disclose paths,
+environment values, warning contents, or thread names. A live thread cannot be safely stopped by the
+guard, so extensions remain responsible for joining it. Extension-owned module globals and external
+resources remain the extension's responsibility and require explicit conformance cases.
+
+Provider and driver conformance suites apply both application and process leak checks to every case.
+
 ## Deterministic subsystem fakes
 
 The standard fake catalogue includes controllable clock and identifier sources plus recording fakes
