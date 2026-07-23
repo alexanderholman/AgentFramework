@@ -25,6 +25,18 @@ from .models import (
     Relation,
     RoleBinding,
 )
+from .questions import (
+    QExpression,
+    QGroup,
+    QLeaf,
+    QOperator,
+    expression_depth,
+    expression_node_count,
+    q_expression_bytes,
+    q_expression_id,
+    q_expression_record,
+    validate_q_expression,
+)
 from .registry import (
     CanonicalKeyPolicy,
     IdentityConflictError,
@@ -41,6 +53,7 @@ from .registry import (
     validate_prime_key,
     validate_stable_key,
 )
+from .spacetime import SpacetimeEventRef, WhenMark
 
 __all__ = (
     "CanonicalKeyPolicy",
@@ -62,20 +75,32 @@ __all__ = (
     "NodeKind",
     "Property",
     "PropertyValue",
+    "QExpression",
+    "QGroup",
+    "QLeaf",
+    "QOperator",
     "Relation",
     "RevisionConflictError",
     "RoleBinding",
+    "SpacetimeEventRef",
     "StableKeyConflictError",
+    "WhenMark",
     "canonical_bytes",
     "canonical_record",
     "composite_key_for",
+    "expression_depth",
+    "expression_node_count",
     "graph_record",
     "identity_record",
     "identity_signature",
     "is_prime_number",
+    "q_expression_bytes",
+    "q_expression_id",
+    "q_expression_record",
     "revision_id",
     "stable_key_for",
     "validate_constructed_key",
     "validate_prime_key",
+    "validate_q_expression",
     "validate_stable_key",
 )
