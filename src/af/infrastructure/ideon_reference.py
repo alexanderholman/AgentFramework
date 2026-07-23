@@ -5,7 +5,8 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import dataclass
 
-from af.application.ideons import IdeonController, IdeonService
+from af.application.ideons import IdeonController
+from af.application.structured_ideons import StructuredIdeonService
 from af.domain.ideons import IdeonGraph, IdeonIdentity, IdeonKind, IdeonRef
 from af.domain.ideons.dictionary import LogicDictionary
 from af.domain.ideons.records import LanguageProfileRef, Question, SenseEntry
@@ -22,7 +23,7 @@ REFERENCE_IDEON_PROFILE = LanguageProfileRef(
 @dataclass(frozen=True, slots=True)
 class ReferenceIdeonRuntime:
     controller: IdeonController
-    service: IdeonService
+    service: StructuredIdeonService
     store: InMemoryIdeonRegistry
 
 
@@ -95,7 +96,7 @@ _SEED_SENSES = (
 def create_reference_ideon_runtime() -> ReferenceIdeonRuntime:
     store = InMemoryIdeonRegistry("prime-language-reference@0.1")
     entries = tuple(_register_seed(store, seed) for seed in _SEED_SENSES)
-    service = IdeonService(store, LogicDictionary(entries), REFERENCE_IDEON_PROFILE)
+    service = StructuredIdeonService(store, LogicDictionary(entries), REFERENCE_IDEON_PROFILE)
     return ReferenceIdeonRuntime(IdeonController(service), service, store)
 
 
