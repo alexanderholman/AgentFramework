@@ -149,6 +149,47 @@ class InvalidBinding(AFError):
     """Raised when a dependency-container declaration or lifecycle contract is invalid."""
 
 
+class ApplicationGraphError(AFError):
+    """Raised before registration when the provider graph is invalid."""
+
+
+class ApplicationRegistrationError(AFError):
+    """Sanitized provider-registration failure."""
+
+    def __init__(self, provider_id: str, *, protected_cause: BaseException) -> None:
+        self.provider_id = provider_id
+        self.protected_cause = protected_cause
+        super().__init__("provider registration failed")
+
+
+class ApplicationBootError(AFError):
+    """Sanitized provider-boot failure with protected cleanup evidence."""
+
+    def __init__(
+        self,
+        provider_id: str,
+        *,
+        protected_cause: BaseException,
+        cleanup_failures: tuple[BaseException, ...] = (),
+    ) -> None:
+        self.provider_id = provider_id
+        self.protected_cause = protected_cause
+        self.cleanup_failures = cleanup_failures
+        super().__init__("application boot failed")
+
+
+class ApplicationShutdownError(AFError):
+    """Raised after best-effort lifecycle shutdown has completed."""
+
+    def __init__(self, failures: tuple[BaseException, ...]) -> None:
+        self.failures = failures
+        super().__init__(f"application shutdown failed for {len(failures)} operation(s)")
+
+
+class AsyncLifecycleRequired(AFError):
+    """Raised when a synchronous entry point reaches an asynchronous lifecycle hook."""
+
+
 def _safe_type_label(value: object) -> str:
     if type(value) is str:
         return "string token"
