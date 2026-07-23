@@ -1455,3 +1455,44 @@ Two merge blockers in the PR's deterministic reference slice:
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+## Run #024 — Manager Review and Provider Integration Correction
+**Date**: 2026-07-23
+**Agent**: Codex
+**Status**: Completed
+
+### Inputs
+- GitHub issue #11 and the manager contracts merged by pull request #66
+- Two post-merge review findings covering bare capability strings and non-atomic failover
+- The Application provider and package lifecycle merged by pull request #65
+
+### Outputs
+- Preserved single-string capability identity and made failover evidence validation atomic
+- Added immutable, redacted driver declarations and deterministic provider bindings for
+  application-owned managers, including package-adapted contributions
+- Added terminal close, exact-once driver ownership, reentrancy guards, sanitized clock
+  failures, and fail-closed synchronous callback enforcement
+- Added focused regression, lifecycle, rollback, shared-ownership, and asynchronous-callback
+  coverage without replacing the merged manager API
+
+### Verified Results
+- Manager-focused test suite: 69 passed
+- Ruff formatting and lint checks: passed for the changed source and tests
+- Strict mypy: passed for the changed source and all three added test modules
+- Append-only prefixes for `specs.md`, `decisions.md`, and `agent_runs.md` were preserved
+
+### Issues Encountered
+- Issue #11 was implemented and closed concurrently while this run was in progress, so the
+  final change is a focused correction and provider-lifecycle integration on top of pull
+  request #66 rather than a duplicate manager implementation
+- Automated review arrived after pull request #66 had merged; its actionable findings are
+  covered by dedicated regressions in this correction
+
+### Related References
+- SPEC-015 and TEST-015-3
+- DEC-028 and DEC-029
+- GitHub issue #11
+- GitHub pull requests #65 and #66
+- Script: `[SCRIPT:af-dev]`
+
+---
