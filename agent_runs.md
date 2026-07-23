@@ -1155,3 +1155,40 @@ Two merge blockers in the PR's deterministic reference slice:
 - PR review comment: #5055123973
 
 ---
+
+## Run #023 — fix(ideons): temporal graph projection separates tense axis from resolution status
+**Date**: 2026-07-23
+**Agent**: GitHub Copilot Coding Agent
+**Task**: SPEC-023 / DEC-037 — graph projection must not conflate ``resolved-tense``
+  with ``temporal-perspective-status``; ``tense_label`` returns ``None`` for unresolved.
+
+### Actions
+1. Updated ``TemporalPerspective.tense_label`` (``temporal.py``): return type changed to
+   ``str | None``; returns ``tense.value`` for RESOLVED, ``None`` for UNANCHORED and
+   CONTESTED.
+2. Updated ``TemporalQualification`` docstring to document its resolved-only role and
+   relationship to ``TemporalPerspective``.
+3. Updated ``IdeonService.construct_graph`` (``application/ideons.py``):
+   - Removed ``Property("tense", perspective.tense_label)``.
+   - Removed ``Property("tense-status", perspective.status_label)``.
+   - Added ``Property("temporal-perspective-status", perspective.status_label)`` (always).
+   - Added ``Property("resolved-tense", perspective.tense.value)`` (only when RESOLVED).
+   - Updated docstring and inline comments to reflect new property contract.
+4. Updated ``test_ideon_language.py``: ``tense_label`` assertions for UNANCHORED and
+   CONTESTED now assert ``None``.
+5. Updated ``test_ideon_service.py``: all temporal graph property assertions updated to
+   ``temporal-perspective-status`` and ``resolved-tense``; unresolved tests assert
+   ``resolved-tense`` absent.
+6. Added ``test_temporal_perspective_graph_five_observable_cases`` covering all five
+   standpoints end-to-end: WAS, IS, PROJECTED, UNANCHORED, CONTESTED.
+7. Appended SPEC-023 and DEC-037.
+
+### Verification
+- ``uv run ruff check src/af/domain/ideons/temporal.py src/af/application/ideons.py tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: all checks passed
+- ``uv run mypy src/af/domain/ideons/temporal.py src/af/application/ideons.py --strict``: no issues
+- ``uv run pytest tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: 63 passed
+- Spec: SPEC-023
+- Decision: DEC-037
+- PR review comment: #5055585311
+
+---

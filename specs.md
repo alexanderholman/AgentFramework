@@ -1267,3 +1267,50 @@ remaining blockers identified in review of SPEC-021 are resolved.
 - SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021
 
 ---
+
+## [SPEC-023] Ideon Correction: Separate Tense Axis from Resolution Status in Graph Projection
+**Date**: 2026-07-23
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Seventh correction pass on the deterministic Prime Language reference slice.  SPEC-022
+and DEC-036 introduced ``TemporalPerspective`` with a ``tense_label`` that correctly
+separated the domain model but then re-conflated resolution status with the tense axis
+in the graph projection: ``Property("tense", perspective.tense_label)`` emitted
+``"unanchored"`` and ``"contested"`` as values of a tense-named property.
+
+### Requirements
+- MUST emit exactly two temporal perspective graph properties with unambiguous names:
+  - ``temporal-perspective-status``: always present; one of
+    ``resolved | unanchored | contested``.
+  - ``resolved-tense``: present ONLY when ``temporal-perspective-status="resolved"``;
+    value is exactly one of ``was | is | projected``.  For unresolved states
+    (``unanchored``, ``contested``) this property MUST be absent from the graph node;
+    the strings ``"unanchored"`` and ``"contested"`` MUST NOT appear in any
+    tense-valued field.
+- MUST update ``TemporalPerspective.tense_label`` to return ``str | None``: the
+  resolved tense value (``was | is | projected``) for ``RESOLVED`` perspectives, and
+  ``None`` for ``UNANCHORED`` and ``CONTESTED`` perspectives.  This removes the
+  conflation of epistemic resolution status with the tense axis in the domain API.
+- MUST update ``TemporalQualification`` docstring to document its resolved-only role
+  (``tense: Tense`` is always required) and its relationship to ``TemporalPerspective``
+  (the broader graph-construction path that includes unresolved states).
+- MUST update the ``construct_graph`` inline comments and docstring to reflect the new
+  ``temporal-perspective-status`` / ``resolved-tense`` property contract.
+
+### Tests
+- **TEST-023-1**: ``TemporalPerspective(UNANCHORED/CONTESTED).tense_label`` returns
+  ``None`` (was ``"unanchored"`` / ``"contested"``); ``RESOLVED.tense_label`` still
+  returns the correct ``was | is | projected`` string.
+- **TEST-023-2** (end-to-end, five cases): WAS, IS, PROJECTED → status=``resolved``,
+  ``resolved-tense`` present and correct, not in ``{unanchored, contested}``.
+  UNANCHORED, CONTESTED → status correct, ``resolved-tense`` absent from the graph node.
+- **TEST-023-3**: All prior regression tests updated to assert
+  ``temporal-perspective-status`` instead of ``tense-status`` and ``resolved-tense``
+  (when resolved) / absent (when unresolved) instead of the old merged ``tense`` property.
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021, SPEC-022
+
+---

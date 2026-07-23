@@ -1087,18 +1087,20 @@ def test_temporal_perspective_resolved_requires_tense() -> None:
 
 
 def test_temporal_perspective_unresolved_forbids_tense() -> None:
-    """UNANCHORED and CONTESTED perspectives must not carry a tense; doing so raises ValueError."""
+    """UNANCHORED and CONTESTED perspectives must not carry a tense; doing so raises ValueError.
+    tense_label returns None for unresolved perspectives — unresolved epistemic states
+    must never appear in a tense-valued graph field."""
     when = WhenCondition(WhenKind.TIMESTAMP, instant=datetime(2026, 1, 1, tzinfo=UTC))
     # Valid unanchored perspective
     p_unanchored = TemporalPerspective(status=TemporalPerspectiveStatus.UNANCHORED, when=when)
     assert p_unanchored.tense is None
-    assert p_unanchored.tense_label == "unanchored"
+    assert p_unanchored.tense_label is None
     assert p_unanchored.status_label == "unanchored"
 
     # Valid contested perspective
     p_contested = TemporalPerspective(status=TemporalPerspectiveStatus.CONTESTED, when=when)
     assert p_contested.tense is None
-    assert p_contested.tense_label == "contested"
+    assert p_contested.tense_label is None
     assert p_contested.status_label == "contested"
 
     # UNANCHORED + tense must raise

@@ -188,10 +188,18 @@ class Whern:
 
 @dataclass(frozen=True, slots=True)
 class TemporalQualification:
-    """A tense qualification that attaches to a proposition or relation node.
+    """A *resolved* tense qualification that attaches to a proposition or relation node.
 
-    Attach an instance of this to a graph node's context rather than treating
-    past/present/future modality as a separate inquiry question.
+    This type is the resolved-only representation: ``tense`` is always a definite
+    ``Tense`` value (``WAS``, ``IS``, or ``PROJECTED``).  It is appropriate for contexts
+    where the standpoint has already been computed (e.g. via ``render_tense``) and the
+    caller can guarantee resolution.
+
+    For graph construction paths that include unresolved states (``UNANCHORED``,
+    ``CONTESTED``), use ``TemporalPerspective`` instead, which carries an explicit
+    ``status`` field and a nullable ``tense``.  Do not maintain two competing
+    representations of the same standpoint; prefer ``TemporalQualification`` when
+    resolution is certain, ``TemporalPerspective`` when it is not.
     """
 
     tense: Tense
@@ -260,15 +268,19 @@ class TemporalPerspective:
                 )
 
     @property
-    def tense_label(self) -> str:
-        """Serialisable tense label for graph properties.
+    def tense_label(self) -> str | None:
+        """Serialisable resolved-tense label for graph properties.
 
-        For ``RESOLVED`` perspectives returns the tense value (``"was"``, ``"is"``,
-        ``"projected"``).  For unresolved perspectives returns the status value
-        (``"unanchored"`` or ``"contested"``), giving a single finite property that
-        carries the complete standpoint representation.
+        Returns the tense value (``"was"``, ``"is"``, ``"projected"``) for
+        ``RESOLVED`` perspectives, or ``None`` for ``UNANCHORED`` and ``CONTESTED``
+        perspectives.  Callers must treat ``None`` as *absent* — never write the
+        value ``"unanchored"`` or ``"contested"`` into a tense-valued graph field.
+
+        Use ``status_label`` to obtain the resolution status (``"resolved"``,
+        ``"unanchored"``, or ``"contested"``) for a separate ``temporal-perspective-status``
+        graph property that is always present.
         """
-        return self.tense.value if self.tense is not None else self.status.value
+        return self.tense.value if self.tense is not None else None
 
     @property
     def status_label(self) -> str:

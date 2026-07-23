@@ -177,15 +177,19 @@ class IdeonService:
         occurrence-level provenance (source, rights, span).
 
         When WHEN is satisfied, a typed ``temporal-qualification`` node is added with
-        ``when-kind``, ``when-value``, and ``tense`` properties.  The tense is computed
-        by ``render_tense(event_when, reference_when)`` when a reference perspective is
-        supplied and the kinds are comparable.  When no reference perspective is supplied,
-        the tense is ``"unanchored"`` — the WHEN condition is structurally present but no
-        temporal standpoint can be asserted; ``IS`` is reserved for a justified
-        present/equal comparison from a supplied reference.  A directed ``IdeonEdge`` with
-        relation ``qualifies-predicate`` connects the ``temporal-qualification`` node to
-        each predicate (action/state/relation) SENSE node in the graph, making the temporal
-        qualification structurally attached to the proposition it qualifies.
+        ``temporal-perspective-status``, ``when-kind``, and ``when-value`` properties.
+        When the standpoint is resolved (reference supplied + compatible kinds), a
+        ``resolved-tense`` property is also added with one of ``was | is | projected``.
+        For unresolved states (``unanchored`` or ``contested``), ``resolved-tense`` is
+        absent; only ``temporal-perspective-status`` carries the epistemic state.  The
+        tense is computed by ``render_tense(event_when, reference_when)`` when a reference
+        perspective is supplied and the kinds are comparable.  When no reference
+        perspective is supplied, the status is ``"unanchored"`` — the WHEN condition is
+        structurally present but no temporal standpoint can be asserted.  A directed
+        ``IdeonEdge`` with relation ``qualifies-predicate`` connects the
+        ``temporal-qualification`` node to each predicate (action/state/relation) SENSE
+        node in the graph, making the temporal qualification structurally attached to the
+        proposition it qualifies.
         """
         nodes: list[IdeonNode] = []
         edges: list[IdeonEdge] = []
@@ -251,23 +255,24 @@ class IdeonService:
         )
 
         # Add a typed temporal-qualification node when WHEN is satisfied.
-        # The node carries ``when-kind``, ``when-value``, and ``tense`` properties,
-        # and is linked to every predicate SENSE node via a ``qualifies-predicate`` edge.
+        # The node carries ``temporal-perspective-status``, ``when-kind``, ``when-value``,
+        # and — when resolved — ``resolved-tense`` properties.  It is linked to every
+        # predicate SENSE node via a ``qualifies-predicate`` edge.
         #
         # Tense resolution rules:
         # - When ``reference_when`` is supplied and kinds are comparable, ``render_tense``
-        #   determines the tense (WAS / IS / PROJECTED).
-        # - When ``reference_when`` is None, the tense is ``"unanchored"``: the WHEN
+        #   determines the resolved tense (WAS / IS / PROJECTED), emitted as
+        #   ``resolved-tense``.
+        # - When ``reference_when`` is None, the status is ``"unanchored"``: the WHEN
         #   condition is structurally present but no tense standpoint can be asserted.
-        #   IS is reserved for a justified present/equal standpoint from render_tense;
-        #   event:, criterion:, interval:, and ordering: conditions do not imply present
-        #   tense by themselves, and even a plain timestamp has no standpoint without a
-        #   declared reference.
-        # - When ``reference_when`` is supplied but the kinds are incompatible (e.g.
-        #   TIMESTAMP event vs CRITERION reference, or INTERVAL vs TIMESTAMP), the tense
-        #   is left as ``"contested"`` — the qualification is present but the standpoint
-        #   cannot be computed.  The graph node is still emitted so the temporal fact is
-        #   not silently lost; callers must treat ``tense="contested"`` as unresolved.
+        #   ``resolved-tense`` is absent; IS is reserved for a justified present/equal
+        #   standpoint from render_tense.  event:, criterion:, interval:, and ordering:
+        #   conditions do not imply present tense by themselves, and a plain timestamp has
+        #   no standpoint without a declared reference.
+        # - When ``reference_when`` is supplied but the kinds are incompatible, the status
+        #   is ``"contested"`` — the qualification is present but the standpoint cannot be
+        #   computed.  ``resolved-tense`` is absent; the graph node is still emitted so
+        #   the temporal fact is not silently lost.
         when_result = inquiry.get(Question.WHEN)
         if when_result.status is InquiryStatus.SATISFIED:
             event_when = _make_when_condition_from_context(context)
@@ -306,21 +311,23 @@ class IdeonService:
                     when_value = event_when.expression or ""
 
                 tq_node_id = "temporal-qualification"
+                tq_properties: list[Property] = [
+                    # temporal-perspective-status: resolution status, always present
+                    # (resolved | unanchored | contested).
+                    Property("temporal-perspective-status", perspective.status_label),
+                    Property("when-kind", event_when.kind.value),
+                    Property("when-value", when_value),
+                ]
+                if perspective.tense is not None:
+                    # resolved-tense: only present when the standpoint is resolved.
+                    # Values are exactly was | is | projected; unresolved states
+                    # (unanchored, contested) must never appear in this field.
+                    tq_properties.insert(0, Property("resolved-tense", perspective.tense.value))
                 nodes.append(
                     IdeonNode(
                         tq_node_id,
                         NodeKind.VALUE,
-                        properties=(
-                            # tense: full standpoint (was/is/projected for resolved;
-                            # unanchored/contested for unresolved) — serialised from the
-                            # validated TemporalPerspective domain value.
-                            Property("tense", perspective.tense_label),
-                            # tense-status: explicit resolution status (resolved/unanchored/
-                            # contested); always present for clear downstream interpretation.
-                            Property("tense-status", perspective.status_label),
-                            Property("when-kind", event_when.kind.value),
-                            Property("when-value", when_value),
-                        ),
+                        properties=tuple(tq_properties),
                     )
                 )
                 # Attach temporal qualification to each predicate SENSE node.

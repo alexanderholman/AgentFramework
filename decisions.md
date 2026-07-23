@@ -2208,3 +2208,80 @@ Both layers now independently reject whitespace-only expressions.
 - Modified: ``agent_runs.md`` (appended Run #022)
 
 ---
+
+## [DEC-037] Separate graph tense axis from temporal-perspective resolution status
+**Date**: 2026-07-23
+**Status**: Accepted
+
+### Context
+DEC-036 introduced ``TemporalPerspective`` to separate the domain model's tense axis
+from resolution status.  However the graph projection in ``IdeonService.construct_graph``
+still wrote the combined ``tense_label`` (which returned ``"unanchored"`` or
+``"contested"`` for unresolved cases) into a graph property named ``"tense"``.  This
+put epistemic resolution states back onto the tense axis at the serialisation boundary,
+after correctly separating them in the domain type.
+
+### Problem
+- ``TemporalPerspective.tense_label`` returned ``self.status.value`` for unresolved
+  perspectives, so ``"unanchored"`` and ``"contested"`` appeared in the graph ``"tense"``
+  property — exactly the conflation the typed model was designed to prevent.
+- The ``"tense-status"`` property correctly recorded the resolution status, but the
+  ``"tense"`` property simultaneously carried both resolved tense values and unresolved
+  epistemic states, making the contract ambiguous.
+
+### Decision
+
+**1 — Rename and restrict graph properties**
+
+Replace ``Property("tense", perspective.tense_label)`` + ``Property("tense-status", ...)``
+with:
+
+- ``Property("temporal-perspective-status", perspective.status_label)`` — always
+  present; values: ``resolved | unanchored | contested``.
+- ``Property("resolved-tense", perspective.tense.value)`` — emitted ONLY when
+  ``status == RESOLVED``; values: ``was | is | projected``.  Absent for unresolved
+  states.
+
+This makes the absence of ``resolved-tense`` the authoritative signal for unresolved
+states, rather than overloading a single ``tense`` property with all five labels.
+
+**2 — Update ``TemporalPerspective.tense_label``**
+
+Change return type to ``str | None``.  For ``RESOLVED``: returns ``tense.value``
+(``"was"``, ``"is"``, ``"projected"``).  For ``UNANCHORED`` and ``CONTESTED``: returns
+``None``.  This removes the ``self.status.value`` fallback that was the root of the
+conflation.
+
+**3 — Document ``TemporalQualification`` as resolved-only**
+
+Update the ``TemporalQualification`` docstring to clearly state it is the resolved-only
+representation (``tense: Tense`` is always required), and to direct callers to
+``TemporalPerspective`` for graph-construction paths that include unresolved states.
+
+### Consequences
+- The graph contract is now unambiguous: ``temporal-perspective-status`` carries the
+  resolution state; ``resolved-tense`` carries the tense only when it is meaningful.
+- Downstream consumers can test ``"resolved-tense" in props`` to branch on resolution
+  without parsing the status string.
+- ``TemporalPerspective.tense_label`` is a nullable API; callers must handle ``None``.
+- All prior tests updated to the new property names; a new five-case end-to-end test
+  covers WAS, IS, PROJECTED, UNANCHORED, and CONTESTED explicitly.
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033, DEC-034, DEC-035, DEC-036
+
+### Related Specs
+- SPEC-016 through SPEC-023
+
+### Output References
+- Modified: ``src/af/domain/ideons/temporal.py`` (tense_label return type/semantics,
+  TemporalQualification docstring)
+- Modified: ``src/af/application/ideons.py`` (graph property names, inline comments,
+  docstring)
+- Modified: ``tests/unit/test_ideon_language.py`` (tense_label None for unresolved)
+- Modified: ``tests/unit/test_ideon_service.py`` (property names, new 5-case test)
+- Modified: ``specs.md`` (appended SPEC-023)
+- Modified: ``decisions.md`` (appended DEC-037)
+- Modified: ``agent_runs.md`` (appended Run #023)
+
+---
