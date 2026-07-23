@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        action: [format-check, lint, typecheck, test]
+        action: [format, lint, typecheck, test]
     env:
       AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
       AF_APPEND_ONLY_HEAD_REF: ${{ github.sha }}
@@ -52,4 +52,11 @@ jobs:
         with:
           name: diagnostic-${{ matrix.action }}
           path: diagnostic-${{ matrix.action }}.log
+          if-no-files-found: error
+      - name: Upload formatted isolation source
+        if: ${{ matrix.action == 'format' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: formatted-isolation-source
+          path: src/af/testing/isolation.py
           if-no-files-found: error
