@@ -56,9 +56,12 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Materialize formatter output
+      - name: Materialize formatter and lint output
         run: |
           uv run ruff format \
+            src/af/application/structured_ideons.py \
+            tests/unit/test_ideon_structured_runtime.py
+          uv run ruff check --fix \
             src/af/application/structured_ideons.py \
             tests/unit/test_ideon_structured_runtime.py
 
