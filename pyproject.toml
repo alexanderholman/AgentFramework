@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -9,6 +9,7 @@ description = "AF: a classification-heavy, inference-light agent framework"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
+license-files = ["AUTHORS.md", "LICENSE"]
 authors = [{ name = "Alexander Holman" }]
 dependencies = [
   "fastapi>=0.115,<1",
@@ -24,7 +25,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "hatchling==1.27.0",
   "mypy>=1.15,<2",
+  "packaging>=24,<27",
   "pytest>=8.3,<10",
   "pytest-cov>=6,<8",
   "pyyaml>=6,<7",
@@ -39,7 +42,22 @@ af-mcp = "af.interfaces.mcp:main"
 packages = ["src/af"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/af", "tests", "README.md", "LICENSE", "pyproject.toml"]
+include = [
+  ".github",
+  ".python-version",
+  "CHANGELOG.md",
+  "INSTALL.md",
+  "LICENSE",
+  "README.md",
+  "SECURITY.md",
+  "docs",
+  "pyproject.toml",
+  "release",
+  "scripts",
+  "src/af",
+  "tests",
+  "uv.lock",
+]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers -ra"

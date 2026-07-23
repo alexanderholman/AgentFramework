@@ -2285,3 +2285,220 @@ representation (``tense: Tense`` is always required), and to direct callers to
 - Modified: ``agent_runs.md`` (appended Run #023)
 
 ---
+
+## [DEC-030] Establish a Bounded Private Production-MVP Profile
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon production-readiness review
+
+### Context
+The v0.1 roadmap correctly describes the long-term human-first AF platform, including
+providers, science and locale packs, peer execution, resources, broad drivers, and release
+certification. The current implementation is a much narrower deterministic vertical slice.
+Using the complete roadmap as one undifferentiated production gate obscures both the controls
+needed to operate that slice and the work that remains absent.
+
+The repository also lacked a package-from-sdist check, a machine-readable release view, and a
+clear distinction between source quality, artifact validity, deployment evidence, and final
+production approval.
+
+### Decision
+1. Define the first production candidate as one private Linux node, one trusted operator and
+   tenant, one process per SQLite database, deterministic routes only, and loopback/stdio
+   access.
+2. Keep public/LAN exposure, multi-tenancy, model selection, cross-driver certification,
+   peer execution, and public publication outside this profile.
+3. Store versioned requirements and current state in `release/production-mvp.yaml` and provide
+   a strict read-only validator, deterministic report, and fail-closed readiness check.
+4. Report the repository as not ready until every blocking gate is `met`; do not add waivers
+   that can turn a mandatory unknown into a pass.
+5. Add a temporary wheel-from-sdist build, inspection, install, and deterministic smoke to the
+   authoritative development gate without treating it as clean-host or deployment proof.
+6. Require final evidence to be bound to the exact commit, artifact, profile, configuration,
+   platform, tool versions, time, expiry, and deployment subject.
+7. Keep issue #9's container/lifecycle implementation and the broader #3/#34 programs in
+   separate focused work; this decision defines admission, not those implementations.
+8. Change from `0.1.0a0` to `0.1.0` only in a final release-candidate change after all gates
+   pass and a maintainer accepts residual risk.
+
+### Alternatives Considered
+- **Treat all of roadmap #3 as the first production deployment:** rejected because unrelated
+  provider, P2P, locale, and science scope prevents a useful bounded security and operations
+  profile for the existing runtime.
+- **Declare the current private loopback application an MVP immediately:** rejected because
+  repository privacy and loopback do not prove authentication boundaries, migrations,
+  backup/restore, health, shutdown, capacity, accessibility, rollback, or release evidence.
+- **Use a prose checklist only:** rejected because status and blocker drift would remain hard
+  to detect and automate.
+- **Make the ordinary CI gate fail until production-ready:** rejected because known product
+  blockers should remain visible without preventing incremental source changes. CI validates
+  the manifest and package; the separate readiness check blocks release.
+
+### Consequences
+**Positive:**
+- AF has one reviewable definition of its first supported deployment and its non-goals.
+- The current status remains honest while progress is machine-readable.
+- Package defects and source-checkout shadowing become release-gate failures.
+- Future work can close focused gates without conflating them with broad platform completion.
+- Deployment and review evidence must identify the exact subject it certifies.
+
+**Negative:**
+- The manifest and evidence references require maintenance as controls change.
+- Passing the source gate still does not mean AF can be deployed; operators must understand
+  the separate readiness result.
+- Clean-host, authentication, durability, operations, accessibility, and rollback work remain
+  blocking follow-ups.
+- The package smoke adds time and build-backend access to the normal CI job.
+
+### Related Decisions
+- DEC-022 (Adopt the AF Python Vertical Slice and MCP-First ChatGPT Boundary)
+- DEC-028 (Adopt an Async-Capable Application and Provider Lifecycle)
+- DEC-029 (Use Providers, Managers, Named Drivers, and Honest Delivery Semantics)
+
+### Related Specs
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+
+### Output References
+- Added: `docs/production-mvp.md`, `release/production-mvp.yaml`
+- Added: `scripts/release_gates.py`, `tests/unit/test_release_gates.py`
+- Updated: `scripts/af_dev.py`, `scripts/registry.yaml`, packaging and active guidance
+- Tracks: GitHub roadmap #3 and release-certification issue #34
+
+---
+
+## [DEC-031] Separate Policy Completeness from Production Authorization
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon independent-review response
+
+### Context
+Independent review of DEC-030 found that a mutable manifest could delete mandatory gates,
+widen the profile, and eventually call itself ready. It also found conflicting authority for
+`0.1.0`, incoherent simultaneous CLI/HTTP/MCP process claims, static evidence that could not
+prove current execution, and artifact checks that did not fully bind sdist, wheel, source,
+dependencies, and executed bytes.
+
+Append-only history preserves DEC-030. This record supersedes its ambiguous readiness,
+surface, and version-sequencing language while retaining the useful bounded-profile decision.
+
+### Decision
+1. Treat the checker as canonical policy/completeness tooling, not production admission. It
+   always reports `certifies_production: false`, even when implementation gates are complete.
+2. Pin the exact profile and mandatory gate definitions by reviewed digest; changing policy
+   requires an explicit reviewed revision rather than a state edit.
+3. Narrow the first live surface to one MCP-stdio process under a dedicated OS account. CLI
+   maintenance requires a stopped service; all AF network listeners and Secure MCP Tunnel are
+   excluded.
+4. Keep roadmap issue #3 authoritative for final version identity. This profile targets a
+   private candidate and cannot independently release or tag `0.1.0`.
+5. Add explicit provenance/signing and target deployment/recovery gates.
+6. Create the exact final-version candidate before gathering candidate-bound evidence,
+   signatures, deployment drills, maintainer approval, and tag. Any candidate change restarts
+   those gates.
+7. Lock the PEP 517 backend in the development lock, build offline without isolation from an
+   allowlisted uncredentialed environment, inspect/hash the sdist before wheel construction,
+   and reject artifact mutation.
+8. Bind checkout, sdist, and wheel through complete normalized metadata, runtime source,
+   entry-point targets, exact allowed wheel contents, platform metadata, and `RECORD` hashes.
+9. Keep external evidence and approval outside static self-assertion: immutable candidate,
+   profile/configuration, platform/tool, time/expiry/revocation, reviewer, and deployment
+   identity remain required before operation.
+
+### Consequences
+**Positive:**
+- A shortened or widened manifest cannot silently pass the production policy.
+- Operators cannot mistake a green policy check for permission to deploy.
+- The first process and trust boundary are coherent and testable.
+- Versioning no longer conflicts with the broader roadmap.
+- Package validation now addresses dependency/source substitution and executed-byte drift.
+
+**Negative:**
+- The profile no longer claims live web or ChatGPT tunnel access.
+- Final admission still needs external evidence collection and human authorization tooling.
+- Canonical policy changes require deliberate digest review.
+- Offline package checks require build tooling to remain in the committed development lock.
+
+### Related Decisions
+- DEC-023 (Establish AgentFramework as the Canonical AF Repository)
+- DEC-028 (Adopt an Async-Capable Application and Provider Lifecycle)
+- DEC-030 (Establish a Bounded Private Production-MVP Profile)
+
+### Related Specs
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+- SPEC-017 (Canonical Production Policy and External Admission Evidence)
+
+### Output References
+- Hardened: `scripts/release_gates.py`, `tests/unit/test_release_gates.py`
+- Clarified: `docs/production-mvp.md`, `release/production-mvp.yaml`
+- Split: read-only `release-gates` and executable `release-package` registry workflows
+- Preserved: issue #3 version authority and issue #9 implementation isolation
+
+---
+
+## [DEC-032] Encode Stdio-Only Scope and Treat Manifest State as Declarations
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Zordon final-review response
+
+### Context
+Final independent review found three remaining ambiguities in DEC-031 and SPEC-017. The
+canonical profile said `loopback` despite prohibiting every AF listener, constrained processes
+only per database instead of constraining the whole deployment, and called self-maintained
+manifest state "requirements complete." Package review also showed that building directly
+from the mutable checkout, permissive core-metadata parsing, incomplete negative `RECORD`
+coverage, and imprecise offline language could overstate artifact evidence.
+
+Append-only history preserves DEC-031. This decision narrows and supersedes those terms; it
+does not weaken the external candidate evidence or maintainer-approval requirements.
+
+### Decision
+1. Encode the first profile as `private-single-node-stdio-deterministic`, with one database,
+   one live process, and `network_exposure: none`.
+2. Rename checker status to declaration completeness. Emit both full-manifest and canonical
+   policy digests and state in every human-readable result that production certification was
+   not performed.
+3. Add an explicit unmet SQLite runtime-policy gate so documented durability and concurrency
+   controls cannot disappear between path, migration, and backup requirements.
+4. Build release artifacts from `git archive` of the exact clean HEAD in a temporary source
+   tree, compare them with a separate reference extraction, and recheck HEAD and cleanliness
+   throughout package execution.
+5. Require strict `PKG-INFO`/`METADATA`, explicit licenses, exact entry-point groups, loadable
+   installed targets, regular archive members, source byte identity, and complete negative
+   `RECORD` validation.
+6. Run uv with locked, no-source, no-config, offline resolution after the development
+   environment is synchronized. Describe this honestly as uv-offline execution, not kernel-
+   enforced no-egress; the production no-egress gate remains separate and unmet.
+
+### Consequences
+**Positive:**
+- Machine-readable scope now agrees with the documented no-listener trust boundary.
+- A green declaration check cannot reasonably be read as verified production evidence.
+- SQLite durability policy is an explicit release blocker.
+- Package evidence is tied to a committed snapshot and rejects broader metadata/archive drift.
+
+**Negative:**
+- Existing consumers of the new, unreleased `requirements_complete` field must adopt
+  `declarations_complete`.
+- Package validation requires Git and a clean commit, and uv-offline execution requires a
+  previously synchronized locked tool environment.
+- Same-UID hostile build code still requires future OS sandbox/no-egress controls before
+  production admission.
+
+### Related Decisions
+- DEC-030 (Establish a Bounded Private Production-MVP Profile)
+- DEC-031 (Separate Policy Completeness from Production Authorization)
+
+### Related Specs
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+- SPEC-017 (Canonical Production Policy and External Admission Evidence)
+- SPEC-018 (Stdio-Only Declaration and Commit-Snapshot Package Contract)
+
+### Output References
+- Corrected: `release/production-mvp.yaml`, `docs/production-mvp.md`
+- Hardened: `scripts/release_gates.py`, `tests/unit/test_release_gates.py`
+- Clarified: `README.md`, `INSTALL.md`, `SECURITY.md`, `scripts/registry.yaml`
+
+---

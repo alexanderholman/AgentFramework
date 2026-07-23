@@ -1192,3 +1192,266 @@ Two merge blockers in the PR's deterministic reference slice:
 - PR review comment: #5055585311
 
 ---
+
+## Run #016 - Production-MVP Readiness Contract and Artifact Gate
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Request to prepare the focused pull request needed to define a safe production MVP
+- Existing roadmap authority in issue #3, release-certification scope in issue #34, and active
+  lifecycle implementation in issue #9 that this work was required not to duplicate
+- Independent security, package, automation, and documentation reviews of the complete branch
+
+### Outputs
+- Defined a canonical, explicitly not-ready private profile with one Linux node, tenant,
+  SQLite database, live MCP-stdio process, deterministic routes, quiesced CLI maintenance, and
+  no AF network listener or model execution
+- Added 33 blocking release declarations spanning scope, quality, runtime, artifacts, security,
+  SQLite durability/recovery, operations, accessibility boundaries, evidence, and approval
+- Added declaration-only deterministic reporting with canonical-policy and full-manifest
+  digests, explicit non-certification output, strict YAML/path handling, and stable exit codes
+- Added a clean-commit package gate that builds wheel-from-sdist with locked uv-offline tooling,
+  strictly validates metadata, licenses, entry points, archive members, source bytes, and
+  `RECORD`, installs the exact wheel, loads both installed targets, and smokes deterministic
+  routes outside the checkout
+- Added SPEC-016 through SPEC-018 and DEC-030 through DEC-032 to preserve the narrowed scope,
+  candidate sequencing, external evidence boundary, and honest no-egress limitations
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 69 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 332 passed with 90.67 percent coverage
+- Node protocol test: 1 passed
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Clean commit-snapshot package validation: passed for `0.1.0a0`
+- Sdist SHA-256: `e17700db491717e0eadb5edceacc181ec3f236b62a924f0ee11f251cb7201fe0`
+- Wheel SHA-256: `3c2747275e2c68aed95b42a021976b341dbc9fc00fac2f0853cbd31c107c5f8f`
+
+### Issues Encountered
+- Final review found that the first policy encoded loopback despite excluding every listener;
+  the canonical profile was corrected to stdio-only with one database/process in total
+- Hatchling emits optional dependencies and explicit extras in core metadata; package identity
+  validation was extended to compare those normalized declarations and explicit license files
+- Build isolation language initially overstated no-egress guarantees; documentation now limits
+  the implemented claim to uv-offline/no-config execution and keeps OS no-egress blocked
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Roadmap: https://github.com/alexanderholman/AgentFramework/issues/3
+- Release certification: https://github.com/alexanderholman/AgentFramework/issues/34
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #017 - Final Evidence-Binding and Launcher Correction
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Blocker-only rereview of the clean production-MVP readiness branch after Run #016
+- Findings covering manifest read/hash consistency, digest visibility, outer uv configuration,
+  malformed archive member types, and precise Node test-count reporting
+
+### Outputs
+- Bound manifest parsing and SHA-256 reporting to the same file-descriptor byte buffer and
+  printed both manifest and canonical-policy digests in validate, report, and check text output
+- Added no-config/no-env-file flags plus an allowlisted environment for every locked release
+  launcher while preserving only append-only CI context required by governance validation
+- Rejected dot-path sdist members and wheel files whose archive mode claims they are directories,
+  with focused negative regressions for both malformed cases
+- Clarified Run #016's Node result: Node's TAP summary reports one passing test file, and that
+  file contains nine named `test()` cases; all nine completed without failure
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 69 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 335 passed with 90.67 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Clean commit-snapshot package validation: passed for `0.1.0a0`
+- Sdist SHA-256: `fe0921018f97c38e504f746911ebeb41a57b73f919ef99c2ef5405a168545247`
+- Wheel SHA-256: `97860cb20124483cf12b3169674c7f7b89f4eceedfbd92d07628d4ae141e07f8`
+
+### Issues Encountered
+- The Node 22 TAP reporter aggregates the explicit file argument as one top-level subtest even
+  though the file defines nine named cases; this entry records both facts instead of treating
+  the file-level count as the case count
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Roadmap: https://github.com/alexanderholman/AgentFramework/issues/3
+- Release certification: https://github.com/alexanderholman/AgentFramework/issues/34
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #018 - Canonical Runner and Tar-Type Correction
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Package-gate rereview after Run #017
+- Findings that direct documented uv commands bypassed the sanitized runner and that legacy
+  tar contiguous-file members satisfy Python's broad `TarInfo.isfile()` predicate
+
+### Outputs
+- Routed every documented and registered release action through `[SCRIPT:af-dev]`, including a
+  dedicated JSON report action, so locked commands receive the bounded launcher environment
+- Added an executed regression proving inherited `UV_CONFIG_FILE`, `UV_NO_SYNC`, `UV_PYTHON`,
+  and `UV_PROJECT_ENVIRONMENT` cannot redirect canonical release validation
+- Required exact tar regular-file or directory type bytes for source snapshots and sdists and
+  added a negative contiguous-file archive regression
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 69 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 338 passed with 90.67 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Clean commit-snapshot package validation: passed for `0.1.0a0`
+- Sdist SHA-256: `451791bcc306751e90092303561dfc7258750e96b35ebb5e080b930cdb6c4dfd`
+- Wheel SHA-256: `e7c9906984faa44e37717ebd7584dda3c0b322f28ab3b4e022ad3f0ce384e57a`
+
+### Issues Encountered
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Roadmap: https://github.com/alexanderholman/AgentFramework/issues/3
+- Release certification: https://github.com/alexanderholman/AgentFramework/issues/34
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #019 - Latest Master Integration Verification
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Newly fetched `origin/master` at `06cfdda`, five commits beyond the branch base
+- Merged Copilot workflow documentation and deterministic scoped-container lifecycle work from
+  pull requests #45 and #51
+
+### Outputs
+- Merged the latest canonical master into the production-MVP readiness branch without conflict
+- Revalidated the complete readiness policy and package workflow against the expanded scoped-
+  container implementation and test suite
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 72 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 544 passed with 90.07 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Clean commit-snapshot package validation: passed for `0.1.0a0`
+- Sdist SHA-256: `53799ec87ae37f6e06bc6b3e34a05dfb6c21b2c49211a8154b3638924513f943`
+- Wheel SHA-256: `8fb5124dfbe508c5392fe46ff7c25977460a32f2cc60f453a3f7611380ba3eb6`
+
+### Issues Encountered
+- The remote base advanced after final review; a merge was required before publication, but no
+  content or append-only conflict occurred
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Integrated pull request: https://github.com/alexanderholman/AgentFramework/pull/45
+- Integrated pull request: https://github.com/alexanderholman/AgentFramework/pull/51
+- Roadmap: https://github.com/alexanderholman/AgentFramework/issues/3
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #020 - Closed Scope-Issue Status Refresh
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Issue #9 closed by the scoped-container work integrated from pull request #51
+- Final pre-publication review of release blocker descriptions against current GitHub state
+
+### Outputs
+- Updated the graceful-shutdown next action and implementation order to treat issue #9 as the
+  completed scoped-lifetime foundation while keeping issue #10 lifecycle work blocked
+- Preserved the canonical gate policy digest because only current state/next-action guidance
+  changed; the complete manifest digest now binds the refreshed text
+
+### Verified Results
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 72 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 544 passed with 90.07 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Manifest SHA-256: `0c961d5c7ed6309c567876fbf2ccba54bdd7a01f197a6b84a629e65c8ee4ca10`
+- Policy SHA-256: `9f9dfb0d3621390654253c60aae169a76fb35f28f0f6ced69fa772f03592ae50`
+- Sdist SHA-256: `00a30cb265817c3dcc0823a5e1da115d4906e6d596e39279478625546ab32f0b`
+- Wheel SHA-256: `8fb5124dfbe508c5392fe46ff7c25977460a32f2cc60f453a3f7611380ba3eb6`
+
+### Issues Encountered
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Repository: https://github.com/alexanderholman/AgentFramework
+- Closed scope issue: https://github.com/alexanderholman/AgentFramework/issues/9
+- Remaining lifecycle issue: https://github.com/alexanderholman/AgentFramework/issues/10
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #021 - CI Governance Environment Correction
+**Date**: 2026-07-23
+**Agent**: Zordon (`pr.command.zordon`)
+**Status**: Completed
+
+### Inputs
+- Pull request #52 Python workflow run `29970858948`
+- CI-only failure in the temporary-repository shell-injection regression because two governance
+  helpers invoked unanchored `uv run` and selected a Python environment without PyYAML
+
+### Outputs
+- Prepended the locked project environment to the bounded release-runner `PATH`
+- Routed the remaining agent-count and file-existence Python snippets through the existing
+  repository-anchored `run_uv_python` helper
+- Added regressions for nested Python dependency availability and inherited `PATH` values that
+  omit the project environment
+
+### Verified Results
+- Focused development/governance tests: 30 passed
+- `python scripts/af_dev.py --action check --execute`: passed
+- Ruff format and lint: passed across 72 files
+- Strict mypy: no issues in 36 source files
+- Pytest: 544 passed with 90.07 percent coverage
+- Node protocol suite: one passing file containing nine named test cases
+- AgentFramework governance validation: 36 of 36 passed, including append-only enforcement
+- Sdist SHA-256: `7af3ca564e87781322b756bc19ec61b58ef89c90d01835e6bd9aeb71f1399e88`
+- Wheel SHA-256: `8fb5124dfbe508c5392fe46ff7c25977460a32f2cc60f453a3f7611380ba3eb6`
+
+### Issues Encountered
+- Local shells already placed `.venv/bin` first, masking the missing repository anchor; the CI
+  runner exposed the discrepancy by starting with only setup-Python and uv on `PATH`
+- FastAPI/Starlette continued to emit the existing `httpx` TestClient deprecation warning;
+  all tests and coverage requirements remained green
+
+### Related References
+- Pull request: https://github.com/alexanderholman/AgentFramework/pull/52
+- Failed workflow run: https://github.com/alexanderholman/AgentFramework/actions/runs/29970858948
+- Script: `[SCRIPT:af-dev]`
+
+---

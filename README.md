@@ -23,6 +23,11 @@ The first vertical slice includes:
 The package is currently pre-release software at version `0.1.0a0` until roadmap issue #3
 quality gates are complete.
 
+The first candidate deployment target is the deliberately narrow
+[private single-node production-MVP profile](docs/production-mvp.md). The current declaration
+report is incomplete and names every release blocker; neither the report, repository privacy,
+nor loopback defaults provide production certification.
+
 ## Quick start
 
 AF requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
@@ -151,7 +156,17 @@ python3 scripts/af_dev.py --action check --execute
 ```
 
 The executed gate checks Ruff formatting and linting, strict mypy typing, pytest, and the
-legacy AgentFactory governance suite. The framework tests are deliberately network-free.
+legacy AgentFactory governance suite. It also validates the production-MVP manifest and
+builds, inspects, temporarily installs, and smokes a wheel produced from the sdist. The
+framework tests are deliberately network-free.
+
+Inspect canonical policy declarations separately; a complete declaration report still does
+not verify evidence or authorize production deployment:
+
+```bash
+python3 scripts/af_dev.py --action release-report --execute
+python3 scripts/af_dev.py --action release-check --execute
+```
 
 ## Repository governance
 

@@ -25,6 +25,44 @@ scripts:
       - "exit_code == 0"
     status: "active"
 
+  - id: "release-gates"
+    intent:
+      - "production-readiness"
+      - "release"
+      - "validate"
+    capabilities:
+      - "production-readiness-report"
+      - "release-declaration-validation"
+    description: "Use release-validate, release-report, release-report-json, or release-check to inspect canonical declarations without certifying deployment"
+    command: "python3 scripts/af_dev.py --action '<action>' --execute"
+    parameters:
+      - "action"
+    outputs:
+      - "declaration-report"
+      - "validation-report"
+    validation:
+      - "exit_code in [0, 1, 2] according to documented action semantics"
+    status: "active"
+
+  - id: "release-package"
+    intent:
+      - "release"
+      - "package"
+      - "execute"
+    capabilities:
+      - "package-validation"
+      - "artifact-inspection"
+      - "installed-wheel-smoke"
+    description: "Build with uv offline from a clean commit snapshot and validate the installed wheel"
+    command: "python3 scripts/af_dev.py --action package --execute"
+    parameters: []
+    outputs:
+      - "artifact-digests"
+      - "validation-report"
+    validation:
+      - "exit_code == 0"
+    status: "active"
+
   - id: "validate-registry"
     intent:
       - "validate"

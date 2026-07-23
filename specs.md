@@ -1314,3 +1314,228 @@ in the graph projection: ``Property("tense", perspective.tense_label)`` emitted
 - SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021, SPEC-022
 
 ---
+
+## [SPEC-016] Private Single-Node Production-MVP Release Contract
+**Date**: 2026-07-22
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+AF SHALL define a bounded first production profile independently of the wider v0.1 platform
+roadmap. The profile is one private Linux node, one trusted operator/tenant, one process per
+SQLite database, deterministic routes only, and loopback or stdio access. Release admission
+is fail-closed and based on versioned requirements plus current subject-bound evidence.
+
+### Requirements
+- MUST keep the profile, supported surfaces, exclusions, gate state, evidence references,
+  and next actions in a strict versioned machine-readable manifest
+- MUST reject duplicate keys and gate IDs, aliases, unknown fields, path traversal, symlinked
+  evidence, unregistered script references, unsupported states, and a `met` gate without
+  evidence
+- MUST treat manifest data as declarative and MUST NOT execute a command supplied by YAML
+- MUST report a valid but blocked manifest with exit `0`, readiness-enforcement failure with
+  exit `1`, and malformed input/internal validation failure with exit `2`
+- MUST report package build, inspection, installation, or smoke failure with exit `1` and
+  invalid package-action usage or inaccessible inputs with exit `2`
+- MUST calculate readiness only when every blocking gate is `met`; mandatory gates cannot be
+  silently waived or treated as not applicable
+- MUST preserve an explicit `not ready` status while any security, durability, recovery,
+  operations, accessibility, artifact, or release gate remains unmet or pending
+- MUST build the wheel from the source distribution in temporary paths and verify project and
+  runtime versions, Python requirement, console entry points, typing marker, templates, and
+  absence of repository/runtime state
+- MUST install the wheel outside the checkout without dependencies and smoke deterministic
+  routes using the already locked development environment
+- MUST keep final clean-host installation, production deployment, release signing,
+  publication, migration, backup/restore, rollback, and maintainer approval as separate
+  blocking evidence rather than inferring them from a package build
+- MUST bind final release evidence to the full source SHA, artifact and profile digests,
+  effective configuration, platform/tool identities, observation time, expiry, and subject
+- MUST keep public/LAN exposure, multiple tenants, multiple SQLite writers, selector/model
+  execution, cross-driver certification, peer execution, and public package publication
+  outside this profile
+- MUST NOT close roadmap issue #3 or release-certification issue #34 merely because the
+  production-profile contract and checker exist
+
+### Tests
+- **Test ID**: TEST-016-1
+  - **Description**: Validate strict manifest parsing and evidence references
+  - **Pass Criteria**: Valid data is accepted while duplicates, aliases, unknown fields,
+    invalid state transitions, escapes, symlinks, and missing references fail with exit `2`
+  - **Fail Criteria**: Ambiguous or unsafe manifest content is accepted
+- **Test ID**: TEST-016-2
+  - **Description**: Validate deterministic readiness reporting
+  - **Pass Criteria**: Text/JSON reports contain stable counts and sorted blocker IDs; report
+    exits `0`, blocked check exits `1`, and ready check exits `0`
+  - **Fail Criteria**: A blocked profile reports ready or exit semantics vary by ordering
+- **Test ID**: TEST-016-3
+  - **Description**: Validate wheel-from-sdist identity and contents
+  - **Pass Criteria**: One source distribution and pure-Python wheel agree with checkout
+    metadata and include entry points, typing, templates, and no forbidden state
+  - **Fail Criteria**: Direct-checkout-only builds, version drift, missing runtime files, or
+    repository/runtime state pass inspection
+- **Test ID**: TEST-016-4
+  - **Description**: Validate installed-wheel smoke isolation
+  - **Pass Criteria**: AF imports from a temporary installation outside the checkout and both
+    deterministic examples pass using an in-memory database
+  - **Fail Criteria**: Smoke imports the checkout, writes repository state, or skips either
+    route
+- **Test ID**: TEST-016-5
+  - **Description**: Preserve honest production status
+  - **Pass Criteria**: The repository manifest validates but remains blocked until every
+    release gate has current evidence
+  - **Fail Criteria**: Adding the checker or package smoke alone declares production ready
+
+### Related Specs
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-009 (AF Executable Python Framework and ChatGPT MCP Adapter)
+- SPEC-011 (Human-First Constrained Selection Boundary)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+
+---
+
+## [SPEC-017] Canonical Production Policy and External Admission Evidence
+**Date**: 2026-07-22
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+This specification clarifies and narrows SPEC-016. The repository checker proves canonical
+policy integrity and declared implementation-gate completeness; it never authenticates
+external evidence or authorizes production. The first profile has one coherent live surface:
+one dedicated-account MCP-stdio process per SQLite database, with CLI maintenance only while
+that process is stopped.
+
+### Requirements
+- MUST bind the exact profile and every mandatory gate's ID, category, title, requirement,
+  blocking status, and verification mode to a reviewed canonical policy digest
+- MUST reject removed, added, demoted, weakened, or profile-widening policy content until a
+  reviewed schema/policy revision intentionally replaces the digest
+- MUST report `requirements_complete` and `certifies_production: false`; MUST NOT use
+  `READY` or treat checker exit `0` as deployment authorization
+- MUST keep issue #3 authoritative for any final package version and MUST NOT independently
+  authorize `0.1.0` from the narrower profile
+- MUST permit only one live MCP-stdio process, one tenant/operator boundary, one SQLite
+  database, and deterministic routes in this profile
+- MUST require CLI maintenance to occur only while the service is quiesced and MUST exclude
+  HTML, REST, GraphQL, OpenAPI, MCP HTTP, Secure MCP Tunnel, and every AF listener
+- MUST include separate blocking gates for candidate identity, provenance/signing,
+  clean-host install, target deployment/recovery evidence, current findings, and maintainer
+  approval
+- MUST inspect and hash the sdist before using its build backend, verify it remains unchanged,
+  and build the wheel offline with hash-locked build tooling from the development lock
+- MUST compare checkout, sdist, and wheel project identity, dependencies, scripts, runtime
+  source, filenames, platform tags, required files, and complete wheel `RECORD` hashes
+- MUST reject foreign packages, relocation data, duplicate/unsafe/archive-special members,
+  forbidden runtime state, oversized archives/members, source drift, and metadata drift
+- MUST install only the exact inspected wheel outside the checkout, verify its digest again,
+  import both console entry-point targets, and exercise deterministic CLI routes
+- MUST execute build and smoke stages with an allowlisted uncredentialed environment,
+  temporary home, no inherited package-manager configuration, and no network access
+- MUST distinguish policy/input errors (`2`) from artifact/build/install/smoke failure (`1`)
+- MUST create the final candidate before candidate-bound evidence, signatures, deployment
+  drills, approval, and tag; any rebuild or metadata change invalidates that evidence
+- MUST bind external evidence to clean source, candidate/signature/profile/configuration
+  digests, platform/tools, reviewer independence, deployment subject, observation time,
+  expiry, and revocation; the static manifest alone cannot prove these facts
+
+### Tests
+- **Test ID**: TEST-017-1
+  - **Description**: Protect the canonical policy
+  - **Pass Criteria**: Removing/demoting a gate or widening network, process, tenant, route,
+    or inference constraints fails validation with exit `2`
+  - **Fail Criteria**: A reduced or wider manifest can report complete
+- **Test ID**: TEST-017-2
+  - **Description**: Separate completeness from production authorization
+  - **Pass Criteria**: An all-met synthetic canonical manifest reports implementation
+    completeness while `certifies_production` remains false and no `READY` claim appears
+  - **Fail Criteria**: Manifest state alone authorizes deployment
+- **Test ID**: TEST-017-3
+  - **Description**: Validate complete artifact identity and provenance inputs
+  - **Pass Criteria**: Dependency drift, missing/invalid `RECORD`, foreign content, source
+    mismatch, filename/tag mismatch, or entry-point target loss blocks the package
+  - **Fail Criteria**: Structurally plausible but unrelated/tampered artifacts pass
+- **Test ID**: TEST-017-4
+  - **Description**: Validate bounded hostile input handling
+  - **Pass Criteria**: Excessive YAML/archive depth, members, size, duplicates, links, and
+    path escapes fail deterministically without traceback or unbounded expansion
+  - **Fail Criteria**: Malformed policy or artifacts exhaust or escape validation
+- **Test ID**: TEST-017-5
+  - **Description**: Validate isolated offline package execution
+  - **Pass Criteria**: A clean checkout builds with locked offline tooling, inherited secrets
+    are absent, exact artifact digests remain stable, and installed CLI/MCP targets import
+  - **Fail Criteria**: Build/smoke requires egress, credentials, checkout imports, or mutable
+    artifacts
+
+### Related Specs
+- SPEC-003 (MUST/SHOULD/MAY Requirements)
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+
+---
+
+## [SPEC-018] Stdio-Only Declaration and Commit-Snapshot Package Contract
+**Date**: 2026-07-23
+**Status**: Approved
+**Priority**: MUST
+
+### Description
+This specification supersedes SPEC-017 where that specification calls manifest state
+"requirements completeness," permits one process per database, or claims that package
+execution has operating-system-level network denial. The first production-MVP profile has
+exactly one SQLite database, one live MCP-stdio process, and no AF network exposure. The
+repository checker validates canonical declarations; only later candidate-bound admission
+can verify evidence and authorize deployment.
+
+### Requirements
+- MUST encode `network_exposure: none`, exactly one database, exactly one live process, and
+  MCP stdio as the sole live application surface
+- MUST report `declarations_complete`, `manifest_sha256`, `policy_sha256`, and
+  `certifies_production: false`; every text result MUST state that production certification
+  was not performed
+- MUST treat checker exit `0` as declaration completeness only and MUST NOT describe it as
+  evidence verification, readiness, certification, admission, or deployment approval
+- MUST include a blocking SQLite runtime-policy gate covering journal and synchronous modes,
+  busy timeout, foreign keys, integrity, and the one-database/one-process invariant
+- MUST build the sdist from a clean commit-derived source snapshot rather than the mutable
+  checkout and MUST fail if checkout HEAD or cleanliness changes during package execution
+- MUST parse sdist and wheel core metadata strictly, compare runtime and optional dependency
+  metadata, extras, explicit license files, and exact console entry-point groups, and load the
+  installed target of every declared console entry point
+- MUST require valid `PKG-INFO`, `uv.lock`, complete wheel `RECORD` coverage, regular archive
+  members, and byte identity for every non-generated sdist file against the commit snapshot
+- MUST disable inherited uv configuration and resolution network access for package commands,
+  while accurately stating that this is not an OS network sandbox for backend or package code
+- MUST keep the independent no-egress, clean-host installation, provenance, deployment,
+  evidence-verification, and maintainer-approval gates unmet until their separate controls run
+
+### Tests
+- **Test ID**: TEST-018-1
+  - **Description**: Validate the exact stdio-only profile
+  - **Pass Criteria**: The canonical policy fixes one database/process and no network exposure;
+    widening either process count or exposure fails validation
+  - **Fail Criteria**: A loopback listener or additional database/process remains in profile
+- **Test ID**: TEST-018-2
+  - **Description**: Separate declarations from verified admission
+  - **Pass Criteria**: Synthetic all-met state says declarations are complete while every
+    format says production certification was not performed and binds the full manifest digest
+  - **Fail Criteria**: Self-declared evidence yields a readiness or authorization claim
+- **Test ID**: TEST-018-3
+  - **Description**: Bind package artifacts to a clean commit snapshot
+  - **Pass Criteria**: Package execution builds from the archived commit, rechecks live checkout
+    identity/cleanliness, and compares generated artifacts with an unexecuted reference snapshot
+  - **Fail Criteria**: Build-time mutation of the working checkout becomes accepted evidence
+- **Test ID**: TEST-018-4
+  - **Description**: Reject malformed metadata, entry points, archives, and RECORD rows
+  - **Pass Criteria**: Duplicate/missing core metadata, unsafe licenses, undeclared entry-point
+    groups, missing attributes, special members, bad hashes/sizes, duplicate rows, self-hashed
+    RECORD, and incomplete coverage all fail
+  - **Fail Criteria**: Structurally invalid or undeclared package metadata passes inspection
+
+### Related Specs
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-016 (Private Single-Node Production-MVP Release Contract)
+- SPEC-017 (Canonical Production Policy and External Admission Evidence)
+
+---
