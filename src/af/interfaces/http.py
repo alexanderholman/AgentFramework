@@ -37,6 +37,7 @@ from af.interfaces.http_body import (
     validate_content_length_header,
 )
 from af.interfaces.http_trust import format_host, host_matches, parse_host_value
+from af.interfaces.ideons import create_ideon_router
 from af.interfaces.rest import create_rest_router
 from af.interfaces.web import create_web_router
 
@@ -216,6 +217,7 @@ def create_http_app(
     )
     app.include_router(create_web_router(resolved.tasks))
     app.include_router(create_rest_router(resolved.tasks))
+    app.include_router(create_ideon_router(resolved.ideons))
     app.include_router(create_graphql_router(resolved.tasks), prefix="/graphql")
 
     @app.exception_handler(TaskNotFound)

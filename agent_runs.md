@@ -800,6 +800,399 @@ None
 
 ---
 
+## Run #016 - Prime Language / Ideon Deterministic Reference Slice
+**Date**: 2026-07-22
+**Agent**: ChatGPT Codex
+**Status**: Completed
+
+### Inputs
+- Prime Language and Ideon System Specification v0.1 supplied as
+  `prime_language_ideon_system_spec_v0.1.md`
+- AgentFramework `master` at `fa101610284962c9d33bce5da778b3836d57992e`
+- Existing AF layer, dependency, testing, and append-only governance contracts
+
+### Outputs
+- Added immutable Ideon graph, canonical identity, arbitrary-precision key, exact revision,
+  logical dictionary, inquiry, temporal, Principia, SHOULD, and runtime-record domain modules
+- Added an injective length-prefixed binary codec for constructed keys, explicit manifested
+  prime-key registration, SHA-256 graph revisions, exact reference resolution, and conflict
+  detection through a process-local atomic registry adapter
+- Added the controlled `sat on the bank`, edition-order, Whern, WILL, relation, semantic-island,
+  paraphrase, SHOULD, unknown-form, context, large-key, and nested-composition conformance cases
+- Integrated one shared Ideon application service/controller through AF bootstrap, CLI, and REST
+- Preserved the supplied system specification and documented the delivered slice, limitations,
+  persistence evolution, and Prolog/neural/natural-reading follow-up
+- Appended SPEC-016 and DEC-030 without altering prior governed content
+
+### Verified Results
+- Focused Ideon suite: 86 passed; 91 percent branch coverage
+- Full reconstructed-checkout suite: 374 passed; one Git-history-dependent governance test
+  unavailable because the connector workspace is not a Git checkout
+- Full-suite coverage: 91.00 percent; required minimum 90 percent
+- Ruff format and lint: passed across source, tests, and scripts
+- Strict mypy: no issues in 45 source files
+- Node route-gate suite: 9 passed
+- Governance content validation: 22 of 22 passed; append-only history check skipped locally
+- Source distribution and wheel build: passed
+
+### Issues Encountered
+- The initial injective JSON-to-integer design exceeded Python's protected decimal conversion
+  limit on modest compositions; the final codec uses length-prefixed binary identity data and
+  a limit-independent decimal transport encoder, with 20-token and ten-level regressions
+- The scratch reconstruction has no repository object history, so the reviewed first-PR
+  append-only topology test cannot resolve its historical SHA locally; the real branch/CI
+  checkout remains the authority for that single check
+- FastAPI/Starlette emits the repository's existing TestClient deprecation warning; no new
+  dependency was introduced
+- General parsing, Prolog parity, neural routes, durable storage, and held-out natural reading
+  remain explicitly outside this deterministic reference slice
+
+### Related References
+- Specification: `docs/prime-language-ideon-system-spec-v0.1.md`
+- Implementation note: `docs/prime-language-ideon-implementation.md`
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+---
+
+## Run #017 — Ideon Correction Pass (Provenance, Temporal, WHO, Identity Codes)
+**Date**: 2026-07-22
+**Agent**: Copilot (correction pass on PR feat/ideons)
+**Status**: Completed
+
+### Inputs
+- Review comment by Alexander Holman on PR feat(ideons): six semantic corrections required
+- Existing implementation at commit 9748dc0
+
+### Outputs
+- Renamed `Tense.WILL` → `Tense.PROJECTED`; `WillKind` → `AuxiliaryKind`;
+  `will_kind` → `auxiliary_kind`; added `TemporalQualification` dataclass
+- Changed `will.future-auxiliary` dictionary sense slot from WHERN to WHEN
+- Fixed WHO inquiry: material-open only when predicate present; NOT_APPLICABLE otherwise
+- Removed source ID and rights from semantic graph annotations/provenance; verified that
+  same semantics from different sources share graph revision
+- Added docstring to `numeric.py` documenting constructed keys as canonical identity codes
+- Updated inquiry module docstring to accurately state which attentions are implemented
+- Added two regression tests (TEST-017-1, TEST-017-2) and two new focused tests
+  (temporal qualification on propositions, WHERN criterion vs anchor)
+- Updated `docs/prime-language-ideon-implementation.md` to reflect all corrections
+- Appended SPEC-017 and DEC-031
+
+### Verified Results
+- Focused Ideon suite: 88 passed (+2 from baseline)
+- Strict mypy: no issues in 51 source files
+- Ruff check + format: passed
+- Full suite (excluding pre-existing yaml subprocess issue): 358 passed
+
+### Issues Encountered
+- None; all corrections were surgical with no architectural change required
+
+### Related References
+- Implementation note: `docs/prime-language-ideon-implementation.md`
+- Spec: SPEC-017
+- Decision: DEC-031
+
+---
+
+---
+
+## Run #018 — Ideon Temporal Model Corrections
+**Date**: 2026-07-22
+**Agent**: Copilot Coding Agent
+**Triggered by**: PR review comment #5052571328 (Alexander Holman)
+
+### Scope
+Second correction pass on the deterministic Prime Language reference slice.  Addressed
+four remaining blockers: composite Whern (WHERE+WHEN), condition-bearing WHEN,
+role-driven WHO, and minimal procedures for WHY/HOW/COULD/WOULD.
+
+### Changes Made
+- `src/af/domain/ideons/temporal.py`: Added `WhenKind` enum and `WhenCondition`
+  dataclass (condition-bearing typed temporal relation).  Redesigned `Whern` as
+  WHERE+WHEN composite.  Updated `TemporalQualification.when: WhenCondition`.
+  Updated `render_tense(WhenCondition, WhenCondition)`.  Removed "reference Whern"
+  terminology.
+- `src/af/domain/ideons/records.py`: Added `semantic_roles: tuple[str, ...] = ()`
+  field to `SenseEntry`.
+- `src/af/domain/ideons/inquiry.py`: WHO driven by `semantic_roles` (who-typed roles),
+  not generic predicate presence.  WHEN satisfied by context.time OR context.when.
+  WHERN requires WHERE+WHEN composite; partial presence yields OPEN (non-material).
+  Added minimal evidence-driven procedures for WHY, HOW, COULD, WOULD.  Updated
+  module docstring to reflect all eleven attentions having deterministic behaviour.
+- `src/af/infrastructure/ideon_reference.py`: Added `semantic_roles` to `_SeedSense`
+  and updated `sit.past` and `will.intends` entries with `("agent",)` roles.
+- `tests/unit/test_ideon_language.py`: Updated imports and temporal test fixtures
+  to use `WhenCondition`/`WhenKind`.  Added six new tests (TEST-018-1 through 8).
+- `tests/unit/test_ideon_service.py`: Updated `reference_service()` to pass
+  `semantic_roles` for `sit.past`.
+- `specs.md`: Appended SPEC-018.
+- `decisions.md`: Appended DEC-032 (superseding WHERN description in DEC-031).
+- `agent_runs.md`: Appended Run #018.
+
+### Verified Results
+- Focused Ideon suite (language + service + validation): 77 passed
+- All unit tests (excluding pre-existing git-history-dependent governance test): 311 passed
+- Strict mypy (src only): no issues
+- Ruff check + format: passed
+
+### Issues Encountered
+- Pre-existing: `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone).  GitHub CI is
+  authoritative for this check.
+
+### Related References
+- Spec: SPEC-018
+- Decision: DEC-032
+- PR review comment: #5052571328
+
+---
+
+---
+
+## Run #019 — Ideon Integration Correction Pass
+**Date**: 2026-07-23
+**Agent**: Copilot Coding Agent
+**Triggered by**: PR review comment #5052915940 (Alexander Holman)
+
+### Scope
+Third correction pass on the deterministic Prime Language reference slice.  Addressed
+six remaining integration blockers: WHERN constituent-state propagation, fail-closed WHEN
+timestamp validation, multi-role WHO satisfaction, end-to-end typed temporal graph node,
+interpretation graph contract documentation, and stale terminology removal.
+
+### Changes Made
+- `src/af/domain/ideons/inquiry.py`: Added `_WHO_ROLE_CONTEXT_MAP` mapping semantic roles
+  to context fields.  Added `_is_valid_time_string()` for fail-closed ISO timestamp
+  validation.  Refactored WHO to use `required_who_roles` set and emit exact role name.
+  Fixed WHEN to use `time_val is not None and _is_valid_time_string(time_val)`.  Fixed
+  WHERN constituent-state propagation: contested WHERE + satisfied WHEN yields OPEN with
+  "where:contested"; all four branches restructured with pre-computed `t_ev`.
+- `src/af/application/ideons.py`: Added `InquiryStatus` and `Question` imports.  Added
+  typed `temporal-qualification` node (when-kind, when-value) to `construct_graph()` when
+  WHEN is satisfied.  Added interpretation graph contract docstring.
+- `tests/unit/test_ideon_language.py`: Renamed
+  `test_one_event_renders_as_was_is_or_projected_by_reference_whern` to
+  `test_render_tense_classifies_event_as_was_is_or_projected`.  Updated
+  `test_whern_is_composite_of_where_and_when_components` to reflect contested-WHERE
+  propagation.  Added: `test_invalid_time_string_does_not_satisfy_when`,
+  `test_whern_constituent_state_propagates_contested_where`,
+  `test_who_satisfied_by_non_agent_role`.
+- `tests/unit/test_ideon_service.py`: Added `InquiryStatus` import.  Added:
+  `test_temporal_qualification_node_in_graph_when_when_is_satisfied` (end-to-end),
+  `test_interpretation_graph_is_surface_bound`.
+- `specs.md`: Appended SPEC-019.
+- `decisions.md`: Appended DEC-033.
+- `agent_runs.md`: Appended Run #019.
+
+### Verified Results
+- `ruff check src tests scripts`: passed
+- `strict mypy src` (51 files): no issues
+- Unit + integration tests: 389 passed (1 pre-existing git-topology failure; CI authoritative)
+- Full gate (ruff + mypy + pytest + legacy): passed
+
+### Issues Encountered
+- Pre-existing: `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone).  GitHub CI is authoritative.
+
+### Related References
+- Spec: SPEC-019
+- Decision: DEC-033
+- PR review comment: #5052915940
+
+---
+
+---
+
+## Run #020 — Ideon Final Correction Pass (SPEC-020 / DEC-034)
+**Date**: 2026-07-23
+**Status**: Completed
+
+### Objective
+Address the four remaining integration blockers identified in the PR review
+comment #5053551914:
+1. `construct_graph()` silent `Tense.IS` default for incompatible reference_when.
+2. `WhenKind` missing ORDERING form despite documentation claiming ordering support.
+3. `WhenCondition(INTERVAL)` domain invariants not self-enforcing.
+4. Private `_parse_when_expression` coupled from application layer to domain internals.
+5. Stale PR/governance claims about WILL and "eleven implemented attentions."
+
+### Actions Taken
+- `src/af/domain/ideons/temporal.py`:
+  - Added `WhenKind.ORDERING = "ordering"` with expression validation in `__post_init__`.
+  - Tightened `WhenCondition(INTERVAL)` validation: both-absent raises ValueError;
+    start > end raises ValueError.
+  - Added public `parse_when_expression(value: str) -> WhenCondition | None` as the
+    authoritative bounded ``kind:expression`` parser.  Moved `_WHEN_EXPRESSION_KINDS`
+    constant here.  Updated module docstring.
+- `src/af/domain/ideons/inquiry.py`:
+  - Removed private `_parse_when_expression` and `_WHEN_EXPRESSION_KINDS`.
+  - Imports `parse_when_expression` from `temporal`; uses it for WHEN validation.
+  - Updated module docstring to mention `ordering` kind and public parser location.
+- `src/af/application/ideons.py`:
+  - Replaced `from af.domain.ideons.inquiry import _parse_when_expression` with
+    `from af.domain.ideons.temporal import parse_when_expression`.
+  - Removed `contextlib.suppress(ValueError)` in `construct_graph()`.  Incompatible
+    or uncomparable `reference_when` kinds now yield `tense_value = "contested"`.
+  - Updated docstring with explicit fail-closed tense contract.
+- `tests/unit/test_ideon_language.py`:
+  - Updated `test_parse_when_expression_valid_and_fail_closed` to import from `temporal`
+    and cover ORDERING kind and inverted-interval fail-closed case.
+  - Added `test_when_satisfied_by_ordering_expression`.
+  - Added `test_when_condition_interval_invariants_enforced_by_domain`.
+  - Added `test_ordering_when_condition_domain_validation`.
+- `tests/unit/test_ideon_service.py`:
+  - Added `test_incompatible_reference_when_yields_contested_tense_not_is`.
+  - Added `test_uncomparable_event_interval_with_timestamp_reference_yields_contested`.
+- `specs.md`: Appended SPEC-020.
+- `decisions.md`: Appended DEC-034 (includes governance supersession of WILL/eleven-attentions
+  claims in SPEC-016/DEC-030).
+- `agent_runs.md`: Appended Run #020.
+
+### Verified Results
+- `ruff check src tests`: passed
+- `strict mypy src` (3 modified files): no issues
+- Unit + integration tests: 559 passed, 1 pre-existing git-topology failure (CI authoritative)
+- All 9 new regression tests pass (TEST-020-1 through TEST-020-9)
+
+### Issues Encountered
+- Pre-existing: `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone).  GitHub CI is authoritative.
+
+### Related References
+- Spec: SPEC-020
+- Decision: DEC-034
+- PR review comment: #5053551914
+
+---
+
+---
+
+## Run #021 — Role-Driven WHERE and WHERN Governance Alignment
+**Date**: 2026-07-23
+**Trigger**: PR review comment #5053882042
+
+### Problem
+Two merge blockers in the PR's deterministic reference slice:
+
+1. WHERE was still lexeme-driven, not role-driven.  `context.where` could satisfy the
+   spatial constituent of WHERN while `Question.WHERE` itself stayed NOT_APPLICABLE.
+   A bare location noun made WHERE contested without any predicate declaring a spatial
+   dependency.
+2. SPEC-019/DEC-033 stated that CONTESTED WHERE + SATISFIED WHEN yields WHERN=OPEN
+   (non-material).  The implementation correctly yields WHERN=CONTESTED (material).
+   The governed record and the code disagreed.
+
+### Actions Taken
+- `src/af/domain/ideons/inquiry.py`:
+  - Added `_WHERE_TYPED_ROLES = frozenset({"location"})` module-level constant.
+  - Replaced the old lexeme-driven WHERE block with a role-driven implementation:
+    `context.where` → SATISFIED; `location` role + candidates → CONTESTED/SATISFIED;
+    `location` role + no filler → OPEN (material); no role + no context.where →
+    NOT_APPLICABLE.
+  - Replaced the WHERN block: removed the separate `context.where` check; uses WHERE
+    result status directly; added `where_open` handling so WHERE=OPEN + WHEN=SATISFIED
+    yields WHERN=OPEN (missing:where) rather than accidentally NOT_APPLICABLE.
+  - Updated module docstring for WHERE.
+- `src/af/infrastructure/ideon_reference.py`:
+  - Added `semantic_roles=("location",)` to the `on.spatial` seed sense.
+- `tests/unit/test_ideon_language.py`:
+  - Added `semantic_roles=("location",)` to `on.spatial` in `reference_dictionary()`.
+  - Added `test_where_is_role_driven_not_lexeme_driven`.
+  - Added `test_where_open_when_spatial_role_declared_but_no_filler`.
+  - Added `test_context_where_and_dict_candidates_resolve_same_spatial_role`.
+- `tests/unit/test_ideon_service.py`:
+  - Added `semantic_roles=("location",)` to `on.spatial` in `reference_service()`.
+- `specs.md`: Appended SPEC-021.
+- `decisions.md`: Appended DEC-035 (supersedes SPEC-019 TEST-019-1 and DEC-033 WHERN rule).
+- `agent_runs.md`: Appended Run #021.
+
+### Verified Results
+- `ruff check src tests`: passed
+- `ruff format --check src tests`: passed
+- `strict mypy src` (51 source files): no issues
+- `pytest tests/ --ignore=tests/unit/test_governance_scripts.py`: 591 passed
+- All 3 new tests pass (TEST-021-1 through TEST-021-4)
+- Pre-existing `test_append_only_check_uses_bootstrap_anchor_for_first_pr_topology`
+  fails locally (bootstrap SHA unresolvable in shallow clone); GitHub CI is authoritative.
+
+### Issues Encountered
+- None beyond the pre-existing shallow-clone governance test failure.
+
+### Related References
+- Spec: SPEC-021
+- Decision: DEC-035
+- PR review comment: #5053882042
+
+---
+
+## Run #022 — Ideon Correction: Typed Temporal Perspective and Fail-Closed Whitespace Conditions
+**Date**: 2026-07-23
+**Agent**: Copilot
+**Status**: Complete
+
+### Actions Taken
+1. Added ``TemporalPerspectiveStatus`` (``RESOLVED | UNANCHORED | CONTESTED``) and
+   ``TemporalPerspective`` typed domain value to ``af.domain.ideons.temporal``.
+   Invariant: RESOLVED requires a non-None ``Tense``; UNANCHORED/CONTESTED forbid one.
+   Properties ``tense_label`` and ``status_label`` expose validated serialisable values.
+2. Updated ``WhenCondition.__post_init__`` EVENT/CRITERION guard to use
+   ``not self.expression or not self.expression.strip()``.
+3. Updated ``parse_when_expression`` event/criterion guard to use
+   ``not payload or not payload.strip()``.
+4. Updated ``IdeonService.construct_graph`` to build a ``TemporalPerspective`` typed
+   value and serialise both ``tense`` (full label) and ``tense-status`` (resolution
+   status) graph properties.
+5. Added 7 unit/integration tests covering all new invariants (TEST-022-1 to -7).
+6. Appended SPEC-022 and DEC-036 to governance files.
+
+### Verification
+- ``uv run ruff check src/af/domain/ideons/temporal.py src/af/application/ideons.py tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: all checks passed
+- ``uv run mypy src/af/domain/ideons/temporal.py src/af/application/ideons.py``: no issues
+- ``uv run pytest tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: 62 passed
+- Spec: SPEC-022
+- Decision: DEC-036
+- PR review comment: #5055123973
+
+---
+
+## Run #023 — fix(ideons): temporal graph projection separates tense axis from resolution status
+**Date**: 2026-07-23
+**Agent**: GitHub Copilot Coding Agent
+**Task**: SPEC-023 / DEC-037 — graph projection must not conflate ``resolved-tense``
+  with ``temporal-perspective-status``; ``tense_label`` returns ``None`` for unresolved.
+
+### Actions
+1. Updated ``TemporalPerspective.tense_label`` (``temporal.py``): return type changed to
+   ``str | None``; returns ``tense.value`` for RESOLVED, ``None`` for UNANCHORED and
+   CONTESTED.
+2. Updated ``TemporalQualification`` docstring to document its resolved-only role and
+   relationship to ``TemporalPerspective``.
+3. Updated ``IdeonService.construct_graph`` (``application/ideons.py``):
+   - Removed ``Property("tense", perspective.tense_label)``.
+   - Removed ``Property("tense-status", perspective.status_label)``.
+   - Added ``Property("temporal-perspective-status", perspective.status_label)`` (always).
+   - Added ``Property("resolved-tense", perspective.tense.value)`` (only when RESOLVED).
+   - Updated docstring and inline comments to reflect new property contract.
+4. Updated ``test_ideon_language.py``: ``tense_label`` assertions for UNANCHORED and
+   CONTESTED now assert ``None``.
+5. Updated ``test_ideon_service.py``: all temporal graph property assertions updated to
+   ``temporal-perspective-status`` and ``resolved-tense``; unresolved tests assert
+   ``resolved-tense`` absent.
+6. Added ``test_temporal_perspective_graph_five_observable_cases`` covering all five
+   standpoints end-to-end: WAS, IS, PROJECTED, UNANCHORED, CONTESTED.
+7. Appended SPEC-023 and DEC-037.
+
+### Verification
+- ``uv run ruff check src/af/domain/ideons/temporal.py src/af/application/ideons.py tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: all checks passed
+- ``uv run mypy src/af/domain/ideons/temporal.py src/af/application/ideons.py --strict``: no issues
+- ``uv run pytest tests/unit/test_ideon_language.py tests/unit/test_ideon_service.py``: 63 passed
+- Spec: SPEC-023
+- Decision: DEC-037
+- PR review comment: #5055585311
+
+---
+
 ## Run #016 - Production-MVP Readiness Contract and Artifact Gate
 **Date**: 2026-07-23
 **Agent**: Zordon (`pr.command.zordon`)

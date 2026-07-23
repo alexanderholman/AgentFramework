@@ -122,6 +122,29 @@ continues to deny direct generation until its scoped review and reuse gates are 
 The Laravel-inspired provider, lifecycle, manager, driver, scope, data, and delivery
 contracts are defined in [Application Platform Contracts](docs/application-platform.md).
 
+## Prime Language / Ideon reference
+
+The first deterministic Prime Language slice is available through the shared Ideon
+application boundary. It preserves unresolved senses instead of guessing, emits all eleven
+inquiry fields, and keeps a stable numeric Ideon key separate from the immutable graph
+revision.
+
+```bash
+uv run af ideon interpret "sat on the bank"
+uv run af ideon interpret "sat on the bank" --actor alice --domain river
+```
+
+The equivalent REST endpoint is `POST /api/v1/ideons/interpret`:
+
+```bash
+curl -sS http://127.0.0.1:8000/api/v1/ideons/interpret \
+  -H 'content-type: application/json' \
+  -d '{"surface":"sat on the bank","source_id":"example:1","rights":"user-provided"}'
+```
+
+This is a controlled reference dictionary and deterministic contract, not a general English
+parser or a trained language model. See [Prime Language / Ideon implementation](docs/prime-language-ideon-implementation.md).
+
 ## Development workflow
 
 The repeatable development gate is registered as `[SCRIPT:af-dev]` and previews commands

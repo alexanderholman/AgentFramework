@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from af.bootstrap import create_application
+import af
+from af.bootstrap import AFApplication, create_application
 from af.config import ConfigSnapshot, MappingConfigSource, Settings, load_settings
 from af.framework.errors import InvalidBinding
 
@@ -32,6 +33,14 @@ def test_application_does_not_capture_invocation_context() -> None:
         application = create_application()
     assert maybe_current_context() is None
     assert "tenant-private" not in repr(application.config)
+
+
+def test_root_package_lazily_exposes_only_the_composition_root_api() -> None:
+    assert af.AFApplication is AFApplication
+    assert af.create_application is create_application
+    missing_name = "missing"
+    with pytest.raises(AttributeError):
+        getattr(af, missing_name)
 
 
 def test_application_freezes_container_before_provider_boot() -> None:

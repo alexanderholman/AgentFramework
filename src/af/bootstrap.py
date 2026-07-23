@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
+from af.application.ideons import IdeonController, IdeonService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
 from af.domain.agent_routing import DeterministicAgentRouter
@@ -30,6 +31,7 @@ from af.framework.types import (
     parse_probability,
 )
 from af.infrastructure.database import Database
+from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
 
@@ -106,8 +108,22 @@ class _FrameworkProvider(ServiceProvider):
         container.instance(DeterministicAgentRouter, DeterministicAgentRouter())
 
 
+class _IdeonProvider(ServiceProvider):
+    def __init__(self, service: IdeonService | None) -> None:
+        self._service = service
+
+    def register(self, container: Container) -> None:
+        service = self._service or create_reference_ideon_runtime().service
+        container.instance(IdeonService, service)
+
+
 class _ApplicationProvider(ServiceProvider):
     def register(self, container: Container) -> None:
+        container.bind(
+            IdeonController,
+            lambda current: IdeonController(current.resolve(IdeonService)),
+            scope=Scope.TRANSIENT,
+        )
         container.bind(
             TaskService,
             lambda current: TaskService(
@@ -143,6 +159,7 @@ class AFApplication:
     traces: TraceRepository
     verifier: DeterministicVerifier
     agent_routes: AgentRoutingController
+    ideons: IdeonController
 
 
 def create_application(
@@ -151,6 +168,7 @@ def create_application(
     config: ConfigSnapshot | None = None,
     task_repository: TaskRepository | None = None,
     trace_repository: TraceRepository | None = None,
+    ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
 ) -> AFApplication:
@@ -188,6 +206,7 @@ def create_application(
             selector_metadata,
             selector_confidence_threshold,
         ),
+        _IdeonProvider(ideon_service),
         _ApplicationProvider(),
     )
     for provider in providers:
@@ -205,6 +224,7 @@ def create_application(
         traces=container.resolve_token(TraceRepository),
         verifier=container.resolve(DeterministicVerifier),
         agent_routes=container.resolve(AgentRoutingController),
+        ideons=container.resolve(IdeonController),
     )
 
 

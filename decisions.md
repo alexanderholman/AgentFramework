@@ -1644,6 +1644,648 @@ weaken transactions, ordering, durability, search, or policy enforcement.
 
 ---
 
+## [DEC-030] Add Ideons as a Typed Bounded Context Before Neural Routes
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / ChatGPT implementation session
+
+### Context
+The Prime Language specification requires authoritative idea graphs, explicit ambiguity,
+versioned logical dictionaries, eleven specialist inquiries, and stable numeric references.
+AF's existing generic procedure contract carries string arguments and outputs; flattening an
+Ideon into that contract would lose type, revision, provenance, and non-closure semantics.
+
+### Decision
+1. Add Ideons as a domain/application bounded context with immutable graph and record values.
+2. Keep graph identity, stable numeric key, and immutable revision separate.
+3. Allocate registered prime Ideons from an odd-prime manifest and construct all other keys in
+   an injective even lane from canonical identity bytes.
+4. Keep mutable stores in infrastructure behind an IdeonStore protocol.
+5. Make candidate preservation and all eleven inquiry outputs authoritative structured data.
+6. Place interpretation orchestration in one application service/controller shared by
+   presentation adapters.
+7. Expose the controlled reference slice through CLI and REST, while retaining the complete
+   record rather than coercing it into Task output.
+8. Defer a generic procedure adapter, Prolog driver, durable registry, corpus compiler, and
+   neural routes until the deterministic contract is stable.
+
+### Alternatives Considered
+- **Put graphs directly in the Task pipeline:** rejected because its current string contracts
+  cannot preserve the authoritative schema.
+- **Use hashes as both key and meaning:** rejected because a key addresses but is not an Ideon.
+- **Guess the highest-scoring sense:** rejected because unresolved material distinctions are
+  valid open states and may require a question.
+- **Start with model training:** rejected because all routes need one validated target contract.
+
+### Consequences
+- AF gains a deterministic reference path with exact replay and conflict detection.
+- Controlled language examples can be tested before a statistical parser exists.
+- Very large arbitrary-precision keys are serialized as decimal strings at transport edges.
+- New prime registration requires an explicit key from a versioned manifest; no insertion-order allocator is used.
+- Constructed keys use a versioned length-prefixed binary identity codec and limit-independent decimal transport serialization.
+- Language-profile identity includes the Unicode database and normalization policy, and runtime/profile mismatches fail closed.
+- The initial dictionary is intentionally tiny and cannot support general-language claims.
+- Later Prolog and neural implementations can be compared against the same records.
+
+### Related Decisions
+- DEC-022 (Adopt the AF Python Vertical Slice and MCP-First ChatGPT Boundary)
+- DEC-025 (Adopt the Capability Ladder and Scoped Reviewed Generation)
+- DEC-029 (Use Providers, Managers, Named Drivers, and Honest Delivery Semantics)
+
+### Related Specs
+- SPEC-012 (Capability Ladder and Scoped Generative Execution)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-016 (Deterministic Prime Language and Ideon Reference Contract)
+
+### Output References
+- Added: "docs/prime-language-ideon-implementation.md"
+- Added: "src/af/domain/ideons/"
+- Added: "src/af/application/ideons.py"
+- Added: "src/af/infrastructure/ideons.py"
+- Added: "src/af/interfaces/ideons.py"
+
+---
+
+---
+
+## [DEC-031] Correction Pass: Provenance Separation, Temporal Model, and Inquiry Scope
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of the initial Ideon reference slice (DEC-030) identified six semantic errors:
+WILL naming embedded in temporal model; WHO spuriously material for all predicateless
+utterances; source ID/rights contaminating semantic graph canonical bytes; temporal future
+encoded as WHERN rather than as a qualification on propositions; constructed keys
+undocumented as identity codes; and inquiry coverage overclaimed.
+
+### Decision
+1. Rename `Tense.WILL` to `Tense.PROJECTED` throughout; temporal modality is
+   `WAS < IS > PROJECTED` attached to propositions/relations/context.
+2. Rename `WillKind` → `AuxiliaryKind`, `will_kind` → `auxiliary_kind`.
+3. Reclassify `will.future-auxiliary` dictionary sense from WHERN slot to WHEN slot.
+   WHERN remains for criterion-conditioned temporality only.
+4. Make WHO material-open only when at least one predicate (action/state/relation) is
+   present in viable candidates; otherwise NOT_APPLICABLE.
+5. Remove source ID and rights from semantic graph annotations and provenance.
+   They belong exclusively in `InterpretationRecord` (occurrence provenance).  A
+   regression test verifies that same semantics from different sources share a revision.
+6. Document constructed arbitrary-precision keys as canonical identity codes in
+   `numeric.py`; note that compact manifested registry addresses are future work.
+7. Update inquiry module docstring to state which attentions are implemented (seven)
+   and which are represented but not yet evaluated (four).
+
+### Alternatives Considered
+- **Preserve WILL as a question attention for future tense:** rejected per Alexander's
+  explicit instruction; temporality qualifies propositions, it is not an isolated inquiry.
+- **Keep source ID in graph annotations with a flag to exclude from canonical bytes:**
+  rejected; provenance and semantics must be separate layers with no coupling.
+- **Mark WHO as NOT_APPLICABLE instead of OPEN for all sentences without context.actor:**
+  rejected; WHO is genuinely open (and material) when a predicate requires an agent.
+
+### Consequences
+- Semantically identical utterances from different sources now share graph revisions.
+- Temporal perspective is uniformly represented as proposition qualification.
+- Inquiry coverage claims accurately match the implemented rules.
+- All seven implemented attentions allow OPEN/CONTESTED/SATISFIED/NOT_APPLICABLE.
+- WHY, HOW, COULD, and WOULD remain structurally present but output NOT_APPLICABLE until
+  their procedural rules are implemented.
+
+### Related Decisions
+- DEC-030 (Add Ideons as a Typed Bounded Context Before Neural Routes)
+
+### Related Specs
+- SPEC-016, SPEC-017
+
+### Output References
+- Modified: `src/af/domain/ideons/temporal.py`
+- Modified: `src/af/domain/ideons/inquiry.py`
+- Modified: `src/af/domain/ideons/numeric.py`
+- Modified: `src/af/application/ideons.py`
+- Modified: `src/af/infrastructure/ideon_reference.py`
+- Modified: `tests/unit/test_ideon_language.py`
+- Modified: `tests/unit/test_ideon_service.py`
+- Modified: `docs/prime-language-ideon-implementation.md`
+
+---
+
+---
+
+## [DEC-032] Ideon Temporal Model: Composite Whern, Condition-Bearing WHEN, Role-Driven WHO
+**Date**: 2026-07-22
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-017 (DEC-031) identified four remaining semantic errors in the Ideon
+reference slice:
+1. WHERN was described as criterion-conditioned temporality rather than the WHERE+WHEN
+   composite; this contradicted the WHERN = WHERE + WHEN amalgamation definition.
+2. WHEN was satisfied only by a scalar datetime (context.time) rather than being
+   condition-bearing (supporting event predicates, criteria, intervals, orderings).
+3. WHO was driven by generic predicate presence rather than declared unfilled who-typed
+   roles; impersonal states falsely triggered a material opening.
+4. WHY, HOW, COULD, and WOULD defaulted globally to NOT_APPLICABLE, which is incorrect
+   when a relevant predicate is present.
+Additionally, "reference Whern" was used as a synonym for temporal standpoint, which
+contradicts the WHERN = WHERE+WHEN definition.
+
+### Decision
+1. Replace `Whern(temporal_anchor, reference_perspective, criterion)` with:
+   - `WhenCondition(kind: WhenKind, ...)` — condition-bearing typed temporal relation
+     (TIMESTAMP, INTERVAL, EVENT, CRITERION kinds).
+   - `Whern(when: WhenCondition | None, where: str | None)` — composite WHERE+WHEN.
+2. `render_tense` now accepts two `WhenCondition` arguments; `TemporalQualification`
+   uses `when: WhenCondition` rather than `whern: Whern`.
+3. WHEN inquiry: satisfied by context.time (timestamp) OR context.when (condition
+   expression).  Context field name changes from criterion to when.
+4. WHERN inquiry: SATISFIED when both WHERE (from dictionary or context.where) and
+   WHEN are present; OPEN (non-material) with missing role when only one is present.
+5. Add `semantic_roles: tuple[str, ...]` to `SenseEntry` (default empty).  WHO is
+   materially open only when a viable candidate has a who-typed role and no actor is
+   declared.  Impersonal predicates (semantic_roles=()) leave WHO NOT_APPLICABLE.
+6. WHY, HOW, WOULD: OPEN (non-material, material=False) when a predicate is present,
+   NOT_APPLICABLE otherwise.  COULD: OPEN (non-material) when predicate+actor present.
+7. Remove "reference Whern" terminology from docstrings; use "temporal perspective".
+
+### Alternatives Considered
+- **Keep Whern as temporal-only, add Whern2 for composite:** rejected; clean rename
+  is clearer and removes the false synonym between WHERN and temporal standpoint.
+- **Add a material=True rule for WHY/HOW/COULD/WOULD:** rejected; full causal and
+  capability reasoning is beyond this reference slice; non-material open is correct
+  for minimal deterministic procedures.
+
+### Consequences
+- `WhenCondition` replaces `Whern` as the temporal/conditional anchor in
+  `TemporalQualification`.  `Whern` is now the composite spatial+temporal constraint.
+- WHERN requires both WHERE and WHEN to be satisfied; partial state is explicitly
+  represented as non-material OPEN with the missing role in evidence.
+- WHO correctly distinguishes agentive from impersonal predicates via semantic_roles.
+- All eleven inquiry attentions now have minimal deterministic procedures.
+- Existing tests updated; six new tests added for the corrected semantics.
+
+### Supersedes
+- DEC-031 (Ideon Correction: Provenance Separation, Temporal Qualification, Inquiry
+  Scope) — the WHERN description in DEC-031 ("criterion-conditioned temporality") is
+  superseded.  The prior decisions remain in the record.
+
+### Related Decisions
+- DEC-030, DEC-031
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018
+
+### Output References
+- Modified: `src/af/domain/ideons/temporal.py`
+- Modified: `src/af/domain/ideons/records.py`
+- Modified: `src/af/domain/ideons/inquiry.py`
+- Modified: `src/af/infrastructure/ideon_reference.py`
+- Modified: `tests/unit/test_ideon_language.py`
+- Modified: `tests/unit/test_ideon_service.py`
+
+---
+
+---
+
+## [DEC-033] Ideon Correction: WHERN Constituent Propagation, Fail-Closed WHEN, Multi-Role WHO, Typed Temporal Graph Node
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-018 (DEC-032) identified six remaining integration blockers:
+1. WHERN constituent-state propagation was incomplete: contested WHERE + satisfied WHEN
+   incorrectly produced NOT_APPLICABLE instead of OPEN (non-material, contested WHERE).
+2. InquiryEngine satisfied WHEN from any non-empty context.time string, not a validated
+   timezone-aware ISO timestamp.  Invalid strings were accepted.
+3. WHO satisfaction checked only context.actor; other who-typed roles (subject, experiencer,
+   source, possessor, affected) could not satisfy WHO from context.
+4. TemporalQualification was defined and unit-tested in isolation; construct_graph() never
+   attached a typed temporal-qualification node to the interpretation graph.
+5. The interpretation graph contract (surface-bound) was undocumented; occurrences from
+   different sources sharing the same surface were tested but paraphrase separation was not.
+6. Stale test name retained "reference_whern" despite the rejected terminology.
+
+### Decision
+1. WHERN constituent-state propagation: a contested WHERE + satisfied WHEN yields WHERN
+   OPEN (non-material) with evidence "where:contested".  WHERN is satisfied only when
+   WHERE is SATISFIED (not contested) and WHEN is satisfied.  Contested WHERE with no WHEN
+   yields WHERN OPEN (non-material) with evidence "missing:when".
+2. WHEN validation: context.time must be a parseable, timezone-aware ISO 8601 timestamp
+   (`datetime.fromisoformat` + tzinfo check).  Fail-closed: invalid or timezone-naive
+   strings leave WHEN NOT_APPLICABLE.  context.when remains an unvalidated condition
+   expression (non-empty string is sufficient).
+3. WHO multi-role: `_WHO_ROLE_CONTEXT_MAP` maps each semantic role to its context field
+   (agent→actor, subject→subject, experiencer→experiencer, source→source,
+   possessor→possessor, affected→affected).  WHO is satisfied by the first matching
+   context field for a required role.  The emitted role is the actual context field name.
+   context.actor does NOT satisfy a candidate that requires only an experiencer role.
+4. End-to-end temporal node: `construct_graph()` adds an `IdeonNode("temporal-qualification",
+   NodeKind.VALUE, ...)` with `when-kind` and `when-value` properties when WHEN is
+   satisfied.  This propagates the WhenCondition model into the graph output.
+5. Interpretation graph contract documented in `construct_graph()` docstring: the graph is
+   surface-bound; paraphrase separation regression test added.
+6. Stale test renamed from `test_one_event_renders_as_was_is_or_projected_by_reference_whern`
+   to `test_render_tense_classifies_event_as_was_is_or_projected`.
+
+### Alternatives Considered
+- **Parse context.time into a WhenCondition before passing to InquiryEngine**: would require
+  adding typed fields to ContextGraph or a separate typed context object.  Deferred: the
+  current string-validated approach is fail-closed and consistent with ContextGraph's
+  string-only contract.
+- **Move surface forms out of the graph into InterpretationRecord**: valid architectural
+  alternative, but requires a larger refactor.  Chosen instead to document the interpretation
+  graph contract explicitly and add paraphrase separation tests.
+
+### Consequences
+- WHERN now correctly propagates contested-WHERE state rather than silently dropping it.
+- Invalid timestamps fail closed at the InquiryEngine boundary.
+- WHO resolution is role-specific: an experiencer entry is satisfied only by context.experiencer.
+- The interpretation graph always contains a typed temporal-qualification node when WHEN is
+  satisfied, making the temporal model observable end-to-end.
+- 5 new tests added (TEST-019-4 through TEST-019-12); existing WHERN composite test updated
+  to reflect correct contested-WHERE propagation.
+
+### Supersedes
+- DEC-032 (partial): the "WHERN OPEN with missing:where when only WHEN provided" description
+  in DEC-032 is superseded for the contested-WHERE case.  Prior decisions remain in record.
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019
+
+### Output References
+- Modified: `src/af/domain/ideons/inquiry.py`
+- Modified: `src/af/application/ideons.py`
+- Modified: `tests/unit/test_ideon_language.py`
+- Modified: `tests/unit/test_ideon_service.py`
+
+---
+
+---
+
+## [DEC-034] Ideon Correction: Fail-Closed Tense, ORDERING Kind, INTERVAL Invariants, Public Parser
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-019 (DEC-033) identified four remaining integration blockers:
+1. `construct_graph()` initialised `tense = Tense.IS` and used `contextlib.suppress(ValueError)`
+   to swallow `render_tense()` failures.  An incompatible `reference_when` (e.g. CRITERION
+   reference vs TIMESTAMP event) silently produced `tense="is"`, which is semantically wrong.
+2. The module docstring and earlier Alexander guidance stated WHEN supports "orderings", but
+   `WhenKind` had no ORDERING form.  The documentation claim was unsupported by the type.
+3. `WhenCondition(INTERVAL)` with both bounds absent was only rejected by `parse_when_expression`
+   (parser path), not by the domain value itself.  Similarly, start > end was not validated by
+   `__post_init__`.  Domain invariants must be self-enforcing.
+4. `application.ideons` imported the private `_parse_when_expression` from `inquiry.py`,
+   creating an application-to-private-domain coupling.  Both `InquiryEngine` and
+   `construct_graph()` need one authoritative canonical parser with a public API boundary.
+
+### Decision
+1. **Fail-closed tense**: remove `contextlib.suppress(ValueError)` from `construct_graph()`.
+   When `reference_when` is None: tense defaults to `"is"` (observational perspective).
+   When `reference_when` is provided and `render_tense()` raises `ValueError`: tense is set
+   to `"contested"` (explicit, not silently coerced to IS).  The temporal-qualification node
+   is still emitted so the temporal fact is not lost; callers must treat `tense="contested"`
+   as unresolved.
+2. **ORDERING WhenKind**: add `WhenKind.ORDERING = "ordering"` with `expression` required.
+   `parse_when_expression` and `InquiryEngine` accept `ordering:<expression>`.  Typical
+   expressions: `before:X`, `after:X`, `during:X`.  Any non-empty expression is valid.
+3. **INTERVAL domain invariants**: enforce in `WhenCondition.__post_init__`:
+   both-absent raises `ValueError("at least one bound")`; start > end raises
+   `ValueError("must not exceed")`.  `parse_when_expression` also enforces start > end at
+   parse time (returns None), providing a second layer of protection.
+4. **Public parser**: move WHEN-expression parsing to `parse_when_expression` in
+   `af.domain.ideons.temporal` (public, documented).  Remove the private
+   `_parse_when_expression` copy from `inquiry.py`.  `_WHEN_EXPRESSION_KINDS` is also
+   moved to `temporal.py` (private constant within the module).  Both `InquiryEngine` and
+   `_make_when_condition_from_context` in `application.ideons` import and use the same
+   function.
+
+### Governance Supersession
+The phrase "eleven implemented attentions" that appears in SPEC-016 TEST-016-2 and DEC-030
+and the phrase "WILL" as a temporal inquiry attention in SPEC-016 TEST-016-4 and DEC-030 are
+superseded by the corrected model established in SPEC-017/DEC-031 and refined through
+SPEC-018/DEC-032, SPEC-019/DEC-033, and this DEC-034.  The corrected claims:
+- Eleven questions are **structurally represented** in every InquiryState.
+- Seven have **conservative deterministic procedures** (WHO, WHAT, WHERE, WHEN, WHERN, IS,
+  SHOULD).
+- Four are **open/non-material by evidence** (WHY, HOW, COULD, WOULD) — not "not yet
+  evaluated schema placeholders."
+- Global tense qualification uses the ``WAS < IS > PROJECTED`` axis; `WILL` is a surface
+  token disambiguated through the dictionary, not a privileged inquiry attention.
+- `WhenKind` now includes TIMESTAMP, INTERVAL, EVENT, CRITERION, and ORDERING.
+
+Prior governed wording in SPEC-016 and DEC-030 is preserved in the append-only history.
+This entry and SPEC-020 are the authoritative current statements.
+
+### Alternatives Considered
+- **Emit no temporal-qualification node when tense is contested**: would silently lose the
+  temporal fact.  Chosen instead to emit the node with `tense="contested"` so the information
+  is preserved and the unresolved state is inspectable.
+- **Allow ordering expression to be a structured object**: would require a new field or
+  sub-type.  The current string-expression approach is consistent with EVENT and CRITERION.
+
+### Consequences
+- `construct_graph()` never silently asserts IS for an incompatible reference standpoint.
+- `WhenKind.ORDERING` closes the documentation gap; temporal ordering relations are now
+  a supported and tested WHEN condition form.
+- `WhenCondition` is self-validating; callers cannot construct a both-open INTERVAL or an
+  inverted interval without an explicit exception.
+- The parser API boundary is clean: one public function in the temporal domain, no
+  application-layer coupling to private domain internals.
+- 9 new regression tests added (TEST-020-1 through TEST-020-9).
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020
+
+### Output References
+- Modified: `src/af/domain/ideons/temporal.py` (ORDERING, INTERVAL invariants, parse_when_expression)
+- Modified: `src/af/domain/ideons/inquiry.py` (remove private parser, use public parse_when_expression)
+- Modified: `src/af/application/ideons.py` (import public parser, fail-closed tense)
+- Modified: `tests/unit/test_ideon_language.py` (new ORDERING, INTERVAL, parse tests)
+- Modified: `tests/unit/test_ideon_service.py` (new contested-tense regression tests)
+
+---
+
+---
+
+## [DEC-035] Ideon Correction: Role-Driven WHERE and WHERN State Machine Governance Correction
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-020 (DEC-034) identified two remaining blockers:
+
+1. **WHERE was not role-driven.**  `InquiryEngine` derived WHERE from any viable lexeme
+   whose `question_slot` was WHERE, irrespective of whether any predicate or relation
+   declared an unfilled spatial role.  This caused an explicit `context.where` to satisfy
+   the spatial constituent of WHERN while `Question.WHERE` itself remained NOT_APPLICABLE,
+   and allowed a bare location noun to make WHERE contested even when no predicate declared
+   a spatial dependency.
+
+2. **Append-only governance contradicted the implemented WHERN state machine.**  SPEC-019
+   (TEST-019-1) and DEC-033 stated that ``CONTESTED WHERE + SATISFIED WHEN`` yields
+   ``WHERN=OPEN (non-material)``.  The implementation (as reviewed and accepted through
+   DEC-033 and DEC-034) correctly yields ``WHERN=CONTESTED (material)`` so that contested
+   spatial disambiguation blocks WHERN closure.  The governed record was wrong; the code
+   was right.
+
+### Decision
+
+**1 — Role-driven WHERE**
+
+Introduce `_WHERE_TYPED_ROLES = frozenset({"location"})` in `InquiryEngine`.  WHERE
+activates only when:
+
+  a. `context.where` is provided → SATISFIED (explicit direct WHERE; role="location").
+  b. A viable candidate has `"location"` in `semantic_roles`:
+     - Exactly one viable location-typed dictionary candidate → SATISFIED
+       (role="location-sense").
+     - Multiple viable location-typed candidates → CONTESTED (material,
+       role="location-sense").
+     - No viable location-typed candidate, no `context.where` → OPEN (material,
+       role="location", evidence="missing:location").
+
+`on.spatial` (and all equivalent spatial relations) is updated to carry
+`semantic_roles=("location",)` in every dictionary, fixture, seed, and reference table.
+
+A bare location noun without a spatial predicate leaves WHERE NOT_APPLICABLE.
+
+**2 — WHERN constituent computation**
+
+The WHERN block now uses the WHERE result status directly.  `context.where` is already
+incorporated into the WHERE result; no separate check is needed.  The full transition
+table, correcting SPEC-019/DEC-033:
+
+  - WHERE=SATISFIED + WHEN=SATISFIED    → WHERN=SATISFIED
+  - WHERE=CONTESTED + WHEN=SATISFIED    → WHERN=CONTESTED (material) ← correction
+  - WHERE=SATISFIED/CONTESTED/OPEN + WHEN absent → WHERN=OPEN (non-material, missing:when)
+  - WHEN=SATISFIED + WHERE not fully satisfied   → WHERN=OPEN (non-material, missing:where)
+  - WHERE=NOT_APPLICABLE + WHEN=NOT_APPLICABLE   → WHERN=NOT_APPLICABLE
+
+**3 — Governance supersession**
+
+The SPEC-019 (TEST-019-1) claim "CONTESTED WHERE + satisfied WHEN → WHERN OPEN
+(non-material)" and the DEC-033 description of the same rule are superseded by this
+entry.  Prior governed wording is preserved in the append-only history; this DEC-035
+and SPEC-021 are the authoritative current statements.
+
+### Alternatives Considered
+- **Keep WHERE lexeme-driven and add a separate spatial-role check for WHERN**: rejected
+  because this creates inconsistent WHERE/WHERN states (WHERE NOT_APPLICABLE while WHERN
+  uses the same candidate set for its spatial component).
+- **Make context.where require a declared spatial role**: rejected because `context.where`
+  represents an explicit, authoritative spatial declaration from the caller; it must not
+  require a corroborating predicate role.
+
+### Consequences
+- WHERE is now semantically consistent with WHO: both are driven by declared unfilled
+  typed roles, not by the presence of lexemes that happen to carry a particular
+  `question_slot`.
+- The WHERN state machine is self-consistent: the governed record, code, and tests all
+  agree that contested WHERE propagates as WHERN=CONTESTED.
+- Three new behavioural tests added (TEST-021-1 through TEST-021-4).
+- `on.spatial` carries `semantic_roles=("location",)` in all three data sources
+  (test fixture, service fixture, reference seed).
+
+### Supersedes
+- SPEC-019 TEST-019-1 (WHERN state for CONTESTED WHERE + SATISFIED WHEN)
+- DEC-033 item 1 WHERN constituent-state propagation rule (partial)
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033, DEC-034
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021
+
+### Output References
+- Modified: `src/af/domain/ideons/inquiry.py` (role-driven WHERE, simplified WHERN)
+- Modified: `src/af/infrastructure/ideon_reference.py` (`on.spatial` gets location role)
+- Modified: `tests/unit/test_ideon_language.py` (`on.spatial` location role, 3 new tests)
+- Modified: `tests/unit/test_ideon_service.py` (`on.spatial` location role)
+- Modified: `specs.md` (appended SPEC-021)
+- Modified: `decisions.md` (appended DEC-035)
+- Modified: `agent_runs.md` (appended Run #021)
+
+---
+
+## [DEC-036] Ideon Correction: Typed Temporal Perspective and Fail-Closed Whitespace Conditions
+**Date**: 2026-07-23
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Copilot correction pass
+
+### Context
+Review of SPEC-021 (DEC-035) identified two remaining blockers:
+
+1. **The authoritative graph state was not representable by the declared typed domain
+   model.**  ``TemporalQualification`` required ``tense: Tense`` permitting only
+   ``WAS``, ``IS``, and ``PROJECTED``.  ``construct_graph`` nevertheless emitted two
+   additional free-string values, ``"unanchored"`` and ``"contested"``, as the ``tense``
+   graph property.  These are valid epistemic states that belong in the domain model, but
+   they must not be added to the ``Tense`` axis itself.
+
+2. **``event:`` and ``criterion:`` accepted whitespace-only expressions.**
+   ``WhenCondition.__post_init__`` and ``parse_when_expression`` tested truthiness
+   (``if not payload`` / ``if not self.expression``) but not ``str.strip()``, so
+   payloads like ``event:   `` and ``criterion: \t`` were treated as valid.
+
+### Decision
+
+**1 — Typed temporal perspective**
+
+Introduce ``TemporalPerspectiveStatus`` (``StrEnum``: ``RESOLVED``, ``UNANCHORED``,
+``CONTESTED``) and ``TemporalPerspective`` (``frozen dataclass``:
+``status: TemporalPerspectiveStatus``, ``when: WhenCondition``,
+``tense: Tense | None = None``) in ``af.domain.ideons.temporal``.
+
+Invariant enforced in ``__post_init__``:
+- ``RESOLVED`` requires ``tense is not None``; a ``ValueError`` is raised otherwise.
+- ``UNANCHORED`` and ``CONTESTED`` must not carry a ``tense``; a ``ValueError`` is
+  raised if one is supplied.
+
+``TemporalPerspective.tense_label`` exposes the full serialisable representation
+(``was | is | projected | unanchored | contested``) so callers receive a consistent
+surface.  ``TemporalPerspective.status_label`` exposes the resolution status
+(``resolved | unanchored | contested``) for separate downstream use.
+
+``construct_graph`` builds a ``TemporalPerspective`` typed value and emits:
+- ``tense``: ``perspective.tense_label`` (full representation, backward-compatible).
+- ``tense-status``: ``perspective.status_label`` (explicit resolution status, new).
+
+``TemporalQualification`` is retained unchanged for resolved tense attachment to
+propositions; ``TemporalPerspective`` serves the broader graph-construction path that
+includes unresolved states.
+
+**2 — Fail-closed whitespace for EVENT/CRITERION**
+
+``WhenCondition.__post_init__``: change the EVENT/CRITERION guard to
+``if not self.expression or not self.expression.strip()``.
+
+``parse_when_expression``: change the ``event``/``criterion`` guard to
+``if not payload or not payload.strip()``.
+
+Both layers now independently reject whitespace-only expressions.
+
+### Alternatives Considered
+- **Add ``UNANCHORED`` and ``CONTESTED`` to ``Tense``**: rejected — the comment
+  explicitly requires "do not solve this by adding unresolved epistemic states to the
+  tense axis itself".
+- **Keep free-string ``tense_value`` and add a separate runtime assertion**: rejected —
+  the domain model must be self-validating; an assertion is not a typed domain
+  invariant.
+
+### Consequences
+- The authoritative graph state is now fully representable by the typed domain model.
+- ``tense-status`` provides explicit downstream resolution-status without changing the
+  existing ``tense`` property contract.
+- Whitespace-only EVENT/CRITERION expressions are fail-closed at both domain and parser
+  layers.
+- Seven new focused tests added (TEST-022-1 through TEST-022-7).
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033, DEC-034, DEC-035
+
+### Related Specs
+- SPEC-016, SPEC-017, SPEC-018, SPEC-019, SPEC-020, SPEC-021, SPEC-022
+
+### Output References
+- Modified: ``src/af/domain/ideons/temporal.py`` (new types, whitespace fix)
+- Modified: ``src/af/application/ideons.py`` (TemporalPerspective in construct_graph)
+- Modified: ``tests/unit/test_ideon_language.py`` (7 new tests)
+- Modified: ``tests/unit/test_ideon_service.py`` (1 new end-to-end test)
+- Modified: ``specs.md`` (appended SPEC-022)
+- Modified: ``decisions.md`` (appended DEC-036)
+- Modified: ``agent_runs.md`` (appended Run #022)
+
+---
+
+## [DEC-037] Separate graph tense axis from temporal-perspective resolution status
+**Date**: 2026-07-23
+**Status**: Accepted
+
+### Context
+DEC-036 introduced ``TemporalPerspective`` to separate the domain model's tense axis
+from resolution status.  However the graph projection in ``IdeonService.construct_graph``
+still wrote the combined ``tense_label`` (which returned ``"unanchored"`` or
+``"contested"`` for unresolved cases) into a graph property named ``"tense"``.  This
+put epistemic resolution states back onto the tense axis at the serialisation boundary,
+after correctly separating them in the domain type.
+
+### Problem
+- ``TemporalPerspective.tense_label`` returned ``self.status.value`` for unresolved
+  perspectives, so ``"unanchored"`` and ``"contested"`` appeared in the graph ``"tense"``
+  property — exactly the conflation the typed model was designed to prevent.
+- The ``"tense-status"`` property correctly recorded the resolution status, but the
+  ``"tense"`` property simultaneously carried both resolved tense values and unresolved
+  epistemic states, making the contract ambiguous.
+
+### Decision
+
+**1 — Rename and restrict graph properties**
+
+Replace ``Property("tense", perspective.tense_label)`` + ``Property("tense-status", ...)``
+with:
+
+- ``Property("temporal-perspective-status", perspective.status_label)`` — always
+  present; values: ``resolved | unanchored | contested``.
+- ``Property("resolved-tense", perspective.tense.value)`` — emitted ONLY when
+  ``status == RESOLVED``; values: ``was | is | projected``.  Absent for unresolved
+  states.
+
+This makes the absence of ``resolved-tense`` the authoritative signal for unresolved
+states, rather than overloading a single ``tense`` property with all five labels.
+
+**2 — Update ``TemporalPerspective.tense_label``**
+
+Change return type to ``str | None``.  For ``RESOLVED``: returns ``tense.value``
+(``"was"``, ``"is"``, ``"projected"``).  For ``UNANCHORED`` and ``CONTESTED``: returns
+``None``.  This removes the ``self.status.value`` fallback that was the root of the
+conflation.
+
+**3 — Document ``TemporalQualification`` as resolved-only**
+
+Update the ``TemporalQualification`` docstring to clearly state it is the resolved-only
+representation (``tense: Tense`` is always required), and to direct callers to
+``TemporalPerspective`` for graph-construction paths that include unresolved states.
+
+### Consequences
+- The graph contract is now unambiguous: ``temporal-perspective-status`` carries the
+  resolution state; ``resolved-tense`` carries the tense only when it is meaningful.
+- Downstream consumers can test ``"resolved-tense" in props`` to branch on resolution
+  without parsing the status string.
+- ``TemporalPerspective.tense_label`` is a nullable API; callers must handle ``None``.
+- All prior tests updated to the new property names; a new five-case end-to-end test
+  covers WAS, IS, PROJECTED, UNANCHORED, and CONTESTED explicitly.
+
+### Related Decisions
+- DEC-030, DEC-031, DEC-032, DEC-033, DEC-034, DEC-035, DEC-036
+
+### Related Specs
+- SPEC-016 through SPEC-023
+
+### Output References
+- Modified: ``src/af/domain/ideons/temporal.py`` (tense_label return type/semantics,
+  TemporalQualification docstring)
+- Modified: ``src/af/application/ideons.py`` (graph property names, inline comments,
+  docstring)
+- Modified: ``tests/unit/test_ideon_language.py`` (tense_label None for unresolved)
+- Modified: ``tests/unit/test_ideon_service.py`` (property names, new 5-case test)
+- Modified: ``specs.md`` (appended SPEC-023)
+- Modified: ``decisions.md`` (appended DEC-037)
+- Modified: ``agent_runs.md`` (appended Run #023)
+
+---
+
 ## [DEC-030] Establish a Bounded Private Production-MVP Profile
 **Date**: 2026-07-22
 **Status**: Accepted
