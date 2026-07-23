@@ -476,6 +476,10 @@ class ApplicationBus:
         self._registry = registry
         self._middleware = normalized
 
+    @property
+    def registry(self) -> HandlerRegistry:
+        return self._registry
+
     async def dispatch(
         self,
         message: object,
