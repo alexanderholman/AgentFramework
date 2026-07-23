@@ -22,6 +22,7 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
         no_args_is_help=True,
         help="Deterministic Prime Language / Ideon reference",
     )
+    owns_application = application is None
     cached_application = application
 
     def current() -> AFApplication:
@@ -33,6 +34,16 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
     def fail(error: Exception) -> None:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2)
+
+    @cli.callback()
+    def lifecycle(context: typer.Context) -> None:
+        def close_owned_application() -> None:
+            nonlocal cached_application
+            if owns_application and cached_application is not None:
+                cached_application.shutdown()
+                cached_application = None
+
+        context.call_on_close(close_owned_application)
 
     @cli.command()
     def hello() -> None:
