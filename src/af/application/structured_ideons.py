@@ -32,7 +32,6 @@ from af.domain.ideons.structured import (
 )
 from af.domain.ideons.temporal import WhenCondition
 
-
 _OPERATOR_BY_VALUE: dict[str, QOperator] = {operator.value: operator for operator in QOperator}
 
 
@@ -188,9 +187,7 @@ def _structured_result(result: InquiryResult, expression: QExpression) -> Struct
     # An invalid explicit operator is an unresolved material opening, even though the
     # compatibility engine could validate each constituent independently.
     status = expression.status
-    temporal_composition_open = (
-        result.question is Question.WHEN and status is InquiryStatus.OPEN
-    )
+    temporal_composition_open = result.question is Question.WHEN and status is InquiryStatus.OPEN
     material = result.material or temporal_composition_open
     required_information = result.required_information
     if temporal_composition_open and required_information is None:
