@@ -120,6 +120,7 @@ def _capture_process_state() -> _ProcessSnapshot:
         cwd = os.getcwd()
     except OSError:
         cwd = None
+    warnings_state = cast(Any, warnings)
     return _ProcessSnapshot(
         cwd=cwd,
         environment=tuple(sorted(os.environ.items())),
@@ -127,10 +128,10 @@ def _capture_process_state() -> _ProcessSnapshot:
             tuple[tuple[object, ...], ...],
             tuple(tuple(value) for value in warnings.filters),
         ),
-        warning_default_action=cast(str, getattr(warnings, "defaultaction")),
+        warning_default_action=cast(str, warnings_state.defaultaction),
         warning_once_registry=cast(
             dict[object, object],
-            dict(cast(dict[object, object], getattr(warnings, "onceregistry"))),
+            dict(cast(dict[object, object], warnings_state.onceregistry)),
         ),
         threads=frozenset(threading.enumerate()),
     )
@@ -150,13 +151,14 @@ def _restore_process_state(snapshot: _ProcessSnapshot, surfaces: list[str]) -> N
             surfaces.append("working-directory-restore")
 
     try:
-        filters = cast(Any, warnings.filters)
+        warnings_state = cast(Any, warnings)
+        filters = cast(Any, warnings_state.filters)
         filters[:] = list(snapshot.warning_filters)
-        setattr(warnings, "defaultaction", snapshot.warning_default_action)
-        once_registry = cast(dict[object, object], getattr(warnings, "onceregistry"))
+        warnings_state.defaultaction = snapshot.warning_default_action
+        once_registry = cast(dict[object, object], warnings_state.onceregistry)
         once_registry.clear()
         once_registry.update(snapshot.warning_once_registry)
-        filters_mutated = getattr(warnings, "_filters_mutated", None)
+        filters_mutated = warnings_state._filters_mutated
         if callable(filters_mutated):
             filters_mutated()
     except BaseException:
