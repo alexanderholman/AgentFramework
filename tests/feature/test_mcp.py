@@ -7,8 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp.shared.memory import create_connected_server_and_client_session
 
+import af.interfaces.mcp as mcp_module
 from af.bootstrap import create_application
 from af.config import Settings
+from af.framework.application import ApplicationState
+from af.framework.container import Container, ProviderRegistrar, ServiceProvider
 from af.framework.errors import InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
 from af.framework.types import PROMPT_MAX_LENGTH
@@ -466,3 +469,89 @@ def test_streamable_http_mcp_canonicalizes_default_port_origins() -> None:
 
     assert server.settings.transport_security is not None
     assert server.settings.transport_security.allowed_origins == ["http://af.internal"]
+
+
+def test_mcp_server_requires_an_explicit_host_owned_application() -> None:
+    with pytest.raises(TypeError):
+        create_mcp_server()  # type: ignore[call-arg]
+    injected = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    with TestClient(create_mcp_server(injected).streamable_http_app()):
+        pass
+    assert injected.lifecycle.state is ApplicationState.SERVING
+    injected.shutdown()
+
+
+def test_mcp_construction_failure_closes_internally_created_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    def fail_transport(_: object) -> None:
+        raise RuntimeError("private assembly failure")
+
+    monkeypatch.setattr(mcp_module, "_transport_security_for", fail_transport)
+    with pytest.raises(RuntimeError, match="private assembly failure"):
+        create_mcp_server(application)
+    assert application.lifecycle.state is ApplicationState.SERVING
+    application.shutdown()
+
+
+def test_mcp_main_closes_application_when_server_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    monkeypatch.setattr(mcp_module, "create_application", lambda: application)
+
+    def fail_server(_: object) -> None:
+        raise RuntimeError("private server failure")
+
+    monkeypatch.setattr(mcp_module, "create_mcp_server", fail_server)
+    with pytest.raises(RuntimeError, match="private server failure"):
+        mcp_module.main()
+    assert application.lifecycle.state is ApplicationState.SHUTDOWN
+
+
+def test_mcp_main_sync_host_bridges_owned_async_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Provider(ServiceProvider):
+        provider_id = "test.mcp-async-shutdown"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            del registrar
+
+        async def shutdown(self, container: Container) -> None:
+            del container
+            events.append("shutdown")
+
+    class Server:
+        def run(self, *, transport: object) -> None:
+            del transport
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(Provider(),),
+    )
+    monkeypatch.setattr(mcp_module, "create_application", lambda: application)
+    monkeypatch.setattr(mcp_module, "create_mcp_server", lambda _: Server())
+
+    mcp_module.main()
+
+    assert application.lifecycle.state is ApplicationState.SHUTDOWN
+    assert events == ["shutdown"]
