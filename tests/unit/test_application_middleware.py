@@ -338,7 +338,10 @@ def test_tracing_records_success_failure_and_cancellation_without_changing_resul
         middleware=(TracingMiddleware(sink, clock=lambda: _NOW),),
     )
 
-    assert (\n        asyncio.run(bus.dispatch(_ReadWidget("tenant-a", "known"), context=_context())).value\n        == "ok"\n    )
+    assert (
+        asyncio.run(bus.dispatch(_ReadWidget("tenant-a", "known"), context=_context())).value
+        == "ok"
+    )
     assert [event.stage for event in sink.events] == ["started", "completed"]
     assert [event.message_kind for event in sink.events] == ["query", "query"]
     assert all(event.occurred_at == _NOW for event in sink.events)
