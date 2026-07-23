@@ -151,7 +151,12 @@ class TestApplication:
     def state(self) -> ApplicationState:
         return self._application.lifecycle.state
 
-    def resolve[T](self, token: type[T], *, qualifier: Qualifier | str | None = None) -> T:
+    def resolve[T](
+        self,
+        token: type[T],
+        *,
+        qualifier: Qualifier | str | None = None,
+    ) -> T:
         return self.container.resolve(token, qualifier=qualifier)
 
     def resolve_token(
