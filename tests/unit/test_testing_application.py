@@ -5,7 +5,13 @@ from dataclasses import dataclass
 
 import pytest
 
-from af.application.bus import ApplicationBus, ApplicationResult, DispatchError, Query
+from af.application.bus import (
+    ApplicationBus,
+    ApplicationResult,
+    DispatchError,
+    InvalidDispatchContract,
+    Query,
+)
 from af.config import Settings
 from af.framework.application import ApplicationState
 from af.framework.container import ProviderRegistrar, Scope, ServiceProvider
@@ -92,9 +98,7 @@ def test_test_adapter_and_direct_bus_have_identical_semantics() -> None:
         calls.append((message.value, context))
         return ApplicationResult(value=message.value.upper())
 
-    application = (
-        TestApplicationBuilder(settings=_settings()).handler(_Echo, handler).build()
-    )
+    application = TestApplicationBuilder(settings=_settings()).handler(_Echo, handler).build()
     context = _context()
 
     async def scenario() -> None:
@@ -118,9 +122,7 @@ def test_handler_registries_do_not_leak_between_test_applications() -> None:
     async def handler(message: _Echo, _context: ExecutionContext) -> ApplicationResult[object]:
         return ApplicationResult(value=message.value)
 
-    with_handler = (
-        TestApplicationBuilder(settings=_settings()).handler(_Echo, handler).build()
-    )
+    with_handler = TestApplicationBuilder(settings=_settings()).handler(_Echo, handler).build()
     without_handler = TestApplicationBuilder(settings=_settings()).build()
 
     async def scenario() -> None:
@@ -144,7 +146,7 @@ def test_context_manager_owns_shutdown_and_duplicate_handlers_fail_early() -> No
         return ApplicationResult(value=message.value)
 
     builder = TestApplicationBuilder(settings=_settings()).handler(_Echo, handler)
-    with pytest.raises(Exception, match="already registered"):
+    with pytest.raises(InvalidDispatchContract, match="already registered"):
         builder.handler(_Echo, handler)
 
     with builder.build() as application:
