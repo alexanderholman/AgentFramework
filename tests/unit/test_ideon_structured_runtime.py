@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from af.application.ideons import InterpretRequest
 from af.application.structured_ideons import structure_inquiries
-from af.domain.ideons.models import IdeonRef
+from af.domain.ideons.models import IdeonNode, IdeonRef
 from af.domain.ideons.questions import QGroup, QLeaf, QOperator
 from af.domain.ideons.records import ContextGraph, InquiryStatus, Question
 from af.domain.ideons.structured import StructuredInquiryResult
@@ -16,6 +16,10 @@ def _request(context: dict[str, str]) -> InterpretRequest:
         rights="project-authored",
         context=ContextGraph.from_dict(context),
     )
+
+
+def _properties(node: IdeonNode) -> dict[str, object]:
+    return {property_.name: property_.value for property_ in node.properties}
 
 
 def test_reference_runtime_carries_recursive_questions_through_transport_and_graph() -> None:
@@ -57,11 +61,13 @@ def test_reference_runtime_carries_recursive_questions_through_transport_and_gra
     assert len(payload["questions"]["whern"]["expression"]["members"]) == 2
 
     graph = runtime.service.resolve(IdeonRef(record.ideon_key, record.ideon_revision))
-    node_ids = {node.node_id for node in graph.nodes}
-    assert "inquiry-when" in node_ids
-    assert "inquiry-when-0" in node_ids
-    assert "inquiry-when-1" in node_ids
-    assert "inquiry-whern" in node_ids
+    node_by_id = {node.node_id: node for node in graph.nodes}
+    assert "inquiry-when" in node_by_id
+    assert "inquiry-when-0" in node_by_id
+    assert "inquiry-when-1" in node_by_id
+    assert "inquiry-whern" in node_by_id
+    assert "temporal-qualification" not in node_by_id
+    assert _properties(node_by_id["inquiry-when"])["status"] == "satisfied"
     assert "af.ideon.inquiry-expression/v1" in graph.contracts
     assert any(
         edge.source == "inquiry-when"
@@ -69,6 +75,17 @@ def test_reference_runtime_carries_recursive_questions_through_transport_and_gra
         and edge.target == "inquiry-when-0"
         for edge in graph.edges
     )
+    assert any(
+        edge.source == "inquiry-when"
+        and edge.relation == "qualifies-predicate"
+        and edge.target == "sense-0-0"
+        for edge in graph.edges
+    )
+    identity_context = {property_.name: property_.value for property_ in graph.identity.context}
+    assert "inquiry-expression-when" in identity_context
+    assert "inquiry-expression-whern" in identity_context
+    assert "inquiry-when" in graph.identity.roots
+    assert "inquiry-whern" in graph.identity.roots
 
 
 def test_explicit_when_operator_is_preserved() -> None:
@@ -91,6 +108,25 @@ def test_explicit_when_operator_is_preserved() -> None:
     assert isinstance(result.expression, QGroup)
     assert result.expression.operator is QOperator.SEQUENCE
     assert result.status is InquiryStatus.SATISFIED
+
+
+def test_when_operator_changes_semantic_identity() -> None:
+    runtime = create_reference_ideon_runtime()
+    shared_context = {
+        "actor": "alice",
+        "domain": "river",
+        "time": "2026-07-23T10:00:00+00:00",
+        "when": "event:door-opens",
+        "where": "river-bank",
+    }
+
+    conjunction = runtime.controller.interpret(_request(shared_context))
+    sequence = runtime.controller.interpret(
+        _request({**shared_context, "when-operator": "sequence"})
+    )
+
+    assert conjunction.ideon_key != sequence.ideon_key
+    assert conjunction.ideon_revision != sequence.ideon_revision
 
 
 def test_invalid_when_operator_remains_a_material_opening_and_propagates_to_whern() -> None:
