@@ -87,9 +87,7 @@ class WhenMark:
         if not self.provenance:
             raise ValueError("WhenMark requires provenance")
         if len(self.provenance) > _MAX_PROVENANCE_ITEMS:
-            raise ValueError(
-                f"WhenMark provenance exceeds the {_MAX_PROVENANCE_ITEMS}-item limit"
-            )
+            raise ValueError(f"WhenMark provenance exceeds the {_MAX_PROVENANCE_ITEMS}-item limit")
         if len(set(self.provenance)) != len(self.provenance):
             raise ValueError("WhenMark provenance entries must be unique")
         for item in self.provenance:
