@@ -110,9 +110,30 @@ def resolve_locked_uv_executable() -> str:
     if executable is None:
         raise RuntimeError("locked release actions require uv on inherited PATH")
     try:
-        return str(Path(executable).resolve(strict=True))
+        resolved = Path(executable).resolve(strict=True)
     except OSError as exc:
         raise RuntimeError("locked release actions require an accessible uv executable") from exc
+    if resolved.is_relative_to(PROJECT_ROOT / ".venv"):
+        raise RuntimeError("locked release actions require uv outside the project .venv")
+    return str(resolved)
+
+
+def _is_nested_release_package_command(command: Sequence[str]) -> bool:
+    """Return true when argv represents the nested release package invocation."""
+    return (
+        len(command) >= 7
+        and command[1] == "run"
+        and command[2] == "--no-config"
+        and command[3] == "--no-env-file"
+        and command[4] == "--offline"
+        and command[5] == "--locked"
+        and command[6] == "--no-sources"
+        and "python" in command
+        and "scripts/release_gates.py" in command
+        and "--action" in command
+        and "package" in command
+        and "--execute" in command
+    )
 
 
 def pin_locked_uv_commands(
@@ -121,10 +142,12 @@ def pin_locked_uv_commands(
     """Pin uv invocations in locked commands to a resolved absolute executable path."""
     pinned: list[tuple[str, ...]] = []
     for command in commands:
+        updated = command
         if command and command[0] == "uv":
-            pinned.append((uv_executable, *command[1:]))
-        else:
-            pinned.append(command)
+            updated = (uv_executable, *command[1:])
+        if _is_nested_release_package_command(updated) and "--uv" not in updated:
+            updated = (*updated, "--uv", uv_executable)
+        pinned.append(updated)
     return tuple(pinned)
 
 

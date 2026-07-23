@@ -271,6 +271,169 @@ def test_locked_release_actions_ignore_project_venv_uv(tmp_path: Path, monkeypat
     assert uv_log.read_text(encoding="utf-8").splitlines() == ["inherited", "inherited"]
 
 
+def test_locked_release_nested_package_uses_only_inherited_uv(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_af_dev()
+    inherited_bin = tmp_path / "inherited-bin"
+    inherited_bin.mkdir()
+    uv_log = tmp_path / "uv-log.jsonl"
+    uv_probe = tmp_path / "uv_probe.py"
+    uv_probe.write_text(
+        "import json\n"
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "log_path = Path(sys.argv[1])\n"
+        "entry = {'argv': sys.argv[2:]}\n"
+        "with log_path.open('a', encoding='utf-8') as handle:\n"
+        "    handle.write(json.dumps(entry, separators=(',', ':')) + '\\n')\n"
+        "argv = sys.argv[2:]\n"
+        "if argv and argv[0] == 'run':\n"
+        "    python_index = argv.index('python')\n"
+        "    raise SystemExit(subprocess.run(argv[python_index:], check=False).returncode)\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    inherited_uv = inherited_bin / "uv"
+    inherited_uv.write_text(
+        (
+            "#!/bin/sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(uv_probe))} "
+            f'{shlex.quote(str(uv_log))} "$@"\n'
+        ),
+        encoding="utf-8",
+    )
+    inherited_uv.chmod(0o755)
+
+    project_bin = tmp_path / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    project_uv_log = tmp_path / "project-uv.log"
+    project_uv = project_bin / "uv"
+    project_uv.write_text(
+        (f"#!/bin/sh\necho project >> {shlex.quote(str(project_uv_log))}\nexit 33\n"),
+        encoding="utf-8",
+    )
+    project_uv.chmod(0o755)
+
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    release_gates = scripts_dir / "release_gates.py"
+    nested_uv_log = tmp_path / "nested-uv.log"
+    release_gates.write_text(
+        "from __future__ import annotations\n"
+        "import argparse\n"
+        "import subprocess\n"
+        "from pathlib import Path\n"
+        "def main() -> int:\n"
+        "    parser = argparse.ArgumentParser()\n"
+        "    parser.add_argument('--action', required=True)\n"
+        "    parser.add_argument('--execute', action='store_true')\n"
+        "    parser.add_argument('--uv')\n"
+        "    args = parser.parse_args()\n"
+        "    if args.action != 'package' or not args.execute or not args.uv:\n"
+        "        return 9\n"
+        "    uv_path = Path(args.uv)\n"
+        "    if not uv_path.is_absolute():\n"
+        "        return 10\n"
+        "    if '.venv' in uv_path.parts:\n"
+        "        return 11\n"
+        f"    with Path({str(nested_uv_log)!r}).open('a', encoding='utf-8') as handle:\n"
+        "        handle.write(str(uv_path) + '\\n')\n"
+        "    for command in (\n"
+        "        [str(uv_path), 'build', '--sdist'],\n"
+        "        [str(uv_path), 'build', '--wheel'],\n"
+        "        [str(uv_path), 'pip', 'install', '--offline'],\n"
+        "    ):\n"
+        "        completed = subprocess.run(command, check=False)\n"
+        "        if completed.returncode:\n"
+        "            return completed.returncode\n"
+        "    return 0\n"
+        "if __name__ == '__main__':\n"
+        "    raise SystemExit(main())\n",
+        encoding="utf-8",
+    )
+
+    package_command = (
+        "uv",
+        "run",
+        "--no-config",
+        "--no-env-file",
+        "--offline",
+        "--locked",
+        "--no-sources",
+        "--extra",
+        "dev",
+        "python",
+        "scripts/release_gates.py",
+        "--action",
+        "package",
+        "--execute",
+    )
+    monkeypatch.setattr(module, "PROJECT_ENV_BIN", project_bin)
+    monkeypatch.setattr(
+        module,
+        "ACTIONS",
+        {
+            **module.ACTIONS,
+            "check": (package_command,),
+            "package": (package_command,),
+        },
+    )
+    monkeypatch.setenv("PATH", os.pathsep.join((str(inherited_bin), "/usr/bin", "/bin")))
+    monkeypatch.chdir(tmp_path)
+
+    monkeypatch.setattr(sys, "argv", [str(AF_DEV), "--action", "check", "--execute"])
+    assert module.main() == 0
+    monkeypatch.setattr(sys, "argv", [str(AF_DEV), "--action", "package", "--execute"])
+    assert module.main() == 0
+
+    assert project_uv_log.exists() is False
+    assert nested_uv_log.read_text(encoding="utf-8").splitlines() == [
+        str(inherited_uv.resolve()),
+        str(inherited_uv.resolve()),
+    ]
+    uv_calls = [
+        json.loads(line)["argv"]
+        for line in uv_log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert (
+        uv_calls.count(
+            [
+                "build",
+                "--sdist",
+            ]
+        )
+        == 2
+    )
+    assert (
+        uv_calls.count(
+            [
+                "build",
+                "--wheel",
+            ]
+        )
+        == 2
+    )
+    assert (
+        uv_calls.count(
+            [
+                "pip",
+                "install",
+                "--offline",
+            ]
+        )
+        == 2
+    )
+    nested_run_calls = [call for call in uv_calls if call and call[0] == "run"]
+    assert len(nested_run_calls) == 2
+    assert all("--uv" in call for call in nested_run_calls)
+    assert all(
+        call[call.index("--uv") + 1] == str(inherited_uv.resolve()) for call in nested_run_calls
+    )
+
+
 def test_route_and_run_prevents_shell_injection(tmp_path: Path) -> None:
     capture_script = tmp_path / "capture_args.py"
     captured_path = tmp_path / "captured.json"
