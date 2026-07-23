@@ -73,9 +73,7 @@ def test_multiple_test_applications_are_isolated_and_overrides_are_local() -> No
         .build()
     )
     second = (
-        TestApplicationBuilder(settings=_settings())
-        .provider(_ValueProvider(second_value))
-        .build()
+        TestApplicationBuilder(settings=_settings()).provider(_ValueProvider(second_value)).build()
     )
 
     try:
@@ -88,6 +86,22 @@ def test_multiple_test_applications_are_isolated_and_overrides_are_local() -> No
         assert second.resolve(_Value) is second_value
     finally:
         second.shutdown()
+        second.assert_clean()
+
+
+def test_default_test_applications_use_isolated_ephemeral_persistence() -> None:
+    first = TestApplicationBuilder().build()
+    second = TestApplicationBuilder().build()
+
+    try:
+        first.application.tasks.create("hello")
+
+        assert len(first.application.tasks.list()) == 1
+        assert second.application.tasks.list() == []
+    finally:
+        first.shutdown()
+        second.shutdown()
+        first.assert_clean()
         second.assert_clean()
 
 
