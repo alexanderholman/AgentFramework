@@ -41,10 +41,12 @@ never actually evaluated.
 ```python
 from af.testing import ConformanceCase
 
-case = ConformanceCase(
-    "reads-value",
-    lambda driver: driver.read("key"),
-)
+
+def reads_value(driver: ExampleDriver) -> None:
+    assert driver.read("key") == "value"
+
+
+case = ConformanceCase("reads-value", reads_value)
 ```
 
 Callbacks and fixture metadata are redacted from representations so diagnostics do not expose
@@ -60,17 +62,18 @@ Each application is shut down and checked for clean resource disposal even when 
 from af.testing import (
     ConformanceCase,
     ProviderConformanceSuite,
+    TestApplication,
     TestApplicationBuilder,
 )
 
+
+def resolves_service(app: TestApplication) -> None:
+    assert isinstance(app.resolve(ExampleService), ExampleService)
+
+
 suite = ProviderConformanceSuite(
     "example-provider",
-    (
-        ConformanceCase(
-            "resolves-service",
-            lambda app: app.resolve(ExampleService),
-        ),
-    ),
+    (ConformanceCase("resolves-service", resolves_service),),
 )
 
 report = suite.run(
@@ -93,6 +96,7 @@ from contextlib import contextmanager
 
 from af.testing import ConformanceCase, DriverConformanceSuite
 
+
 @contextmanager
 def fake_driver():
     driver = ExampleDriver.in_memory()
@@ -101,11 +105,21 @@ def fake_driver():
     finally:
         driver.close()
 
+
+def writes_and_reads(driver: ExampleDriver) -> None:
+    driver.write("key", "value")
+    assert driver.read("key") == "value"
+
+
+def starts_empty(driver: ExampleDriver) -> None:
+    assert driver.read("missing") is None
+
+
 suite = DriverConformanceSuite(
     "example-driver",
     (
-        ConformanceCase("writes", lambda driver: driver.write("key", "value")),
-        ConformanceCase("reads", lambda driver: driver.read("key")),
+        ConformanceCase("writes-and-reads", writes_and_reads),
+        ConformanceCase("starts-empty", starts_empty),
     ),
 )
 
