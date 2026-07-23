@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        action: [release-validate, format-check, lint, typecheck, coverage]
+        action: [lint, typecheck]
     env:
       AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
       AF_APPEND_ONLY_HEAD_REF: ${{ github.sha }}
@@ -37,4 +37,19 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
       - run: uv sync --locked --extra dev
-      - run: python scripts/af_dev.py --action ${{ matrix.action }} --execute
+      - name: Run diagnostic stage
+        shell: bash
+        run: |
+          set +e
+          python scripts/af_dev.py --action "${{ matrix.action }}" --execute \
+            > "diagnostic-${{ matrix.action }}.log" 2>&1
+          status=$?
+          cat "diagnostic-${{ matrix.action }}.log"
+          exit "$status"
+      - name: Upload diagnostic output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diagnostic-${{ matrix.action }}
+          path: diagnostic-${{ matrix.action }}.log
+          if-no-files-found: error
