@@ -9,12 +9,14 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from inspect import isasyncgen, isasyncgenfunction, isawaitable, iscoroutinefunction
 from math import isfinite
 from threading import RLock
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, cast, final
 
-from af.framework.errors import PlatformError, PlatformReason
+from af.framework.container import ProviderRegistrar, Resolver, Scope
+from af.framework.errors import PlatformError, PlatformReason, ServiceNotBound
 
 __all__ = (
     "CapabilityBinding",
@@ -27,6 +29,7 @@ __all__ = (
     "DegradationEvidence",
     "DriverFactory",
     "DriverManifest",
+    "DriverRegistration",
     "DriverResolutionError",
     "DriverTarget",
     "FailoverDriver",
@@ -35,6 +38,8 @@ __all__ = (
     "LoadBalancingDriver",
     "Manager",
     "ManagerConfigurationError",
+    "bind_driver",
+    "bind_manager",
 )
 
 _IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
@@ -138,6 +143,8 @@ class CapabilitySet:
     values: frozenset[str]
 
     def __init__(self, values: Iterable[str] = ()) -> None:
+        if isinstance(values, str):
+            values = (values,)
         try:
             normalized = frozenset(_identifier(value, "capability") for value in values)
         except (TypeError, ValueError) as error:
@@ -262,7 +269,7 @@ class CapabilityEvidence:
 class DriverFactory[T_co](Protocol):
     """Provider-extensible constructor for a validated named connection."""
 
-    def __call__(self, ref: ConnectionRef, config: Mapping[str, object]) -> T_co: ...
+    def __call__(self, ref: ConnectionRef, config: Mapping[str, object], /) -> T_co: ...
 
 
 class CapabilityVerifier[T_contra](Protocol):
@@ -273,10 +280,78 @@ class CapabilityVerifier[T_contra](Protocol):
         ref: ConnectionRef,
         driver: T_contra,
         expected_binding: CapabilityBinding,
+        /,
     ) -> CapabilityEvidence: ...
 
 
 type DriverDisposer[T] = Callable[[T], object]
+
+
+def _is_async_callable(value: object) -> bool:
+    if iscoroutinefunction(value) or isasyncgenfunction(value):
+        return True
+    try:
+        call = type(value).__call__
+    except Exception as error:
+        raise ValueError("callback contract cannot be inspected") from error
+    return iscoroutinefunction(call) or isasyncgenfunction(call)
+
+
+def _validate_sync_callable(value: object, field: str) -> None:
+    if not callable(value) or _is_async_callable(value):
+        raise ValueError(f"{field} must be a synchronous callable")
+
+
+def _reject_async_result(value: object, field: str) -> None:
+    if not isawaitable(value) and not isasyncgen(value):
+        return
+    try:
+        close = getattr(value, "close", None)
+        if callable(close):
+            close()
+        else:
+            cancel = getattr(value, "cancel", None)
+            if callable(cancel):
+                cancel()
+    except BaseException:
+        pass
+    raise TypeError(f"{field} returned an asynchronous result")
+
+
+@final
+@dataclass(frozen=True, slots=True, repr=False)
+class DriverRegistration[T]:
+    """Inert provider declaration for one manager-owned named driver."""
+
+    manager_id: str
+    driver_name: str
+    factory: DriverFactory[T]
+    manifest: DriverManifest
+    verifier: CapabilityVerifier[T]
+    disposer: Callable[[T], object] | None = None
+
+    def __post_init__(self) -> None:
+        manager_id = _identifier(self.manager_id, "manager id")
+        driver_name = _identifier(self.driver_name, "driver name")
+        _validate_sync_callable(self.factory, "driver factory")
+        _validate_sync_callable(self.verifier, "capability verifier")
+        if (
+            not isinstance(self.manifest, DriverManifest)
+            or self.manifest.driver_name != driver_name
+        ):
+            raise ValueError("driver manifest identity does not match registration")
+        if self.disposer is not None:
+            _validate_sync_callable(self.disposer, "driver disposer")
+        object.__setattr__(self, "manager_id", manager_id)
+        object.__setattr__(self, "driver_name", driver_name)
+
+    def __repr__(self) -> str:
+        return (
+            "DriverRegistration("
+            "manager_id='[REDACTED]', driver_name='[REDACTED]', "
+            "factory='[REDACTED]', manifest='[REDACTED]', "
+            "verifier='[REDACTED]', disposer='[REDACTED]')"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,6 +429,134 @@ def _config_digest(config: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _driver_registration_qualifier(manager_id: str, driver_name: str) -> str:
+    framed = bytearray()
+    for value in (manager_id, driver_name):
+        encoded = value.encode("utf-8")
+        framed.extend(len(encoded).to_bytes(4, "big"))
+        framed.extend(encoded)
+    return f"af.manager-driver.{hashlib.sha256(framed).hexdigest()}"
+
+
+def _snapshot_connections(connections: Mapping[str, object]) -> Mapping[str, object]:
+    if not isinstance(connections, Mapping):
+        raise ValueError("connections must be a mapping")
+    snapshot: dict[str, object] = {}
+    for name, raw_config in connections.items():
+        connection_name = _identifier(name, "connection name")
+        if not isinstance(raw_config, Mapping):
+            raise ValueError("connection must be a mapping")
+        snapshot[connection_name] = _snapshot_config(
+            raw_config,
+            depth=0,
+            budget=_ConfigBudget(),
+        )
+    return MappingProxyType(snapshot)
+
+
+def _validated_driver_registration(value: object) -> DriverRegistration[object]:
+    if type(value) is not DriverRegistration:
+        cause = ValueError("driver registration is invalid")
+        raise ManagerConfigurationError(protected_cause=cause) from cause
+    registration = cast(DriverRegistration[object], value)
+    try:
+        registration.__post_init__()
+    except (TypeError, ValueError) as error:
+        raise ManagerConfigurationError(protected_cause=error) from error
+    return registration
+
+
+def bind_driver[T](
+    registrar: ProviderRegistrar,
+    registration: DriverRegistration[T],
+) -> None:
+    """Declare inert driver metadata under its deterministic manager/name key."""
+    validated = _validated_driver_registration(registration)
+    registrar.bind(
+        DriverRegistration,
+        lambda _resolver: validated,
+        qualifier=_driver_registration_qualifier(
+            validated.manager_id,
+            validated.driver_name,
+        ),
+        scope=Scope.SINGLETON,
+        owned=False,
+        replace=False,
+    )
+
+
+def bind_manager(
+    registrar: ProviderRegistrar,
+    *,
+    manager_id: str,
+    connections: Mapping[str, object],
+    default: str | None,
+    deployment_profile: str,
+    policy_version: str,
+    clock: Callable[[], datetime] | None = None,
+) -> None:
+    """Bind one application-owned manager assembled from inert driver declarations."""
+    try:
+        normalized_manager_id = _identifier(manager_id, "manager id")
+        normalized_profile = _identifier(deployment_profile, "deployment profile")
+        normalized_policy = _bounded_version(policy_version, "policy version")
+        if default is not None:
+            normalized_default: str | None = _identifier(default, "default connection")
+        else:
+            normalized_default = None
+        if clock is not None:
+            _validate_sync_callable(clock, "manager clock")
+        connection_snapshot = _snapshot_connections(connections)
+    except (TypeError, ValueError) as error:
+        raise ManagerConfigurationError(protected_cause=error) from error
+
+    def create_manager(resolver: Resolver) -> Manager[object]:
+        manager: Manager[object] = Manager(
+            manager_id=normalized_manager_id,
+            connections=connection_snapshot,
+            default=normalized_default,
+            deployment_profile=normalized_profile,
+            policy_version=normalized_policy,
+            clock=clock,
+        )
+        driver_names = sorted({definition[0] for definition in manager._definitions.values()})
+        for driver_name in driver_names:
+            try:
+                registration = resolver.resolve(
+                    DriverRegistration,
+                    qualifier=_driver_registration_qualifier(
+                        normalized_manager_id,
+                        driver_name,
+                    ),
+                )
+            except ServiceNotBound as error:
+                raise DriverResolutionError(protected_cause=error) from None
+            if (
+                type(registration) is not DriverRegistration
+                or registration.manager_id != normalized_manager_id
+                or registration.driver_name != driver_name
+            ):
+                cause = ValueError("driver registration identity does not match binding")
+                raise ManagerConfigurationError(protected_cause=cause) from cause
+            manager.extend(
+                driver_name,
+                registration.factory,
+                manifest=registration.manifest,
+                verifier=registration.verifier,
+                disposer=registration.disposer,
+            )
+        return manager
+
+    registrar.bind(
+        Manager,
+        create_manager,
+        qualifier=normalized_manager_id,
+        scope=Scope.APPLICATION,
+        owned=True,
+        replace=False,
+    )
+
+
 class Manager[T]:
     """Resolve configured named drivers lazily with verified, bounded caching."""
 
@@ -376,6 +579,8 @@ class Manager[T]:
             self._policy_version = _bounded_version(policy_version, "policy version")
             if default is not None:
                 _identifier(default, "default connection")
+            if clock is not None:
+                _validate_sync_callable(clock, "manager clock")
             if not isinstance(connections, Mapping):
                 raise ValueError("connections must be a mapping")
             definitions: dict[str, tuple[str, Mapping[str, object], str]] = {}
@@ -401,12 +606,16 @@ class Manager[T]:
 
         self._default = default
         self._definitions = definitions
-        self._clock = clock or (lambda: datetime.now(UTC))
+        self._clock = clock if clock is not None else (lambda: datetime.now(UTC))
         self._registrations: dict[str, _DriverRegistration[T]] = {}
         self._cache: dict[str, _CachedDriver[T]] = {}
+        self._owned_drivers: dict[int, T] = {}
         self._quarantined: set[str] = set()
         self._active: set[str] = set()
         self._resolution_order: list[str] = []
+        self._callback_depth = 0
+        self._closing = False
+        self._closed = False
         self._lock = RLock()
 
     @property
@@ -426,6 +635,7 @@ class Manager[T]:
     def evidence(self, name: str | None = None) -> CapabilityEvidence:
         """Return the last independently verified evidence for a resolved connection."""
         with self._lock:
+            self._assert_operational()
             connection_name = self._requested_name(name)
             cached = self._cache.get(connection_name)
             if cached is None:
@@ -448,19 +658,24 @@ class Manager[T]:
     ) -> None:
         try:
             normalized = _identifier(driver_name, "driver name")
-            if not callable(factory) or not callable(verifier):
-                raise ValueError("driver factory and verifier must be callable")
+            _validate_sync_callable(factory, "driver factory")
+            _validate_sync_callable(verifier, "capability verifier")
             if not isinstance(manifest, DriverManifest) or manifest.driver_name != normalized:
                 raise ValueError("driver manifest identity does not match registration")
-            if disposer is not None and not callable(disposer):
-                raise ValueError("driver disposer must be callable")
+            if disposer is not None:
+                _validate_sync_callable(disposer, "driver disposer")
         except (TypeError, ValueError) as error:
             raise ManagerConfigurationError(protected_cause=error) from error
 
         with self._lock:
+            if self._closing or self._closed or self._callback_depth:
+                state_error = RuntimeError("manager does not accept driver extensions")
+                raise ManagerConfigurationError(protected_cause=state_error) from state_error
             if normalized in self._registrations:
-                cause = ValueError("driver factory is already registered")
-                raise ManagerConfigurationError(protected_cause=cause) from cause
+                duplicate_error = ValueError("driver factory is already registered")
+                raise ManagerConfigurationError(
+                    protected_cause=duplicate_error
+                ) from duplicate_error
             self._registrations[normalized] = _DriverRegistration(
                 factory,
                 manifest,
@@ -470,6 +685,7 @@ class Manager[T]:
 
     def binding(self, name: str | None = None) -> CapabilityBinding:
         with self._lock:
+            self._assert_operational()
             definition = self._definition(name)
             registration = self._registrations.get(definition.ref.driver_name)
             if registration is None:
@@ -492,6 +708,7 @@ class Manager[T]:
             raise CapabilityValidationError(protected_cause=error) from error
 
         with self._lock:
+            self._assert_operational()
             definition = self._definition(name)
             connection_name = definition.ref.connection_name
             if connection_name in self._quarantined:
@@ -513,33 +730,80 @@ class Manager[T]:
 
     def purge(self, name: str | None = None) -> None:
         with self._lock:
-            names = (
-                tuple(dict.fromkeys((*reversed(self._resolution_order), *self._quarantined)))
-                if name is None
-                else (self._requested_name(name),)
-            )
-            failures: list[Exception] = []
-            for connection_name in names:
-                cached = self._cache.pop(connection_name, None)
-                self._quarantined.discard(connection_name)
-                if connection_name in self._resolution_order:
-                    self._resolution_order.remove(connection_name)
-                if cached is not None:
-                    try:
-                        self._dispose(cached)
-                    except Exception as error:
-                        failures.append(error)
-            if failures:
-                raise DriverResolutionError(
-                    protected_cause=ExceptionGroup(
-                        "driver disposal failed",
-                        failures,
-                    ),
-                    cleanup_failures=tuple(failures),
-                )
+            self._assert_operational()
+            failures, interruption = self._purge_locked(name)
+        if interruption is not None:
+            raise interruption
+        self._raise_disposal_failures(failures)
 
     def close(self) -> None:
-        self.purge()
+        with self._lock:
+            if self._closed or self._closing:
+                return
+            if self._callback_depth:
+                raise DriverResolutionError(
+                    protected_cause=RuntimeError("manager cannot close from a callback")
+                )
+            self._closing = True
+            failures: list[Exception] = []
+            interruption: BaseException | None = None
+            try:
+                failures, interruption = self._purge_locked(None)
+            finally:
+                self._registrations.clear()
+                self._owned_drivers.clear()
+                self._closing = False
+                self._closed = True
+        if interruption is not None:
+            raise interruption
+        self._raise_disposal_failures(failures)
+
+    def _assert_operational(self) -> None:
+        if self._closing or self._closed:
+            raise DriverResolutionError(protected_cause=RuntimeError("manager is closed"))
+        if self._callback_depth:
+            raise DriverResolutionError(
+                protected_cause=RuntimeError("manager callbacks cannot re-enter the manager")
+            )
+
+    def _purge_locked(
+        self,
+        name: str | None,
+    ) -> tuple[list[Exception], BaseException | None]:
+        names = (
+            tuple(dict.fromkeys((*reversed(self._resolution_order), *self._quarantined)))
+            if name is None
+            else (self._requested_name(name),)
+        )
+        failures: list[Exception] = []
+        interruption: BaseException | None = None
+        for connection_name in names:
+            cached = self._cache.pop(connection_name, None)
+            self._quarantined.discard(connection_name)
+            if connection_name in self._resolution_order:
+                self._resolution_order.remove(connection_name)
+            if cached is None:
+                continue
+            self._release_driver(cached.driver)
+            try:
+                self._dispose(cached)
+            except BaseException as error:
+                if isinstance(error, Exception):
+                    failures.append(error)
+                elif interruption is None:
+                    interruption = error
+        return failures, interruption
+
+    @staticmethod
+    def _raise_disposal_failures(failures: list[Exception]) -> None:
+        if failures:
+            raise DriverResolutionError(
+                protected_cause=ExceptionGroup(
+                    "driver disposal failed",
+                    failures,
+                ),
+                cleanup_failures=tuple(failures),
+            )
 
     def _requested_name(self, name: str | None) -> str:
         if name is None:
@@ -591,10 +855,18 @@ class Manager[T]:
             raise DriverResolutionError(
                 protected_cause=LookupError("driver factory is not registered")
             )
+        self._callback_depth += 1
         try:
             driver = registration.factory(definition.ref, definition.config)
+            _reject_async_result(driver, "driver factory")
         except Exception as error:
             raise DriverResolutionError(protected_cause=error) from error
+        finally:
+            self._callback_depth -= 1
+        if self._owned_drivers.get(id(driver)) is driver:
+            raise DriverResolutionError(
+                protected_cause=RuntimeError("driver instance is already manager-owned")
+            )
         try:
             evidence = self._verify(definition, driver, registration)
         except BaseException as error:
@@ -615,6 +887,7 @@ class Manager[T]:
             if cleanup is not None and isinstance(error, CapabilityValidationError):
                 error.cleanup_failures = (cleanup,)
             raise
+        self._owned_drivers[id(driver)] = driver
         self._cache[definition.ref.connection_name] = cached
         self._resolution_order.append(definition.ref.connection_name)
         return driver
@@ -625,16 +898,25 @@ class Manager[T]:
         cached: _CachedDriver[T],
         required: CapabilitySet,
     ) -> T:
+        connection_name = definition.ref.connection_name
         try:
             current = self._verify(definition, cached.driver, cached.registration)
         except CapabilityValidationError as error:
-            cleanup = self._quarantine(definition.ref.connection_name, cached)
+            cleanup = self._quarantine(connection_name, cached)
             raise ConnectionQuarantinedError(
                 protected_cause=error.protected_cause,
                 cleanup_failures=(() if cleanup is None else (cleanup,)),
             ) from error
+        if (
+            self._cache.get(connection_name) is not cached
+            or self._owned_drivers.get(id(cached.driver)) is not cached.driver
+        ):
+            self._quarantined.add(connection_name)
+            raise ConnectionQuarantinedError(
+                protected_cause=RuntimeError("cached driver changed during verification")
+            )
         if current.material_fingerprint != cached.evidence.material_fingerprint:
-            cleanup = self._quarantine(definition.ref.connection_name, cached)
+            cleanup = self._quarantine(connection_name, cached)
             raise ConnectionQuarantinedError(
                 protected_cause=RuntimeError("runtime capability evidence changed"),
                 cleanup_failures=(() if cleanup is None else (cleanup,)),
@@ -647,7 +929,7 @@ class Manager[T]:
                 CapabilitySet(),
             )
         except CapabilityValidationError as error:
-            cleanup = self._quarantine(definition.ref.connection_name, cached)
+            cleanup = self._quarantine(connection_name, cached)
             raise ConnectionQuarantinedError(
                 protected_cause=error.protected_cause,
                 cleanup_failures=(() if cleanup is None else (cleanup,)),
@@ -658,6 +940,14 @@ class Manager[T]:
             self._binding(definition, cached.registration.manifest),
             required,
         )
+        if (
+            self._cache.get(connection_name) is not cached
+            or self._owned_drivers.get(id(cached.driver)) is not cached.driver
+        ):
+            self._quarantined.add(connection_name)
+            raise ConnectionQuarantinedError(
+                protected_cause=RuntimeError("cached driver changed during validation")
+            )
         cached.evidence = current
         return cached.driver
 
@@ -668,10 +958,14 @@ class Manager[T]:
         registration: _DriverRegistration[T],
     ) -> CapabilityEvidence:
         expected = self._binding(definition, registration.manifest)
+        self._callback_depth += 1
         try:
             evidence = registration.verifier(definition.ref, driver, expected)
+            _reject_async_result(evidence, "capability verifier")
         except Exception as error:
             raise CapabilityValidationError(protected_cause=error) from error
+        finally:
+            self._callback_depth -= 1
         if not isinstance(evidence, CapabilityEvidence):
             raise CapabilityValidationError(
                 protected_cause=TypeError("verifier returned invalid evidence")
@@ -685,7 +979,15 @@ class Manager[T]:
         expected: CapabilityBinding,
         required: CapabilitySet,
     ) -> None:
-        now = _aware_utc(self._clock(), "manager clock")
+        self._callback_depth += 1
+        try:
+            raw_now = self._clock()
+            _reject_async_result(raw_now, "manager clock")
+            now = _aware_utc(raw_now, "manager clock")
+        except Exception as error:
+            raise CapabilityValidationError(protected_cause=error) from error
+        finally:
+            self._callback_depth -= 1
         cause: BaseException | None = None
         if evidence.binding != expected:
             cause = ValueError("capability evidence identity does not match")
@@ -705,32 +1007,42 @@ class Manager[T]:
             raise CapabilityValidationError(protected_cause=cause)
 
     def _quarantine(self, name: str, cached: _CachedDriver[T]) -> Exception | None:
+        if self._cache.get(name) is not cached:
+            self._quarantined.add(name)
+            return None
         self._cache.pop(name, None)
         if name in self._resolution_order:
             self._resolution_order.remove(name)
         self._quarantined.add(name)
+        self._release_driver(cached.driver)
         return self._try_dispose(cached)
 
-    @staticmethod
-    def _dispose(cached: _CachedDriver[T]) -> None:
-        Manager._dispose_driver(cached.registration, cached.driver)
+    def _release_driver(self, driver: T) -> None:
+        if self._owned_drivers.get(id(driver)) is driver:
+            self._owned_drivers.pop(id(driver), None)
 
-    @staticmethod
-    def _dispose_driver(registration: _DriverRegistration[T], driver: T) -> None:
+    def _dispose(self, cached: _CachedDriver[T]) -> None:
+        self._dispose_driver(cached.registration, cached.driver)
+
+    def _dispose_driver(self, registration: _DriverRegistration[T], driver: T) -> None:
         if registration.disposer is not None:
-            registration.disposer(driver)
+            self._callback_depth += 1
+            try:
+                result = registration.disposer(driver)
+                _reject_async_result(result, "driver disposer")
+            finally:
+                self._callback_depth -= 1
 
-    @staticmethod
-    def _try_dispose(cached: _CachedDriver[T]) -> Exception | None:
-        return Manager._try_dispose_driver(cached.registration, cached.driver)
+    def _try_dispose(self, cached: _CachedDriver[T]) -> Exception | None:
+        return self._try_dispose_driver(cached.registration, cached.driver)
 
-    @staticmethod
     def _try_dispose_driver(
+        self,
         registration: _DriverRegistration[T],
         driver: T,
     ) -> Exception | None:
         try:
-            Manager._dispose_driver(registration, driver)
+            self._dispose_driver(registration, driver)
         except Exception as error:
             return error
         return None
@@ -849,16 +1161,16 @@ class FailoverDriver[T]:
                     protected_cause=LookupError("no failover target remains")
                 )
             previous = self._targets[self._index]
-            self._index += 1
-            current = self._targets[self._index]
-            self._evidence.append(
-                DegradationEvidence(
-                    previous.ref,
-                    current.ref,
-                    reason_code,
-                    self._clock(),
-                )
+            next_index = self._index + 1
+            current = self._targets[next_index]
+            evidence = DegradationEvidence(
+                previous.ref,
+                current.ref,
+                reason_code,
+                self._clock(),
             )
+            self._evidence.append(evidence)
+            self._index = next_index
             return current
 
 
