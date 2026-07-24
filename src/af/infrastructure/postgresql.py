@@ -181,8 +181,8 @@ class _PostgreSQLTransaction:
                 stage="database.query",
             )
         try:
-            result = self._connection.execution_options(stream_results=True).execute(
-                text(statement.sql),
+            result = self._connection.execute(
+                text(statement.sql).execution_options(stream_results=True),
                 dict(statement.parameters),
             )
         except SQLAlchemyError as error:
