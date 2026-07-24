@@ -10,20 +10,15 @@ jobs:
   diagnose:
     runs-on: ubuntu-24.04
     steps:
-      - name: Check out exact head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-      - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: "3.12"
-      - name: Set up uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
-      - name: Install locked development environment
-        run: uv sync --locked --no-sources --extra dev
       - name: Show exact Ruff diagnostics
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff format --check src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
-          uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff check --output-format concise src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
+          git init -q .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=1 origin "${HEAD_SHA}"
+          git checkout -q --detach FETCH_HEAD
+          python -m pip install -q ruff==0.15.22
+          ruff format --check src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
+          ruff check --output-format concise src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
