@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import RLock
 from time import monotonic
 from types import TracebackType
-from typing import Literal, cast
+from typing import Literal, Never, cast
 
 from af.framework.errors import PlatformError, PlatformReason
 from af.search.contracts import ResourceEnvelope, SearchHit, SearchQuery
@@ -20,6 +20,7 @@ __all__ = ("EmbeddedSearchDriver", "SearchDriverIneligible")
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,254}[A-Za-z0-9])?$")
 _TOKEN = re.compile(r"\w+", re.UNICODE)
+_HIGHLIGHT_WHITESPACE = re.compile(r"[\t\r\n]+")
 _SUPPORTED_FILTERS = frozenset({"tenant_id", "acl"})
 
 
@@ -34,6 +35,43 @@ def _failure(
     protected_cause: BaseException | None = None,
 ) -> SearchDriverIneligible:
     return SearchDriverIneligible(reason, stage=stage, protected_cause=protected_cause)
+
+
+def _operation_reason(error: sqlite3.Error) -> PlatformReason:
+    if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+        return PlatformReason.CANCELLED
+    return PlatformReason.PERMANENT_FAILURE
+
+
+def _control_flow_rank(error: BaseException) -> int:
+    if not isinstance(error, Exception):
+        return 3
+    if isinstance(error, sqlite3.Error) and _operation_reason(error) is PlatformReason.CANCELLED:
+        return 2
+    if isinstance(error, PlatformError):
+        if error.reason is PlatformReason.CANCELLED:
+            return 2
+        if error.reason is PlatformReason.SHUTDOWN_FAILED:
+            return 1
+    return 0
+
+
+def _raise_operation_error(error: BaseException, *, stage: str) -> Never:
+    if isinstance(error, PlatformError):
+        raise error from None
+    if isinstance(error, sqlite3.Error):
+        raise _failure(
+            _operation_reason(error),
+            stage=stage,
+            protected_cause=error,
+        ) from None
+    if isinstance(error, Exception):
+        raise _failure(
+            PlatformReason.PERMANENT_FAILURE,
+            stage=stage,
+            protected_cause=error,
+        ) from None
+    raise error from None
 
 
 def _identity(value: object) -> str:
@@ -92,9 +130,14 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             ) from None
         self._lock = RLock()
         self._closed = False
+        self._closing = False
+        self._poisoned = False
+
+    def _shutdown_started(self) -> bool:
+        return self._closed or self._closing or self._poisoned
 
     def _assert_open(self) -> None:
-        if self._closed:
+        if self._shutdown_started():
             raise _failure(PlatformReason.SHUTDOWN_FAILED, stage="search.embedded.connection")
 
     def upsert(self, resources: tuple[ResourceEnvelope, ...], /) -> int:
@@ -149,13 +192,26 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                         ),
                     )
                 self._connection.commit()
-            except sqlite3.Error as error:
-                self._connection.rollback()
-                raise _failure(
-                    PlatformReason.PERMANENT_FAILURE,
-                    stage="search.embedded.upsert",
-                    protected_cause=error,
-                ) from None
+            except BaseException as error:
+                try:
+                    self._connection.rollback()
+                except BaseException as rollback_error:
+                    self._poisoned = True
+                    if _control_flow_rank(rollback_error) > _control_flow_rank(error):
+                        _raise_operation_error(
+                            rollback_error,
+                            stage="search.embedded.upsert.rollback",
+                        )
+                    if _control_flow_rank(error):
+                        _raise_operation_error(
+                            error,
+                            stage="search.embedded.upsert",
+                        )
+                    _raise_operation_error(
+                        rollback_error,
+                        stage="search.embedded.upsert.rollback",
+                    )
+                _raise_operation_error(error, stage="search.embedded.upsert")
         return len(resources)
 
     def delete(self, *, tenant_id: str, source_id: str, resource_id: str) -> bool:
@@ -172,12 +228,8 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                     """,
                     identity,
                 )
-            except sqlite3.Error as error:
-                raise _failure(
-                    PlatformReason.PERMANENT_FAILURE,
-                    stage="search.embedded.delete",
-                    protected_cause=error,
-                ) from None
+            except BaseException as error:
+                _raise_operation_error(error, stage="search.embedded.delete")
         return cursor.rowcount > 0
 
     def search(self, query: SearchQuery, /) -> tuple[SearchHit, ...]:
@@ -201,6 +253,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                 resource_id,
                 source_id,
                 authoritative_locator,
+                tenant_id,
                 projection_version,
                 acl_json,
                 provenance_json,
@@ -214,13 +267,25 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                   FROM json_each(acl_json)
                   WHERE value IN ({acl_placeholders})
               )
-            ORDER BY rank_score ASC, resource_id ASC, source_id ASC
+            ORDER BY rank_score ASC, resource_id ASC, source_id ASC, tenant_id ASC
             LIMIT ?
         """
         deadline = monotonic() + query.deadline_ms / 1_000
         with self._lock:
             self._assert_open()
-            self._connection.set_progress_handler(lambda: int(monotonic() >= deadline), 1_000)
+            try:
+                self._connection.set_progress_handler(
+                    lambda: int(monotonic() >= deadline),
+                    1_000,
+                )
+            except BaseException as error:
+                self._poisoned = True
+                _raise_operation_error(
+                    error,
+                    stage="search.embedded.query.progress-setup",
+                )
+            rows: tuple[tuple[object, ...], ...] = ()
+            operation_error: BaseException | None = None
             try:
                 rows = tuple(
                     self._connection.execute(
@@ -228,19 +293,24 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                         (expression, *tenant_ids, *acl, query.limit),
                     )
                 )
-            except sqlite3.Error as error:
-                reason = (
-                    PlatformReason.CANCELLED
-                    if monotonic() >= deadline
-                    else PlatformReason.PERMANENT_FAILURE
-                )
-                raise _failure(
-                    reason,
-                    stage="search.embedded.query",
-                    protected_cause=error,
-                ) from None
-            finally:
+            except BaseException as error:
+                operation_error = error
+            try:
                 self._connection.set_progress_handler(None, 0)
+            except BaseException as cleanup_error:
+                self._poisoned = True
+                if operation_error is None or _control_flow_rank(
+                    cleanup_error
+                ) > _control_flow_rank(operation_error):
+                    _raise_operation_error(
+                        cleanup_error,
+                        stage="search.embedded.query.progress-cleanup",
+                    )
+            if operation_error is not None:
+                _raise_operation_error(
+                    operation_error,
+                    stage="search.embedded.query",
+                )
         return tuple(self._hits(rows, acl))
 
     @staticmethod
@@ -249,16 +319,17 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
     ) -> Iterator[SearchHit]:
         allowed = frozenset(requested_acl)
         for rank, row in enumerate(rows, start=1):
-            stored_acl = tuple(json.loads(str(row[4])))
+            stored_acl = tuple(json.loads(str(row[5])))
             evidence = tuple(value for value in stored_acl if value in allowed)
-            provenance = tuple(json.loads(str(row[5])))
-            score = max(0.0, -float(cast(float, row[6])))
-            highlight = str(row[7])
+            provenance = tuple(json.loads(str(row[6])))
+            score = max(0.0, -float(cast(float, row[7])))
+            highlight = _HIGHLIGHT_WHITESPACE.sub(" ", str(row[8]))
             yield SearchHit(
                 resource_id=str(row[0]),
                 source_id=str(row[1]),
                 authoritative_locator=str(row[2]),
-                projection_version=cast(int, row[3]),
+                tenant_id=str(row[3]),
+                projection_version=cast(int, row[4]),
                 acl_evidence=evidence,
                 provenance=provenance,
                 score=score,
@@ -267,22 +338,38 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             )
 
     def cancel(self) -> None:
-        if not self._closed:
+        if self._shutdown_started():
+            return
+        try:
             self._connection.interrupt()
+        except BaseException as error:
+            if isinstance(error, sqlite3.Error) and self._shutdown_started():
+                return
+            _raise_operation_error(error, stage="search.embedded.cancel")
 
     def close(self) -> None:
         with self._lock:
-            if self._closed:
+            if self._closed or self._closing:
                 return
+            self._closing = True
             try:
                 self._connection.close()
-            except sqlite3.Error as error:
+            except BaseException as error:
+                self._poisoned = True
+                if not isinstance(error, Exception) or (
+                    isinstance(error, PlatformError) and _control_flow_rank(error)
+                ):
+                    raise
                 raise _failure(
                     PlatformReason.SHUTDOWN_FAILED,
                     stage="search.embedded.shutdown",
                     protected_cause=error,
                 ) from None
-            self._closed = True
+            else:
+                self._closed = True
+                self._poisoned = False
+            finally:
+                self._closing = False
 
     def __enter__(self) -> EmbeddedSearchDriver:
         self._assert_open()
@@ -294,6 +381,11 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
         error: BaseException | None,
         traceback: TracebackType | None,
     ) -> Literal[False]:
-        del error_type, error, traceback
-        self.close()
+        del error_type, traceback
+        try:
+            self.close()
+        except BaseException as close_error:
+            if error is not None and _control_flow_rank(close_error) <= _control_flow_rank(error):
+                return False
+            raise
         return False

@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
+from types import CoroutineType, ModuleType
 
 import pytest
 from typer.testing import CliRunner
@@ -14,12 +15,14 @@ from af.bootstrap import create_application
 from af.config import Settings
 from af.framework.container import ProviderRegistrar, ServiceProvider
 from af.framework.database_manager import bind_database_manager
+from af.framework.errors import InvalidProviderConfiguration
 from af.framework.migration_provider import MigrationProvider
 from af.framework.migrations import Migration, MigrationProbe
 from af.framework.relational import DatabaseRow, DatabaseStatement
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.sqlite_manager import sqlite_registration
 from af.infrastructure.tracing import InMemoryTraceRepository
+from af.interfaces import cli as cli_module
 from af.interfaces.cli import create_cli
 
 _NOW = datetime(2026, 7, 24, 10, tzinfo=UTC)
@@ -192,6 +195,356 @@ def test_installed_cli_loads_explicit_application_factory(
             ORDER BY name"""
         ).fetchall()
     assert metadata == [("af_migration_locks",), ("af_migrations",)]
+
+
+def test_installed_migration_cli_requires_factory_before_application_boot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "implicit.sqlite3"
+    monkeypatch.setenv("AF_DATABASE_URL", f"sqlite+pysqlite:///{database}")
+
+    result = runner.invoke(create_cli(), ["migrations", "status"])
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
+    assert not database.exists()
+
+
+def test_installed_cli_does_not_reuse_factory_across_invocations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "ambient.sqlite3"
+    monkeypatch.setenv("AF_DATABASE_URL", f"sqlite+pysqlite:///{database}")
+    module = ModuleType("test_isolated_operator_profile")
+    calls = 0
+
+    def build_application():  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return _application()
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    cli = create_cli()
+
+    first = runner.invoke(
+        cli,
+        [
+            "--application-factory",
+            "test_isolated_operator_profile:build_application",
+            "hello",
+        ],
+    )
+    second = runner.invoke(cli, ["migrations", "status"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 2
+    assert calls == 1
+    assert "configuration is invalid" in second.stderr
+    assert not database.exists()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "exit_code"),
+    [
+        (
+            [
+                "--application-factory",
+                "test_deferred_operator_profile:build_application",
+                "migrations",
+                "--help",
+            ],
+            0,
+        ),
+        (
+            [
+                "--application-factory",
+                "test_deferred_operator_profile:build_application",
+                "migrations",
+                "up",
+                "--limit",
+                "10001",
+            ],
+            2,
+        ),
+        (
+            [
+                "--application-factory",
+                "test_deferred_operator_profile:build_application",
+                "migrations",
+                "missing",
+            ],
+            2,
+        ),
+        (["migrations", "--help"], 0),
+    ],
+)
+def test_installed_cli_defers_factory_import_for_parse_only_paths(
+    arguments: list[str],
+    exit_code: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    imported: list[str] = []
+
+    def record_import(name: str) -> ModuleType:
+        imported.append(name)
+        return ModuleType(name)
+
+    monkeypatch.setattr(cli_module, "import_module", record_import)
+
+    result = runner.invoke(create_cli(), arguments)
+
+    assert result.exit_code == exit_code
+    assert imported == []
+
+
+def test_installed_cli_sanitizes_factory_af_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_secret_operator_profile")
+    secret = "postgresql://user:SECRET@host/database"
+
+    def build_application():  # type: ignore[no-untyped-def]
+        raise InvalidProviderConfiguration(secret)
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_secret_operator_profile:build_application",
+            "hello",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
+    assert secret not in result.stderr
+
+
+@pytest.mark.parametrize("failure", ["non-callable", "wrong-type", "raising"])
+def test_installed_cli_sanitizes_other_factory_failures(
+    failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_invalid_operator_profile")
+    secret = "mysql://user:SECRET@host/database"
+    if failure == "non-callable":
+        module.build_application = object()  # type: ignore[attr-defined]
+    elif failure == "wrong-type":
+        module.build_application = lambda: object()  # type: ignore[attr-defined]
+    else:
+
+        def build_application():  # type: ignore[no-untyped-def]
+            raise RuntimeError(secret)
+
+        module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_invalid_operator_profile:build_application",
+            "hello",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
+    assert secret not in result.stderr
+
+
+def test_installed_cli_closes_rejected_async_factory_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_async_operator_profile")
+    created: list[CoroutineType] = []
+
+    async def async_application():  # type: ignore[no-untyped-def]
+        return _application()
+
+    def build_application():  # type: ignore[no-untyped-def]
+        result = async_application()
+        created.append(result)
+        return result
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_async_operator_profile:build_application",
+            "hello",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
+    assert len(created) == 1
+    was_closed = created[0].cr_frame is None
+    created[0].close()
+    assert was_closed
+
+
+def test_installed_cli_sanitizes_rejected_async_factory_close_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_async_close_failure_operator_profile")
+    secret = "postgresql://user:SECRET@host/database"
+    created: list[CoroutineType] = []
+
+    class Suspend:
+        def __await__(self) -> Generator[None, None, None]:
+            yield
+
+    async def async_application():  # type: ignore[no-untyped-def]
+        try:
+            await Suspend()
+        finally:
+            raise RuntimeError(secret)
+
+    def build_application():  # type: ignore[no-untyped-def]
+        result = async_application()
+        result.send(None)
+        created.append(result)
+        return result
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_async_close_failure_operator_profile:build_application",
+            "hello",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
+    assert secret not in result.stderr
+    assert len(created) == 1
+    assert created[0].cr_frame is None
+
+
+def test_installed_cli_bounds_rejected_async_factory_close_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_async_close_recovery_operator_profile")
+    created: list[CoroutineType] = []
+
+    class Suspend:
+        def __await__(self) -> Generator[None, None, None]:
+            yield
+
+    async def async_application():  # type: ignore[no-untyped-def]
+        try:
+            await Suspend()
+        except GeneratorExit:
+            await Suspend()
+            raise
+
+    def build_application():  # type: ignore[no-untyped-def]
+        result = async_application()
+        result.send(None)
+        created.append(result)
+        return result
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_async_close_recovery_operator_profile:build_application",
+            "hello",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
+    assert len(created) == 1
+    was_closed = created[0].cr_frame is None
+    created[0].close()
+    assert was_closed
+
+
+def test_installed_cli_preserves_control_flow_during_async_close_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_async_close_control_flow_operator_profile")
+    created: list[CoroutineType] = []
+
+    class StopRequested(BaseException):
+        pass
+
+    class Suspend:
+        def __await__(self) -> Generator[None, None, None]:
+            yield
+
+    async def async_application():  # type: ignore[no-untyped-def]
+        try:
+            await Suspend()
+        except GeneratorExit:
+            try:
+                await Suspend()
+            except GeneratorExit:
+                raise StopRequested from None
+
+    def build_application():  # type: ignore[no-untyped-def]
+        result = async_application()
+        result.send(None)
+        created.append(result)
+        return result
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    with pytest.raises(StopRequested):
+        runner.invoke(
+            create_cli(),
+            [
+                "--application-factory",
+                "test_async_close_control_flow_operator_profile:build_application",
+                "hello",
+            ],
+        )
+
+    assert len(created) == 1
+    assert created[0].cr_frame is None
+
+
+def test_programmatic_falsey_factory_does_not_fall_back() -> None:
+    calls = 0
+
+    class FalseyFactory:
+        def __bool__(self) -> bool:
+            return False
+
+        def __call__(self):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return _application()
+
+    result = runner.invoke(create_cli(application_factory=FalseyFactory()), ["hello"])
+
+    assert result.exit_code == 0
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
