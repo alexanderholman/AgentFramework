@@ -6,7 +6,7 @@ from typing import Literal
 
 import pytest
 
-from af.framework.errors import PlatformReason
+from af.framework.errors import PlatformError, PlatformReason
 from af.framework.relational import (
     DatabaseOperationError,
     DatabaseStatement,
@@ -128,6 +128,82 @@ class _CommitFailureDriver:
     def transaction(self, *, read_only: bool = False) -> _CommitFailureContext:
         del read_only
         return _CommitFailureContext()
+
+
+class _CommitSuccessContext(AbstractContextManager[DatabaseTransaction]):
+    def __enter__(self) -> DatabaseTransaction:
+        return object()  # type: ignore[return-value]
+
+    def __exit__(
+        self,
+        error_type: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
+        del error_type, error, traceback
+        return False
+
+
+class _CommitSuccessDriver:
+    def transaction(self, *, read_only: bool = False) -> _CommitSuccessContext:
+        del read_only
+        return _CommitSuccessContext()
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [PlatformReason.CANCELLED, PlatformReason.SHUTDOWN_FAILED],
+)
+def test_after_commit_aggregation_preserves_control_flow_reason(
+    reason: PlatformReason,
+) -> None:
+    called: list[str] = []
+    control_flow = PlatformError(
+        reason=reason,
+        stage="callback.control-flow",
+        protected_cause=RuntimeError("secret callback detail"),
+    )
+
+    def fail() -> None:
+        called.append("failed")
+        raise control_flow
+
+    with (
+        pytest.raises(AfterCommitCallbackError) as captured,
+        UnitOfWork(_CommitSuccessDriver()) as unit,  # type: ignore[arg-type]
+    ):
+        unit.after_commit(fail)
+        unit.after_commit(lambda: called.append("continued"))
+
+    assert called == ["failed", "continued"]
+    assert captured.value.reason is reason
+    assert captured.value.failures == (control_flow,)
+    assert "secret callback detail" not in str(captured.value)
+    assert "secret callback detail" not in repr(captured.value)
+
+
+def test_after_commit_cancellation_precedes_shutdown_without_reordering_evidence() -> None:
+    shutdown = PlatformError(
+        reason=PlatformReason.SHUTDOWN_FAILED,
+        stage="callback.shutdown",
+    )
+    cancellation = PlatformError(
+        reason=PlatformReason.CANCELLED,
+        stage="callback.cancelled",
+    )
+
+    def fail(error: PlatformError) -> None:
+        raise error
+
+    with (
+        pytest.raises(AfterCommitCallbackError) as captured,
+        UnitOfWork(_CommitSuccessDriver()) as unit,  # type: ignore[arg-type]
+    ):
+        unit.after_commit(lambda: fail(shutdown))
+        unit.after_commit(lambda: fail(cancellation))
+
+    assert captured.value.reason is PlatformReason.CANCELLED
+    assert captured.value.failures == (shutdown, cancellation)
 
 
 def test_commit_failure_never_runs_after_commit_callbacks() -> None:

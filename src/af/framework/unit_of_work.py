@@ -6,7 +6,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from types import TracebackType
 
-from af.framework.errors import PlatformReason
+from af.framework.errors import PlatformError, PlatformReason
 from af.framework.relational import (
     DatabaseDriver,
     DatabaseOperationError,
@@ -27,8 +27,17 @@ class AfterCommitCallbackError(DatabaseOperationError):
         if not failures:
             raise ValueError("after-commit failures must not be empty")
         self.failures = failures
+        reason = PlatformReason.PERMANENT_FAILURE
+        for failure in failures:
+            if not isinstance(failure, PlatformError):
+                continue
+            if failure.reason is PlatformReason.CANCELLED:
+                reason = PlatformReason.CANCELLED
+                break
+            if failure.reason is PlatformReason.SHUTDOWN_FAILED:
+                reason = PlatformReason.SHUTDOWN_FAILED
         super().__init__(
-            reason=PlatformReason.PERMANENT_FAILURE,
+            reason=reason,
             stage="database.after-commit",
             protected_cause=failures[0],
         )
