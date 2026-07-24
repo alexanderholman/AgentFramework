@@ -9,6 +9,7 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from inspect import isawaitable, iscoroutinefunction
@@ -38,6 +39,8 @@ from af.framework.errors import (
     InvalidBinding,
     ShutdownTimeout,
 )
+from af.observability.context import TelemetryContext
+from af.observability.signals import TelemetryKind, TelemetryPublisher, TelemetrySignal
 
 __all__ = (
     "Application",
@@ -290,7 +293,14 @@ class _ContainerRegistrar(ProviderRegistrar):
 class Application:
     """Own one immutable provider graph and one container application scope."""
 
-    def __init__(self, root: Container, providers: Iterable[ServiceProvider]) -> None:
+    def __init__(
+        self,
+        root: Container,
+        providers: Iterable[ServiceProvider],
+        *,
+        telemetry: TelemetryPublisher | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         if not isinstance(root, Container):
             raise TypeError("application root must be a Container")
         self._root = root
@@ -306,6 +316,8 @@ class Application:
         self._pending_async_contexts: set[str] = set()
         self._pending_shutdown_awaitables: dict[str, Awaitable[object]] = {}
         self._state = ApplicationState.CONSTRUCTED
+        self._telemetry = telemetry
+        self._telemetry_clock = clock if clock is not None else (lambda: datetime.now(UTC))
         self._cleanup_complete = False
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._activation_lock: asyncio.Lock | None = None
@@ -320,6 +332,27 @@ class Application:
         self._async_shutdown_claimed = False
         self._cleanup_timeout = root.shutdown_timeout
         self._cleanup_deadline: float | None = None
+
+    def _transition(self, state: ApplicationState) -> None:
+        previous = self._state
+        self._state = state
+        if previous is state or self._telemetry is None:
+            return
+        try:
+            observed_at = self._telemetry_clock()
+            signal = TelemetrySignal.create(
+                kind=TelemetryKind.LIFECYCLE,
+                name="application.lifecycle",
+                observed_at=observed_at,
+                context=TelemetryContext(operation="application.lifecycle"),
+                attributes={
+                    "from_state": previous.value,
+                    "to_state": state.value,
+                },
+            )
+            self._telemetry.publish(signal)
+        except Exception:
+            return
 
     @property
     def state(self) -> ApplicationState:
@@ -353,7 +386,7 @@ class Application:
         try:
             self._provider_order = self._validate_and_order_providers()
         except ApplicationGraphError:
-            self._state = ApplicationState.FAILED
+            self._transition(ApplicationState.FAILED)
             self._close_root_after_failure()
             raise
         try:
@@ -377,9 +410,9 @@ class Application:
                         ) from None
             self._root.freeze()
             self._application_container = self._root.application_scope()
-            self._state = ApplicationState.REGISTERED
+            self._transition(ApplicationState.REGISTERED)
         except BaseException:
-            self._state = ApplicationState.FAILED
+            self._transition(ApplicationState.FAILED)
             self._close_root_after_failure()
             raise
 
@@ -396,13 +429,13 @@ class Application:
             return
         if self._state is not ApplicationState.REGISTERED:
             raise InvalidBinding("application must be registered before boot")
-        self._state = ApplicationState.BOOTING
+        self._transition(ApplicationState.BOOTING)
         required = self._initial_boot_set()
         for provider_id in self._provider_order:
             if provider_id not in required:
                 continue
             self._boot_one(provider_id, self._provider_by_id[provider_id].provider)
-        self._state = ApplicationState.BOOTED
+        self._transition(ApplicationState.BOOTED)
 
     async def aboot(self) -> None:
         if self._state is ApplicationState.BOOTED:
@@ -410,13 +443,13 @@ class Application:
         if self._state is not ApplicationState.REGISTERED:
             raise InvalidBinding("application must be registered before boot")
         self._bind_async_loop()
-        self._state = ApplicationState.BOOTING
+        self._transition(ApplicationState.BOOTING)
         required = self._initial_boot_set()
         for provider_id in self._provider_order:
             if provider_id not in required:
                 continue
             await self._aboot_one(provider_id, self._provider_by_id[provider_id].provider)
-        self._state = ApplicationState.BOOTED
+        self._transition(ApplicationState.BOOTED)
 
     def serve(self) -> None:
         self._begin_sync_operation()
@@ -433,7 +466,7 @@ class Application:
             raise InvalidBinding("application must be booted before serving")
         if self._activation_lock is not None and self._activation_lock.locked():
             raise InvalidBinding("application cannot serve during provider activation")
-        self._state = ApplicationState.SERVING
+        self._transition(ApplicationState.SERVING)
 
     def start(self) -> None:
         self._begin_sync_operation()
@@ -503,7 +536,7 @@ class Application:
             raise InvalidBinding("only a serving application can drain")
         if self._activation_lock is not None and self._activation_lock.locked():
             raise InvalidBinding("application cannot drain during provider activation")
-        self._state = ApplicationState.DRAINING
+        self._transition(ApplicationState.DRAINING)
 
     def shutdown(self) -> None:
         if self._cleanup_complete or self._state is ApplicationState.SHUTDOWN:
@@ -523,7 +556,7 @@ class Application:
         if self._state is ApplicationState.CONSTRUCTED:
             self._root.close()
             self._cleanup_complete = True
-            self._state = ApplicationState.SHUTDOWN
+            self._transition(ApplicationState.SHUTDOWN)
             return
         if self._state not in {
             ApplicationState.REGISTERED,
@@ -545,7 +578,7 @@ class Application:
             or self._root.requires_async_disposal()
         ):
             raise AsyncLifecycleRequired("application shutdown requires ashutdown")
-        self._state = ApplicationState.SHUTTING_DOWN
+        self._transition(ApplicationState.SHUTTING_DOWN)
         provider_failures, cleanup_cancellation, async_required = self._shutdown_booted_sync()
         failures = list(provider_failures)
         if async_required or self._root.requires_async_disposal():
@@ -566,7 +599,7 @@ class Application:
             failures.append(error)
         self._cleanup_failures = tuple(failures)
         self._cleanup_complete = True
-        self._state = ApplicationState.SHUTDOWN
+        self._transition(ApplicationState.SHUTDOWN)
         if cleanup_cancellation is not None:
             raise cleanup_cancellation from None
         if failures:
@@ -617,11 +650,11 @@ class Application:
         }:
             raise InvalidBinding("application cannot shut down from its current state")
         if self._state is ApplicationState.SERVING:
-            self._state = ApplicationState.DRAINING
-        self._state = ApplicationState.SHUTTING_DOWN
+            self._transition(ApplicationState.DRAINING)
+        self._transition(ApplicationState.SHUTTING_DOWN)
         if self._activation_lock is not None:
             async with self._activation_lock:
-                if self._cleanup_complete or self._state is ApplicationState.SHUTDOWN:
+                if self._cleanup_complete or self.state is ApplicationState.SHUTDOWN:
                     return
                 await self._ashutdown_locked()
             return
@@ -646,7 +679,7 @@ class Application:
             failures.append(error)
         self._cleanup_failures = tuple(failures)
         self._cleanup_complete = True
-        self._state = ApplicationState.SHUTDOWN
+        self._transition(ApplicationState.SHUTDOWN)
         if cleanup_cancellation is not None:
             raise cleanup_cancellation
         if failures:
@@ -869,12 +902,12 @@ class Application:
             failures.append(AsyncLifecycleRequired("application rollback requires ashutdown"))
             self._cleanup_failures = tuple(failures)
             self._cleanup_complete = False
-            self._state = ApplicationState.FAILED
+            self._transition(ApplicationState.FAILED)
             return tuple(failures), cancellation
         self._close_root_after_failure(failures)
         self._cleanup_failures = tuple(failures)
         self._cleanup_complete = True
-        self._state = ApplicationState.FAILED
+        self._transition(ApplicationState.FAILED)
         return tuple(failures), cancellation
 
     async def _rollback_async(
@@ -912,7 +945,7 @@ class Application:
             failures.append(error)
         self._cleanup_failures = tuple(failures)
         self._cleanup_complete = True
-        self._state = ApplicationState.FAILED
+        self._transition(ApplicationState.FAILED)
         return tuple(failures), cancellation
 
     def _shutdown_booted_sync(
