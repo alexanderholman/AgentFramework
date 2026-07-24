@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -54,6 +56,13 @@ def test_mariadb_driver_executes_savepoints_and_read_only_transactions(
                     )
                 )
                 raise RuntimeError("discard")
+            with transaction.savepoint("released"):
+                transaction.execute(
+                    DatabaseStatement(
+                        "INSERT INTO records (id, value) VALUES (:id, :value)",
+                        {"id": 3, "value": "released"},
+                    )
+                )
         with driver.transaction(read_only=True) as transaction:
             rows = transaction.query(
                 DatabaseStatement(
@@ -61,7 +70,10 @@ def test_mariadb_driver_executes_savepoints_and_read_only_transactions(
                     read_only=True,
                 )
             )
-        assert [row.as_mapping() for row in rows] == [{"id": 1, "value": "kept"}]
+        assert [row.as_mapping() for row in rows] == [
+            {"id": 1, "value": "kept"},
+            {"id": 3, "value": "released"},
+        ]
         with (
             pytest.raises(DatabaseOperationError) as denied,
             driver.transaction(read_only=True) as transaction,
@@ -70,6 +82,41 @@ def test_mariadb_driver_executes_savepoints_and_read_only_transactions(
         assert denied.value.reason is PlatformReason.AUTHORIZATION_DENIED
         with pytest.raises(UnsupportedDatabaseFeature):
             driver.require(DatabaseFeature.JSON)
+
+
+def test_mariadb_constructor_validation_and_connection_failure_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        MariaDBDriver("")
+    with pytest.raises(ValueError, match="non-empty"):
+        MariaDBDriver(cast(str, None))
+
+    def invalid_url(_url: str):
+        raise ValueError("invalid")
+
+    monkeypatch.setattr(mariadb_module, "make_url", invalid_url)
+    with pytest.raises(ValueError, match="URL is invalid"):
+        MariaDBDriver("mariadb+pymysql://localhost/database")
+
+    monkeypatch.undo()
+
+    class FailingEngine:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        def connect(self):
+            raise SQLAlchemyError("connect failed")
+
+        def dispose(self) -> None:
+            self.disposed = True
+
+    engine = FailingEngine()
+    monkeypatch.setattr(mariadb_module, "create_engine", lambda *_args, **_options: engine)
+    with pytest.raises(DatabaseOperationError) as captured:
+        MariaDBDriver("mariadb+pymysql://user:secret@localhost/database")
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert engine.disposed
 
 
 def test_mariadb_rejects_other_dialects_and_sanitizes_connect_failure(
@@ -87,6 +134,48 @@ def test_mariadb_rejects_other_dialects_and_sanitizes_connect_failure(
     assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
     assert "secret" not in str(captured.value)
     assert "secret" not in repr(captured.value)
+
+
+def test_mariadb_transaction_contract_fails_closed_and_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    driver = _driver(monkeypatch)
+    with pytest.raises(ValueError, match="boolean"):
+        driver.transaction(read_only=cast(bool, 1))
+
+    with driver.transaction() as transaction:
+        with pytest.raises(DatabaseOperationError) as nested:
+            with driver.transaction():
+                pass
+        assert nested.value.reason is PlatformReason.TRANSIENT_FAILURE
+        with pytest.raises(ValueError, match="canonical"):
+            transaction.savepoint("not-canonical!")
+        with pytest.raises(TypeError, match="DatabaseStatement"):
+            transaction.execute(cast(DatabaseStatement, object()))
+        with pytest.raises(TypeError, match="DatabaseStatement"):
+            transaction.stream(cast(DatabaseStatement, object()))
+        with pytest.raises(DatabaseOperationError) as invalid_query:
+            transaction.stream(DatabaseStatement("SELECT 1"))
+        assert invalid_query.value.reason is PlatformReason.VALIDATION_FAILED
+
+    driver._thread_id = 7
+    driver.cancel()
+    driver.close()
+    driver.cancel()
+    with pytest.raises(DatabaseOperationError) as closed:
+        with driver:
+            pass
+    assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_mariadb_stream_is_bounded_by_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _driver(monkeypatch) as driver:
+        with driver.transaction(read_only=True) as transaction:
+            cursor = transaction.stream(DatabaseStatement("SELECT 1 AS value", read_only=True))
+            assert next(cursor)["value"] == 1
+        with pytest.raises(DatabaseOperationError) as captured:
+            next(cursor)
+        assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
 def test_mariadb_cancel_uses_separate_connection(monkeypatch: pytest.MonkeyPatch) -> None:
