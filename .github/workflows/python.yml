@@ -1,31 +1,43 @@
 name: AF Python
 
 on:
+  push:
+    branches: [master, main, develop]
   pull_request:
     branches: [master, main, develop]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: af-python-materialize-blob-${{ github.ref }}
+  group: af-python-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  materialize:
-    name: Materialize canonical middleware blob
+  check:
+    name: Python 3.12 quality gate
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
-      GH_TOKEN: ${{ github.token }}
+      AF_APPEND_ONLY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
+      AF_APPEND_ONLY_HEAD_REF: ${{ github.event_name == 'push' && github.event.after || github.sha }}
+      AF_APPEND_ONLY_BASE_STRATEGY: ${{ github.event_name == 'push' && 'exact' || 'merge-base' }}
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
     steps:
+      - name: Materialize push before commit
+        if: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.before }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Check out exact event head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'push' && github.event.after || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -44,95 +56,5 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Materialize canonical local bus implementation
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          core_path = Path("src/af/messaging/_local_bus_core.py")
-          target_path = Path("src/af/messaging/local_bus.py")
-          source = core_path.read_text(encoding="utf-8")
-
-          telemetry_old = (
-              "            self._publisher.publish(signal)\n"
-              "        except Exception:\n"
-              "            # Telemetry is optional evidence and cannot change dispatch semantics.\n"
-              "            return\n"
-          )
-          telemetry_new = (
-              "            self._publisher.publish(signal)\n"
-              "        except asyncio.CancelledError:\n"
-              "            # Optional telemetry cannot own dispatch cancellation.\n"
-              "            return\n"
-              "        except Exception:\n"
-              "            # Telemetry is optional evidence and cannot change dispatch semantics.\n"
-              "            return\n"
-          )
-          if source.count(telemetry_old) != 1:
-              raise SystemExit("unexpected telemetry emission implementation")
-          source = source.replace(telemetry_old, telemetry_new)
-
-          sync_old = (
-              "        extension = self._middleware[index]\n"
-              "        called = False\n\n"
-              "        def call_next() -> LocalEventDispatchReport:\n"
-              "            nonlocal called\n"
-              "            if called:\n"
-              "                raise InvalidMessageSchema(\"local event middleware called next more than once\")\n"
-              "            called = True\n"
-              "            return self._invoke_sync_middleware(envelope, listeners, index + 1)\n"
-          )
-          sync_new = (
-              "        extension = self._middleware[index]\n"
-              "        called = False\n"
-              "        completed = False\n\n"
-              "        def call_next() -> LocalEventDispatchReport:\n"
-              "            nonlocal called, completed\n"
-              "            if called:\n"
-              "                raise InvalidMessageSchema(\"local event middleware called next more than once\")\n"
-              "            called = True\n"
-              "            report = self._invoke_sync_middleware(envelope, listeners, index + 1)\n"
-              "            completed = True\n"
-              "            return report\n"
-          )
-          if source.count(sync_old) != 1:
-              raise SystemExit("unexpected synchronous middleware implementation")
-          source = source.replace(sync_old, sync_new)
-
-          completion_old = (
-              "        if not called:\n"
-              "            raise InvalidMessageSchema(\"local event middleware must call next exactly once\")\n"
-          )
-          completion_new = (
-              "        if not called or not completed:\n"
-              "            raise InvalidMessageSchema(\n"
-              "                \"local event middleware must complete next exactly once\"\n"
-              "            )\n"
-          )
-          if source.count(completion_old) != 1:
-              raise SystemExit("unexpected synchronous middleware completion check")
-          source = source.replace(completion_old, completion_new)
-
-          target_path.write_text(source, encoding="utf-8")
-          PY
-          uv run ruff format src/af/messaging/local_bus.py
-          uv run ruff check --fix src/af/messaging/local_bus.py
-
-      - name: Create canonical Git blob
-        run: |
-          gh api --method POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "repos/${GITHUB_REPOSITORY}/git/blobs" \
-            -f content="$(base64 -w0 src/af/messaging/local_bus.py)" \
-            -f encoding="base64" \
-            --jq '.sha' > canonical-local-bus-blob-sha.txt
-          test "$(cat canonical-local-bus-blob-sha.txt)" = "53545f65cc70712eca670495aac5df03701d60b0"
-
-      - name: Upload canonical blob SHA
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: canonical-local-bus-blob-sha
-          path: canonical-local-bus-blob-sha.txt
-          if-no-files-found: error
-          retention-days: 1
+      - name: Run the repeatable AF quality gate
+        run: python scripts/af_dev.py --action check --execute
