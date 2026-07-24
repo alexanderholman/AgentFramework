@@ -40,8 +40,8 @@ from af.messaging.projections import (
 )
 from af.messaging.relay import (
     OutboxBatchReport,
-    OutboxPublishError,
     OutboxPublisher,
+    OutboxPublishError,
     OutboxRelay,
     OutboxRelayError,
     OutboxRelayIntegrityError,
