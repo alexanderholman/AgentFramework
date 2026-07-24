@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from typer.testing import CliRunner
 
 from af.bootstrap import create_application
@@ -86,6 +87,10 @@ def test_migration_cli_plans_applies_reports_verifies_and_reverses() -> None:
         "dry_run": True,
     }
 
+    dry_run = runner.invoke(cli, ["migrations", "up", "--dry-run"])
+    assert dry_run.exit_code == 0
+    assert json.loads(dry_run.stdout)["dry_run"] is True
+
     applied = runner.invoke(cli, ["migrations", "up"])
     assert applied.exit_code == 0
     assert json.loads(applied.stdout)["migration_ids"] == ["20260724100000_create_operator_records"]
@@ -100,6 +105,10 @@ def test_migration_cli_plans_applies_reports_verifies_and_reverses() -> None:
     verified = runner.invoke(cli, ["migrations", "verify"])
     assert verified.exit_code == 0
     assert json.loads(verified.stdout) == {"verified": ["20260724100000_create_operator_records"]}
+
+    planned_down = runner.invoke(cli, ["migrations", "plan", "--direction", "down"])
+    assert planned_down.exit_code == 0
+    assert json.loads(planned_down.stdout)["direction"] == "down"
 
     reversed_result = runner.invoke(cli, ["migrations", "down", "--steps", "1"])
     assert reversed_result.exit_code == 0
@@ -133,3 +142,29 @@ def test_migration_cli_rejects_unbounded_operator_inputs() -> None:
     assert too_many.exit_code == 2
     assert no_steps.exit_code == 2
     application.shutdown()
+
+
+@pytest.mark.parametrize(
+    "arguments, error_type",
+    [
+        ({"migrations": (object(),)}, ValueError),
+        ({"connection": ""}, ValueError),
+        ({"owner_id": ""}, ValueError),
+        ({"clock": object()}, TypeError),
+        ({"lock_lease": timedelta(0)}, ValueError),
+    ],
+)
+def test_migration_provider_rejects_invalid_configuration(
+    arguments: dict[str, object],
+    error_type: type[Exception],
+) -> None:
+    options: dict[str, object] = {
+        "migrations": (_migration(),),
+        "connection": "primary",
+        "owner_id": "cli-test",
+        "clock": lambda: _NOW,
+    }
+    options.update(arguments)
+
+    with pytest.raises(error_type):
+        MigrationProvider(**options)  # type: ignore[arg-type]
