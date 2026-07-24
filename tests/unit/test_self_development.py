@@ -76,7 +76,7 @@ def policy(*, tie_break_by_id: bool = False) -> SelectionPolicy:
 
 class SelfDevelopmentPlannerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.planner = SelfDevelopmentPlanner()
+        self.planner = SelfDevelopmentPlanner(\n            installed_procedure_ids=("implement-self-development",)\n        )
 
     def test_same_snapshot_and_policy_produce_byte_identical_plan(self) -> None:
         observed = snapshot(candidate("issue:120", procedure_id="implement-self-development"))
@@ -90,6 +90,22 @@ class SelfDevelopmentPlannerTests(unittest.TestCase):
         self.assertEqual(first.selected_item_id, "issue:120")
         self.assertEqual(first.procedure_id, "implement-self-development")
         self.assertEqual(first.allowed_writes, ())
+
+    def test_unknown_procedure_routes_to_engineering_gap(self) -> None:
+        plan = SelfDevelopmentPlanner().plan(
+            snapshot(candidate("issue:120", procedure_id="implement-self-development")),
+            policy(),
+            now=NOW,
+        )
+
+        self.assertEqual(plan.route, CycleRoute.ENGINEER_GAP)
+        self.assertIsNone(plan.procedure_id)
+
+    def test_read_only_plan_rejects_mutable_empty_write_collection(self) -> None:
+        plan = self.planner.plan(snapshot(candidate("issue:120")), policy(), now=NOW)
+
+        with self.assertRaisesRegex(ValueError, "cannot grant writes"):
+            replace(plan, allowed_writes=[])  # type: ignore[arg-type]
 
     def test_source_order_does_not_change_snapshot_or_plan(self) -> None:
         lower = candidate("issue:120", priority=0)
