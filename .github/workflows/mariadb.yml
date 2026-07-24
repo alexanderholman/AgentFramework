@@ -72,25 +72,33 @@ jobs:
               src/af/infrastructure/mariadb.py \
               src/af/infrastructure/mariadb_manager.py \
               src/af/messaging/outbox.py \
+              src/af/messaging/relay.py \
               tests/unit/test_mariadb_driver.py \
               tests/unit/test_mariadb_manager.py \
+              tests/unit/test_outbox_relay.py \
               tests/integration/test_mariadb_relational.py \
-              tests/integration/test_transactional_outbox_relational.py
+              tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_outbox_relay_relational.py
             uv run ruff check \
               src/af/infrastructure/mariadb.py \
               src/af/infrastructure/mariadb_manager.py \
               src/af/messaging/outbox.py \
+              src/af/messaging/relay.py \
               tests/unit/test_mariadb_driver.py \
               tests/unit/test_mariadb_manager.py \
+              tests/unit/test_outbox_relay.py \
               tests/integration/test_mariadb_relational.py \
-              tests/integration/test_transactional_outbox_relational.py
+              tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_outbox_relay_relational.py
             uv run mypy \
               src/af/infrastructure/mariadb.py \
               src/af/infrastructure/mariadb_manager.py \
-              src/af/messaging/outbox.py
+              src/af/messaging/outbox.py \
+              src/af/messaging/relay.py
             uv run pytest -q \
               tests/unit/test_mariadb_driver.py \
-              tests/unit/test_mariadb_manager.py
+              tests/unit/test_mariadb_manager.py \
+              tests/unit/test_outbox_relay.py
           } 2>&1 | tee mariadb-quality.log
 
       - name: Run MariaDB real-service certification
@@ -103,6 +111,7 @@ jobs:
             pytest -q \
               tests/integration/test_mariadb_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_outbox_relay_relational.py \
             2>&1 | tee mariadb-integration.log
 
       - name: Run canonical gate without MariaDB opt-in
@@ -128,10 +137,13 @@ jobs:
             src/af/infrastructure/mariadb_manager.py
             src/af/infrastructure/mysql.py
             src/af/messaging/outbox.py
+            src/af/messaging/relay.py
             tests/unit/test_mariadb_driver.py
             tests/unit/test_mariadb_manager.py
+            tests/unit/test_outbox_relay.py
             tests/integration/test_mariadb_relational.py
             tests/integration/test_transactional_outbox_relational.py
+            tests/integration/test_outbox_relay_relational.py
           if-no-files-found: error
           retention-days: 1
 
