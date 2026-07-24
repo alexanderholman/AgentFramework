@@ -148,9 +148,11 @@ def test_pending_records_are_due_only_and_deterministically_ordered() -> None:
         "event-a",
         "event-b",
     )
-    with pytest.raises(ValueError, match="pending limit"):
-        with driver.transaction(read_only=True) as transaction:
-            outbox.pending(transaction, now=_NOW, limit=0)
+    with (
+        pytest.raises(ValueError, match="pending limit"),
+        driver.transaction(read_only=True) as transaction,
+    ):
+        outbox.pending(transaction, now=_NOW, limit=0)
     driver.close()
 
 
@@ -215,12 +217,14 @@ def test_retry_publish_and_dead_letter_transitions_control_pending_state() -> No
 def test_outbox_rejects_non_integration_events_before_database_mutation() -> None:
     driver, outbox = _setup()
 
-    with pytest.raises(ValueError, match="integration events only"):
-        with driver.transaction() as transaction:
-            outbox.append(
-                transaction,
-                _event("event-domain", kind=EnvelopeKind.DOMAIN_EVENT),
-            )
+    with (
+        pytest.raises(ValueError, match="integration events only"),
+        driver.transaction() as transaction,
+    ):
+        outbox.append(
+            transaction,
+            _event("event-domain", kind=EnvelopeKind.DOMAIN_EVENT),
+        )
 
     with driver.transaction(read_only=True) as transaction:
         assert outbox.pending(transaction, now=_NOW) == ()
@@ -267,9 +271,11 @@ def test_corrupt_stored_envelope_fails_closed_without_exposing_payload() -> None
             )
         )
 
-    with pytest.raises(OutboxIntegrityError) as captured:
-        with driver.transaction(read_only=True) as transaction:
-            outbox.pending(transaction, now=_NOW)
+    with (
+        pytest.raises(OutboxIntegrityError) as captured,
+        driver.transaction(read_only=True) as transaction,
+    ):
+        outbox.pending(transaction, now=_NOW)
 
     assert captured.value.reason is not None
     assert "secret-invalid-envelope" not in str(captured.value)
@@ -290,12 +296,11 @@ def test_outbox_transitions_reject_invalid_identifiers(
 ) -> None:
     driver, outbox = _setup()
 
-    with pytest.raises(ValueError):
-        with driver.transaction() as transaction:
-            outbox.mark_retry(
-                transaction,
-                message_id,
-                available_at=_NOW,
-                error_code=error_code,
-            )
+    with pytest.raises(ValueError), driver.transaction() as transaction:
+        outbox.mark_retry(
+            transaction,
+            message_id,
+            available_at=_NOW,
+            error_code=error_code,
+        )
     driver.close()
