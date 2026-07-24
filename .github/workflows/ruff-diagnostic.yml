@@ -10,7 +10,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-24.04
     steps:
-      - name: Show exact Ruff diagnostics
+      - name: Show exact Ruff import fix
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
@@ -20,5 +20,4 @@ jobs:
           git fetch -q --depth=1 origin "${HEAD_SHA}"
           git checkout -q --detach FETCH_HEAD
           python -m pip install -q ruff==0.15.22
-          ruff format --check src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
-          ruff check --output-format concise src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
+          ruff check --fix --diff src/af/infrastructure/local_self_design_recording.py
