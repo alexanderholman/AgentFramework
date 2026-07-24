@@ -64,7 +64,10 @@ class MigrationProvider(ServiceProvider):
             manager = resolver.resolve(DatabaseManager)
             driver = manager.connection(
                 connection,
-                requires=(DatabaseFeature.TRANSACTIONS,),
+                requires=(
+                    DatabaseFeature.TRANSACTIONS,
+                    DatabaseFeature.STREAMING,
+                ),
             )
             return MigrationRunner(
                 driver,

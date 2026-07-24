@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, Never, cast
+from unittest.mock import Mock
+
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
@@ -16,7 +20,7 @@ from af.infrastructure import postgresql as postgresql_module
 from af.infrastructure.postgresql import PostgreSQLDriver
 
 
-def _sqlite_engine(_url: str, **_options: object):
+def _sqlite_engine(_url: str, **_options: object) -> Engine:
     return create_engine("sqlite+pysqlite:///:memory:", poolclass=StaticPool)
 
 
@@ -76,6 +80,29 @@ def test_postgresql_stream_is_bounded_by_transaction(monkeypatch: pytest.MonkeyP
         assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
+def test_postgresql_cursor_close_is_idempotent_and_sanitized() -> None:
+    transaction = Mock()
+    transaction.active = True
+    result = Mock()
+    result.keys.return_value = ()
+    close_failure = SQLAlchemyError("private postgresql close detail")
+    result.close.side_effect = close_failure
+    cursor = postgresql_module._PostgreSQLCursor(
+        cast(Any, transaction),
+        cast(Any, result),
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        cursor.close()
+    cursor.close()
+
+    assert captured.value.stage == "database.cursor-close"
+    assert captured.value.protected_cause is close_failure
+    assert "private postgresql close detail" not in str(captured.value)
+    assert "private postgresql close detail" not in repr(captured.value)
+    assert result.close.call_count == 1
+
+
 def test_postgresql_read_only_and_capabilities_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -98,7 +125,7 @@ def test_postgresql_rejects_invalid_url_and_sanitizes_connect_failure(
     with pytest.raises(ValueError, match="postgresql\\+psycopg"):
         PostgreSQLDriver("sqlite:///:memory:")
 
-    def fail(_url: str, **_options: object):
+    def fail(_url: str, **_options: object) -> Never:
         raise SQLAlchemyError("postgresql+psycopg://user:secret@private/database")
 
     monkeypatch.setattr(postgresql_module, "create_engine", fail)

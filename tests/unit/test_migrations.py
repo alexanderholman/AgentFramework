@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
+from itertools import repeat
 from pathlib import Path
-from typing import cast
+from types import TracebackType
+from typing import Literal, cast
+from unittest.mock import Mock
 
 import pytest
 
+from af.framework.container import ProviderRegistrar
+from af.framework.database_manager import DatabaseManager
 from af.framework.errors import PlatformReason
+from af.framework.migration_provider import MigrationProvider
 from af.framework.migrations import (
     Migration,
     MigrationDirection,
@@ -18,9 +26,13 @@ from af.framework.migrations import (
     MigrationVerificationError,
 )
 from af.framework.relational import (
+    DatabaseCursor,
+    DatabaseFeature,
     DatabaseOperationError,
     DatabaseRow,
     DatabaseStatement,
+    DatabaseTransaction,
+    UnsupportedDatabaseFeature,
 )
 from af.infrastructure.sqlite import SQLiteDriver
 
@@ -108,6 +120,443 @@ def _ledger_rows(driver: SQLiteDriver) -> tuple[DatabaseRow, ...]:
                 read_only=True,
             )
         )
+
+
+class GuardedCursor(Iterator[DatabaseRow]):
+    def __init__(self, rows: Iterable[DatabaseRow], *, maximum_pulls: int) -> None:
+        self._rows = iter(rows)
+        self._maximum_pulls = maximum_pulls
+        self.pulls = 0
+        self.closed = False
+
+    def __next__(self) -> DatabaseRow:
+        if self.closed:
+            raise StopIteration
+        row = next(self._rows)
+        self.pulls += 1
+        if self.pulls > self._maximum_pulls:
+            raise AssertionError("migration query consumed beyond its declared bound")
+        return row
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FailingCursor(Iterator[DatabaseRow]):
+    def __init__(
+        self,
+        error: DatabaseOperationError | None = None,
+        *,
+        close_error: BaseException | None = None,
+    ) -> None:
+        self._error = error
+        self._close_error = close_error
+        self.closed = False
+
+    def __next__(self) -> DatabaseRow:
+        if self._error is None:
+            raise StopIteration
+        raise self._error
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        if self._close_error is not None:
+            raise self._close_error
+
+
+class StreamingTransaction:
+    def __init__(self, cursors: list[DatabaseCursor]) -> None:
+        self._cursors = cursors
+        self._opened: list[DatabaseCursor] = []
+
+    def execute(self, statement: DatabaseStatement, /) -> int:
+        del statement
+        raise AssertionError("streaming test transaction does not execute statements")
+
+    def query(self, statement: DatabaseStatement, /) -> tuple[DatabaseRow, ...]:
+        del statement
+        raise AssertionError("migration reads must not materialize unbounded query results")
+
+    def stream(self, statement: DatabaseStatement, /) -> DatabaseCursor:
+        del statement
+        if not self._cursors:
+            raise AssertionError("unexpected migration stream")
+        cursor = self._cursors.pop(0)
+        self._opened.append(cursor)
+        return cursor
+
+    def savepoint(self, name: str, /) -> AbstractContextManager[None]:
+        del name
+        return nullcontext()
+
+    def finish(self) -> None:
+        for cursor in self._opened:
+            cursor.close()
+
+
+class StreamingTransactionContext(AbstractContextManager[DatabaseTransaction]):
+    def __init__(self, transaction: StreamingTransaction) -> None:
+        self._transaction = transaction
+
+    def __enter__(self) -> DatabaseTransaction:
+        return self._transaction
+
+    def __exit__(
+        self,
+        error_type: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
+        del error_type, error, traceback
+        self._transaction.finish()
+        return False
+
+
+class StreamingDriver:
+    def __init__(
+        self,
+        cursors: Iterable[DatabaseCursor] = (),
+        *,
+        features: frozenset[DatabaseFeature] = frozenset(
+            {DatabaseFeature.TRANSACTIONS, DatabaseFeature.STREAMING}
+        ),
+    ) -> None:
+        self._cursors = list(cursors)
+        self._features = features
+        self.required: list[DatabaseFeature] = []
+
+    @property
+    def features(self) -> frozenset[DatabaseFeature]:
+        return self._features
+
+    def supports(self, feature: DatabaseFeature, /) -> bool:
+        return feature in self._features
+
+    def require(self, feature: DatabaseFeature, /) -> None:
+        self.required.append(feature)
+        if not self.supports(feature):
+            raise UnsupportedDatabaseFeature(feature)
+
+    def transaction(
+        self,
+        *,
+        read_only: bool = False,
+    ) -> AbstractContextManager[DatabaseTransaction]:
+        del read_only
+        return StreamingTransactionContext(StreamingTransaction(self._cursors))
+
+    def cancel(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _applied_row(migration_id: str, checksum: str) -> DatabaseRow:
+    return DatabaseRow(
+        ("migration_id", "checksum", "batch", "applied_order", "applied_at"),
+        (migration_id, checksum, 1, 1, "2026-07-24T08:00:00.000000Z"),
+    )
+
+
+def test_migration_ledger_read_stops_after_catalogue_bound_and_closes_cursor() -> None:
+    unexpected = _applied_row("20260724080000_unexpected", "0" * 64)
+    cursor = GuardedCursor(repeat(unexpected), maximum_pulls=1)
+    driver = StreamingDriver((cursor,))
+    runner = MigrationRunner(
+        driver,
+        (),
+        owner_id="bounded-ledger",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(MigrationIntegrityError):
+        runner.verify()
+
+    assert cursor.pulls == 1
+    assert cursor.closed
+    assert driver.required == [
+        DatabaseFeature.TRANSACTIONS,
+        DatabaseFeature.STREAMING,
+    ]
+
+
+def test_migration_probe_stops_after_expected_bound_and_closes_cursor() -> None:
+    probe = MigrationProbe(
+        DatabaseStatement("SELECT value FROM probe", read_only=True),
+        (),
+    )
+    migration = Migration(
+        "20260724080000_bounded_probe",
+        (DatabaseStatement("CREATE TABLE bounded_probe (value INTEGER)"),),
+        verify=(probe,),
+    )
+    ledger = GuardedCursor(
+        (_applied_row(migration.migration_id, migration.checksum),),
+        maximum_pulls=2,
+    )
+    probe_rows = GuardedCursor(
+        repeat(DatabaseRow(("value",), (1,))),
+        maximum_pulls=1,
+    )
+    runner = MigrationRunner(
+        StreamingDriver((ledger, probe_rows)),
+        (migration,),
+        owner_id="bounded-probe",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(MigrationVerificationError) as captured:
+        runner.verify()
+
+    assert captured.value.migration_id == migration.migration_id
+    assert ledger.pulls == 1
+    assert ledger.closed
+    assert probe_rows.pulls == 1
+    assert probe_rows.closed
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        PlatformReason.CANCELLED,
+        PlatformReason.SHUTDOWN_FAILED,
+        PlatformReason.TRANSIENT_FAILURE,
+    ],
+)
+def test_migration_probe_preserves_operational_failure_and_closes_cursor(
+    reason: PlatformReason,
+) -> None:
+    probe = MigrationProbe(
+        DatabaseStatement("SELECT value FROM probe", read_only=True),
+        (),
+    )
+    migration = Migration(
+        "20260724080000_failing_probe",
+        (DatabaseStatement("CREATE TABLE failing_probe (value INTEGER)"),),
+        verify=(probe,),
+    )
+    ledger = GuardedCursor(
+        (_applied_row(migration.migration_id, migration.checksum),),
+        maximum_pulls=2,
+    )
+    failure = DatabaseOperationError(
+        reason=reason,
+        stage="database.stream",
+        protected_cause=RuntimeError("private database credential"),
+    )
+    probe_rows = FailingCursor(failure)
+    runner = MigrationRunner(
+        StreamingDriver((ledger, probe_rows)),
+        (migration,),
+        owner_id="failing-probe",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        runner.verify()
+
+    assert captured.value is failure
+    assert "private database credential" not in str(captured.value)
+    assert "private database credential" not in repr(captured.value)
+    assert probe_rows.closed
+
+
+def test_migration_probe_preserves_primary_failure_when_cursor_close_also_fails() -> None:
+    probe = MigrationProbe(
+        DatabaseStatement("SELECT value FROM probe", read_only=True),
+        (),
+    )
+    migration = Migration(
+        "20260724080000_dual_failure_probe",
+        (DatabaseStatement("CREATE TABLE dual_failure_probe (value INTEGER)"),),
+        verify=(probe,),
+    )
+    ledger = GuardedCursor(
+        (_applied_row(migration.migration_id, migration.checksum),),
+        maximum_pulls=2,
+    )
+    failure = DatabaseOperationError(
+        reason=PlatformReason.CANCELLED,
+        stage="database.stream",
+        protected_cause=RuntimeError("private iteration detail"),
+    )
+    probe_rows = FailingCursor(
+        failure,
+        close_error=RuntimeError("private close detail"),
+    )
+    runner = MigrationRunner(
+        StreamingDriver((ledger, probe_rows)),
+        (migration,),
+        owner_id="dual-failure-probe",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        runner.verify()
+
+    assert captured.value is failure
+    assert "private iteration detail" not in str(captured.value)
+    assert "private close detail" not in str(captured.value)
+    assert probe_rows.closed
+
+
+def test_migration_probe_late_cleanup_cancellation_precedes_transient_failure() -> None:
+    probe = MigrationProbe(
+        DatabaseStatement("SELECT value FROM probe", read_only=True),
+        (),
+    )
+    migration = Migration(
+        "20260724080000_cleanup_cancelled_probe",
+        (DatabaseStatement("CREATE TABLE cleanup_cancelled_probe (value INTEGER)"),),
+        verify=(probe,),
+    )
+    ledger = GuardedCursor(
+        (_applied_row(migration.migration_id, migration.checksum),),
+        maximum_pulls=2,
+    )
+    iteration_failure = DatabaseOperationError(
+        reason=PlatformReason.TRANSIENT_FAILURE,
+        stage="database.stream",
+    )
+    cleanup_cancellation = DatabaseOperationError(
+        reason=PlatformReason.CANCELLED,
+        stage="database.cursor-close",
+    )
+    probe_rows = FailingCursor(
+        iteration_failure,
+        close_error=cleanup_cancellation,
+    )
+    runner = MigrationRunner(
+        StreamingDriver((ledger, probe_rows)),
+        (migration,),
+        owner_id="cleanup-cancelled-probe",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        runner.verify()
+
+    assert captured.value is cleanup_cancellation
+    assert probe_rows.closed
+
+
+def test_migration_probe_late_base_control_flow_precedes_operational_failure() -> None:
+    probe = MigrationProbe(
+        DatabaseStatement("SELECT value FROM probe", read_only=True),
+        (),
+    )
+    migration = Migration(
+        "20260724080000_cleanup_control_flow_probe",
+        (DatabaseStatement("CREATE TABLE cleanup_control_flow_probe (value INTEGER)"),),
+        verify=(probe,),
+    )
+    ledger = GuardedCursor(
+        (_applied_row(migration.migration_id, migration.checksum),),
+        maximum_pulls=2,
+    )
+    cleanup_control_flow = KeyboardInterrupt()
+    probe_rows = FailingCursor(
+        DatabaseOperationError(
+            reason=PlatformReason.TRANSIENT_FAILURE,
+            stage="database.stream",
+        ),
+        close_error=cleanup_control_flow,
+    )
+    runner = MigrationRunner(
+        StreamingDriver((ledger, probe_rows)),
+        (migration,),
+        owner_id="cleanup-control-flow-probe",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(KeyboardInterrupt) as captured:
+        runner.verify()
+
+    assert captured.value is cleanup_control_flow
+    assert probe_rows.closed
+
+
+def test_migration_probe_sanitizes_standalone_cursor_close_failure() -> None:
+    probe = MigrationProbe(
+        DatabaseStatement("SELECT value FROM probe", read_only=True),
+        (),
+    )
+    migration = Migration(
+        "20260724080000_close_failure_probe",
+        (DatabaseStatement("CREATE TABLE close_failure_probe (value INTEGER)"),),
+        verify=(probe,),
+    )
+    ledger = GuardedCursor(
+        (_applied_row(migration.migration_id, migration.checksum),),
+        maximum_pulls=2,
+    )
+    close_failure = RuntimeError("private close detail")
+    probe_rows = FailingCursor(close_error=close_failure)
+    runner = MigrationRunner(
+        StreamingDriver((ledger, probe_rows)),
+        (migration,),
+        owner_id="close-failure-probe",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        runner.verify()
+
+    assert captured.value.reason is PlatformReason.PERMANENT_FAILURE
+    assert captured.value.stage == "database.cursor-close"
+    assert captured.value.protected_cause is close_failure
+    assert "private close detail" not in str(captured.value)
+    assert "private close detail" not in repr(captured.value)
+    assert probe_rows.closed
+
+
+def test_migration_runner_requires_streaming_before_database_work() -> None:
+    driver = StreamingDriver(features=frozenset({DatabaseFeature.TRANSACTIONS}))
+
+    with pytest.raises(UnsupportedDatabaseFeature) as captured:
+        MigrationRunner(
+            driver,
+            (),
+            owner_id="missing-streaming",
+            clock=lambda: _NOW,
+        )
+
+    assert captured.value.feature is DatabaseFeature.STREAMING
+    assert driver.required == [
+        DatabaseFeature.TRANSACTIONS,
+        DatabaseFeature.STREAMING,
+    ]
+
+
+def test_migration_provider_requires_streaming_from_named_connection() -> None:
+    driver = StreamingDriver()
+    manager = Mock(spec=DatabaseManager)
+    manager.connection.return_value = driver
+    resolver = Mock()
+    resolver.resolve.return_value = manager
+    registrar = Mock(spec=ProviderRegistrar)
+    provider = MigrationProvider(
+        migrations=(),
+        connection="migration-primary",
+        owner_id="provider-streaming",
+        clock=lambda: _NOW,
+    )
+
+    provider.register(registrar)
+    factory = registrar.bind.call_args.args[1]
+    runner = factory(resolver)
+
+    assert isinstance(runner, MigrationRunner)
+    manager.connection.assert_called_once_with(
+        "migration-primary",
+        requires=(
+            DatabaseFeature.TRANSACTIONS,
+            DatabaseFeature.STREAMING,
+        ),
+    )
 
 
 def test_bootstrap_is_idempotent_and_fresh_plan_is_deterministic() -> None:
@@ -379,7 +828,7 @@ def test_down_preflights_all_selected_migrations_before_mutation() -> None:
 def test_migration_catalogue_snapshot_and_probe_rows_are_bounded() -> None:
     driver = SQLiteDriver(":memory:")
 
-    def endless_catalogue():
+    def endless_catalogue() -> Iterator[Migration]:
         while True:
             yield _migration_one()
 

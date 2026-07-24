@@ -76,8 +76,11 @@ class _SQLiteCursor(DatabaseCursor):
 
     def close(self) -> None:
         if not self._closed:
-            self._cursor.close()
             self._closed = True
+            try:
+                self._cursor.close()
+            except Exception as error:
+                raise _failure(error, stage="database.cursor-close") from None
 
 
 class _SQLiteSavepoint(AbstractContextManager[None]):
