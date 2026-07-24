@@ -17,9 +17,7 @@ _REPOSITORY = re.compile(
 _REF = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,254})$")
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-_ITEM_ID = re.compile(
-    r"^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9](?:[A-Za-z0-9._-]{0,95})$"
-)
+_ITEM_ID = re.compile(r"^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9](?:[A-Za-z0-9._-]{0,95})$")
 _PROCEDURE_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,63})$")
 _GATE_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _MAX_CANDIDATES = 1_000
@@ -139,8 +137,7 @@ class WorkCandidate:
             _aware_utc(self.created_at, "candidate creation time"),
         )
         if self.procedure_id is not None and (
-            type(self.procedure_id) is not str
-            or _PROCEDURE_ID.fullmatch(self.procedure_id) is None
+            type(self.procedure_id) is not str or _PROCEDURE_ID.fullmatch(self.procedure_id) is None
         ):
             raise ValueError("self-development procedure identity is invalid")
         boolean_fields = (
@@ -189,10 +186,7 @@ class DevelopmentSnapshot:
     def __post_init__(self) -> None:
         if type(self.source_id) is not str or _SOURCE_ID.fullmatch(self.source_id) is None:
             raise ValueError("self-development source identity is invalid")
-        if (
-            type(self.repository) is not str
-            or _REPOSITORY.fullmatch(self.repository) is None
-        ):
+        if type(self.repository) is not str or _REPOSITORY.fullmatch(self.repository) is None:
             raise ValueError("self-development repository identity is invalid")
         if type(self.base_ref) is not str or _REF.fullmatch(self.base_ref) is None:
             raise ValueError("self-development base ref is invalid")
@@ -304,15 +298,9 @@ class SelectionDecision:
     assessments: tuple[CandidateAssessment, ...]
 
     def __post_init__(self) -> None:
-        if (
-            type(self.snapshot_digest) is not str
-            or _SHA256.fullmatch(self.snapshot_digest) is None
-        ):
+        if type(self.snapshot_digest) is not str or _SHA256.fullmatch(self.snapshot_digest) is None:
             raise ValueError("self-development selection snapshot digest is invalid")
-        if (
-            type(self.policy_digest) is not str
-            or _SHA256.fullmatch(self.policy_digest) is None
-        ):
+        if type(self.policy_digest) is not str or _SHA256.fullmatch(self.policy_digest) is None:
             raise ValueError("self-development selection policy digest is invalid")
         if self.selected_item_id is not None and (
             type(self.selected_item_id) is not str
@@ -321,18 +309,15 @@ class SelectionDecision:
             raise ValueError("self-development selected identity is invalid")
         if not isinstance(self.reason, SelectionReason):
             raise ValueError("self-development selection reason is invalid")
-        if (
-            type(self.assessments) is not tuple
-            or any(not isinstance(item, CandidateAssessment) for item in self.assessments)
+        if type(self.assessments) is not tuple or any(
+            not isinstance(item, CandidateAssessment) for item in self.assessments
         ):
             raise ValueError("self-development assessments are invalid")
         ordered = tuple(sorted(self.assessments, key=lambda item: item.item_id))
         if len({item.item_id for item in ordered}) != len(ordered):
             raise ValueError("self-development assessment identities must be unique")
         object.__setattr__(self, "assessments", ordered)
-        if (self.reason is SelectionReason.SELECTED) != (
-            self.selected_item_id is not None
-        ):
+        if (self.reason is SelectionReason.SELECTED) != (self.selected_item_id is not None):
             raise ValueError("self-development selected decision is inconsistent")
 
     def _payload(self) -> dict[str, object]:
@@ -431,11 +416,7 @@ class SelfDevelopmentPlanner:
         decision = self._select(snapshot, policy, now=observed_now)
         selected = (
             next(
-                (
-                    item
-                    for item in snapshot.candidates
-                    if item.item_id == decision.selected_item_id
-                ),
+                (item for item in snapshot.candidates if item.item_id == decision.selected_item_id),
                 None,
             )
             if decision.selected_item_id is not None
