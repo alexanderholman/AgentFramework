@@ -42,13 +42,15 @@ def _operation_reason(error: sqlite3.Error) -> PlatformReason:
     return PlatformReason.PERMANENT_FAILURE
 
 
-def _preserves_control_flow(error: BaseException) -> bool:
+def _control_flow_rank(error: BaseException) -> int:
     if not isinstance(error, Exception):
-        return True
-    return isinstance(error, PlatformError) and error.reason in {
-        PlatformReason.CANCELLED,
-        PlatformReason.SHUTDOWN_FAILED,
-    }
+        return 3
+    if isinstance(error, PlatformError):
+        if error.reason is PlatformReason.CANCELLED:
+            return 2
+        if error.reason is PlatformReason.SHUTDOWN_FAILED:
+            return 1
+    return 0
 
 
 def _identity(value: object) -> str:
@@ -172,9 +174,11 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             except BaseException as error:
                 try:
                     self._connection.rollback()
-                except sqlite3.Error as rollback_error:
+                except BaseException as rollback_error:
                     self._poisoned = True
-                    if _preserves_control_flow(error):
+                    if _control_flow_rank(rollback_error) > _control_flow_rank(error):
+                        raise rollback_error from None
+                    if _control_flow_rank(error):
                         raise error from None
                     raise _failure(
                         PlatformReason.PERMANENT_FAILURE,
