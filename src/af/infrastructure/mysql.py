@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from threading import Event, RLock
 from types import TracebackType
-from typing import Literal, cast
+from typing import Literal, Never, cast
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, CursorResult, Engine, RootTransaction, make_url
@@ -57,6 +58,25 @@ def _failure(error: BaseException, *, stage: str) -> DatabaseOperationError:
     )
 
 
+def _cancel_after_cleanup(
+    cleanup: Callable[[], object],
+    *,
+    stage: str,
+) -> Never:
+    cleanup_error: Exception | None = None
+    try:
+        cleanup()
+    except BaseException as error:
+        if not isinstance(error, Exception):
+            raise
+        cleanup_error = error
+    raise DatabaseOperationError(
+        reason=PlatformReason.CANCELLED,
+        stage=stage,
+        protected_cause=cleanup_error,
+    )
+
+
 class _MySQLCursor(DatabaseCursor):
     def __init__(
         self,
@@ -78,21 +98,13 @@ class _MySQLCursor(DatabaseCursor):
                 stage="database.cursor",
             )
         if self._transaction.cancellation_requested():
-            self.close()
-            raise DatabaseOperationError(
-                reason=PlatformReason.CANCELLED,
-                stage="database.cursor",
-            )
+            _cancel_after_cleanup(self.close, stage="database.cursor")
         try:
             raw = self._result.fetchone()
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.cursor") from None
         if self._transaction.cancellation_requested():
-            self.close()
-            raise DatabaseOperationError(
-                reason=PlatformReason.CANCELLED,
-                stage="database.cursor",
-            )
+            _cancel_after_cleanup(self.close, stage="database.cursor")
         if raw is None:
             self.close()
             raise StopIteration
@@ -108,8 +120,11 @@ class _MySQLCursor(DatabaseCursor):
 
     def close(self) -> None:
         if not self._closed:
-            self._result.close()
             self._closed = True
+            try:
+                self._result.close()
+            except Exception as error:
+                raise _failure(error, stage="database.cursor-close") from None
 
 
 class _MySQLSavepoint(AbstractContextManager[None]):
@@ -194,15 +209,15 @@ class _MySQLTransaction:
             result = self._connection.execute(text(statement.sql), dict(statement.parameters))
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.execute") from None
+        if self.cancellation_requested():
+            _cancel_after_cleanup(result.close, stage="database.execute")
         try:
-            if self.cancellation_requested():
-                raise DatabaseOperationError(
-                    reason=PlatformReason.CANCELLED,
-                    stage="database.execute",
-                )
             return result.rowcount
         finally:
-            result.close()
+            try:
+                result.close()
+            except Exception as error:
+                raise _failure(error, stage="database.cursor-close") from None
 
     def stream(self, statement: DatabaseStatement, /) -> DatabaseCursor:
         self._assert_active()
@@ -226,11 +241,7 @@ class _MySQLTransaction:
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.query") from None
         if self.cancellation_requested():
-            result.close()
-            raise DatabaseOperationError(
-                reason=PlatformReason.CANCELLED,
-                stage="database.query",
-            )
+            _cancel_after_cleanup(result.close, stage="database.query")
         cursor = _MySQLCursor(
             self,
             cast(CursorResult[tuple[object, ...]], result),
