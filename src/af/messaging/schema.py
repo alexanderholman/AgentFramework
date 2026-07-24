@@ -45,7 +45,7 @@ def _schema_version(value: object, field: str) -> int:
 def _is_async_callable(value: object) -> bool:
     if inspect.iscoroutinefunction(value) or inspect.isasyncgenfunction(value):
         return True
-    call = getattr(value, "__call__", None)
+    call = inspect.getattr_static(value, "__call__", None)
     return inspect.iscoroutinefunction(call) or inspect.isasyncgenfunction(call)
 
 
@@ -126,7 +126,9 @@ class MessageSchemaRegistry:
             if schema is None:
                 raise UnsupportedMessageSchema("message schema type is not registered")
             if not schema.minimum_version <= normalized_version < schema.current_version:
-                raise InvalidMessageSchema("message upcaster source version is outside the schema interval")
+                raise InvalidMessageSchema(
+                    "message upcaster source version is outside the schema interval"
+                )
             key = (normalized_type, normalized_version)
             if key in self._upcasters:
                 raise InvalidMessageSchema("message upcaster step is already registered")
