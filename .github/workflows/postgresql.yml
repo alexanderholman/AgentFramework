@@ -60,7 +60,54 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
+      - name: Check PostgreSQL changed slice
+        id: quality
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            uv run ruff format --check \
+              src/af/infrastructure/postgresql.py \
+              src/af/infrastructure/postgresql_manager.py \
+              tests/unit/test_postgresql_driver.py \
+              tests/unit/test_postgresql_manager.py \
+              tests/integration/test_postgresql_relational.py
+            uv run ruff check \
+              src/af/infrastructure/postgresql.py \
+              src/af/infrastructure/postgresql_manager.py \
+              tests/unit/test_postgresql_driver.py \
+              tests/unit/test_postgresql_manager.py \
+              tests/integration/test_postgresql_relational.py
+            uv run mypy \
+              src/af/infrastructure/postgresql.py \
+              src/af/infrastructure/postgresql_manager.py
+            uv run pytest -q \
+              tests/unit/test_postgresql_driver.py \
+              tests/unit/test_postgresql_manager.py
+          } 2>&1 | tee postgresql-quality.log
+
       - name: Run PostgreSQL real-service certification
-        run: >-
-          uv run --with "psycopg[binary]==3.3.4"
-          pytest -q tests/integration/test_postgresql_relational.py
+        id: integration
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --with "psycopg[binary]==3.3.4" \
+            pytest -q tests/integration/test_postgresql_relational.py \
+            2>&1 | tee postgresql-integration.log
+
+      - name: Upload PostgreSQL failure diagnostics
+        if: steps.quality.outcome == 'failure' || steps.integration.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: postgresql-failure-diagnostics
+          path: |
+            postgresql-quality.log
+            postgresql-integration.log
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce PostgreSQL checks
+        if: steps.quality.outcome == 'failure' || steps.integration.outcome == 'failure'
+        run: exit 1
