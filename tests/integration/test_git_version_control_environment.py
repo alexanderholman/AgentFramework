@@ -62,7 +62,7 @@ def test_initializer_ignores_ambient_git_exec_path(
     helper.write_text(
         "#!/bin/sh\n"
         f"printf invoked > {shlex.quote(str(sentinel))}\n"
-        f"exec {shlex.quote(str(trusted_receive_pack))} \"$@\"\n",
+        f'exec {shlex.quote(str(trusted_receive_pack))} "$@"\n',
         encoding="utf-8",
     )
     helper.chmod(0o700)
