@@ -395,11 +395,13 @@ class MySQLDriver(AbstractContextManager["MySQLDriver"]):
         return _MySQLTransactionContext(self, read_only=read_only)
 
     def cancel(self) -> None:
-        if self._closed or not self._transaction_active:
+        if self._closed:
             return
         thread_id = self._thread_id
         if thread_id is None:
             raise UnsupportedDatabaseFeature(DatabaseFeature.CANCELLATION)
+        if not self._transaction_active:
+            return
         self._cancellation.set()
         try:
             killer_engine = create_engine(self._url, poolclass=StaticPool)
