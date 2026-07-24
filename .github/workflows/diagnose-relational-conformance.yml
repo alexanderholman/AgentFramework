@@ -1,0 +1,58 @@
+name: Diagnose relational conformance
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
+      AF_APPEND_ONLY_HEAD_REF: ${{ github.sha }}
+      AF_APPEND_ONLY_BASE_STRATEGY: merge-base
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: codex/relational-driver-conformance
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Capture gate diagnostics
+        run: |
+          mkdir -p diagnostics
+          set +e
+          for action in release-validate format-check lint typecheck coverage; do
+            python scripts/af_dev.py --action "$action" --execute > "diagnostics/${action}.txt" 2>&1
+            printf '%s\n' "$?" > "diagnostics/${action}.status"
+          done
+          exit 0
+
+      - name: Upload gate diagnostics
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: relational-conformance-diagnostics
+          path: diagnostics
+          if-no-files-found: error
+          retention-days: 1
