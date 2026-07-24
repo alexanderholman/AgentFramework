@@ -107,9 +107,13 @@ class TransactionalOutbox:
             raise TypeError("outbox append requires a MessageEnvelope")
         if envelope.metadata.kind is not EnvelopeKind.INTEGRATION_EVENT:
             raise ValueError("outbox accepts integration events only")
-        available = envelope.metadata.occurred_at if available_at is None else _aware_utc(
-            available_at,
-            "outbox availability",
+        available = (
+            envelope.metadata.occurred_at
+            if available_at is None
+            else _aware_utc(
+                available_at,
+                "outbox availability",
+            )
         )
         encoded = self._codec.encode(envelope)
         if len(encoded) > _MAX_ENVELOPE_BYTES:
@@ -210,9 +214,7 @@ class TransactionalOutbox:
                   AND dead_lettered_at IS NULL""",
                 {
                     "message_id": identifier,
-                    "published_at": _timestamp(
-                        _aware_utc(published_at, "outbox publication time")
-                    ),
+                    "published_at": _timestamp(_aware_utc(published_at, "outbox publication time")),
                 },
             )
         )
@@ -242,9 +244,7 @@ class TransactionalOutbox:
                   AND dead_lettered_at IS NULL""",
                 {
                     "message_id": identifier,
-                    "available_at": _timestamp(
-                        _aware_utc(available_at, "outbox retry time")
-                    ),
+                    "available_at": _timestamp(_aware_utc(available_at, "outbox retry time")),
                     "error_code": code,
                 },
             )
@@ -338,9 +338,14 @@ def _parse_timestamp(value: str) -> datetime:
 
 
 def _message_id(value: str) -> str:
-    if type(value) is not str or not value or len(value) > 200 or re.search(
-        r"[\x00-\x1f\x7f-\x9f\u2028\u2029]",
-        value,
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > 200
+        or re.search(
+            r"[\x00-\x1f\x7f-\x9f\u2028\u2029]",
+            value,
+        )
     ):
         raise ValueError("outbox message id is invalid")
     return value
