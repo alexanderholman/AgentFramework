@@ -9,12 +9,12 @@ from importlib import import_module
 from typing import Annotated, cast
 
 import typer
-from af.application.ideons import InterpretRequest
-from af.domain.ideons.records import ContextGraph
-from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 
+from af.application.ideons import InterpretRequest
 from af.bootstrap import AFApplication, create_application
+from af.domain.ideons.records import ContextGraph
 from af.framework.errors import AFError, PlatformError, PlatformReason
+from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 from af.interfaces.presenters import agent_route_to_dict, delete_to_dict, task_to_dict
 
 _APPLICATION_FACTORY = re.compile(
