@@ -1,0 +1,159 @@
+name: AF Elasticsearch
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: af-elasticsearch-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Elasticsearch 9.4 search conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      elasticsearch:
+        image: elasticsearch:9.4.4@sha256:ff25869c2b9f02af7b7297f188ad583772134f01ec256fdc9234e2492358bebc
+        env:
+          action.auto_create_index: "false"
+          discovery.type: single-node
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+          xpack.security.enabled: "false"
+          xpack.security.http.ssl.enabled: "false"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9200/_cluster/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      AF_ELASTICSEARCH_TEST_URL: http://127.0.0.1:9200
+      AF_ELASTICSEARCH_TEST_VERSION: 9.4.4
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
+    steps:
+      - name: Check out exact event head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'push' && github.event.after || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Check Elasticsearch changed slice
+        id: quality
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            uv run ruff format --check \
+              src/af/search/contracts.py \
+              src/af/search/manager.py \
+              src/af/search/elasticsearch.py \
+              src/af/search/elasticsearch_manager.py \
+              src/af/testing/conformance.py \
+              src/af/testing/search.py \
+              tests/unit/test_elasticsearch_driver.py \
+              tests/unit/test_elasticsearch_manager.py \
+              tests/unit/test_governance_scripts.py \
+              tests/unit/test_search_conformance.py \
+              tests/integration/test_elasticsearch_search.py
+            uv run ruff check \
+              src/af/search/contracts.py \
+              src/af/search/manager.py \
+              src/af/search/elasticsearch.py \
+              src/af/search/elasticsearch_manager.py \
+              src/af/testing/conformance.py \
+              src/af/testing/search.py \
+              tests/unit/test_elasticsearch_driver.py \
+              tests/unit/test_elasticsearch_manager.py \
+              tests/unit/test_governance_scripts.py \
+              tests/unit/test_search_conformance.py \
+              tests/integration/test_elasticsearch_search.py
+            uv run mypy \
+              src/af/search/contracts.py \
+              src/af/search/manager.py \
+              src/af/search/elasticsearch.py \
+              src/af/search/elasticsearch_manager.py \
+              src/af/testing/conformance.py \
+              src/af/testing/search.py
+            uv run pytest -q \
+              tests/unit/test_elasticsearch_driver.py \
+              tests/unit/test_elasticsearch_manager.py \
+              tests/unit/test_governance_scripts.py \
+              tests/unit/test_search_conformance.py
+          } 2>&1 | tee elasticsearch-quality.log
+
+      - name: Run Elasticsearch 9.4 real-service certification
+        id: integration
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --with "elasticsearch==9.4.1" \
+            pytest -q tests/integration/test_elasticsearch_search.py \
+            2>&1 | tee elasticsearch-integration.log
+
+      - name: Run canonical gate without Elasticsearch opt-in
+        id: canonical
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          unset AF_ELASTICSEARCH_TEST_URL AF_ELASTICSEARCH_TEST_VERSION
+          python scripts/af_dev.py --action check --execute \
+            2>&1 | tee canonical-gate.log
+
+      - name: Upload Elasticsearch diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: elasticsearch-diagnostics
+          path: |
+            elasticsearch-quality.log
+            elasticsearch-integration.log
+            canonical-gate.log
+            src/af/search/contracts.py
+            src/af/search/manager.py
+            src/af/search/elasticsearch.py
+            src/af/search/elasticsearch_manager.py
+            src/af/testing/conformance.py
+            src/af/testing/search.py
+            tests/unit/test_elasticsearch_driver.py
+            tests/unit/test_elasticsearch_manager.py
+            tests/unit/test_governance_scripts.py
+            tests/unit/test_search_conformance.py
+            tests/integration/test_elasticsearch_search.py
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce Elasticsearch checks
+        if: >-
+          steps.quality.outcome == 'failure' ||
+          steps.integration.outcome == 'failure' ||
+          steps.canonical.outcome == 'failure'
+        run: exit 1
