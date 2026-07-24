@@ -79,9 +79,7 @@ class SelfDevelopmentPlannerTests(unittest.TestCase):
         self.planner = SelfDevelopmentPlanner()
 
     def test_same_snapshot_and_policy_produce_byte_identical_plan(self) -> None:
-        observed = snapshot(
-            candidate("issue:120", procedure_id="implement-self-development")
-        )
+        observed = snapshot(candidate("issue:120", procedure_id="implement-self-development"))
 
         first = self.planner.plan(observed, policy(), now=NOW)
         second = self.planner.plan(observed, policy(), now=NOW)
@@ -186,8 +184,7 @@ class SelfDevelopmentPlannerTests(unittest.TestCase):
 
         stopped = self.planner.plan(observed, policy(), now=NOW)
         reasons = {
-            assessment.item_id: assessment.reason
-            for assessment in stopped.selection.assessments
+            assessment.item_id: assessment.reason for assessment in stopped.selection.assessments
         }
 
         self.assertEqual(stopped.selection.reason, SelectionReason.NO_ELIGIBLE_WORK)
