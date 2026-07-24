@@ -81,16 +81,15 @@ def test_unit_of_work_rollback_discards_callbacks_and_state_changes() -> None:
         nonlocal called
         called = True
 
-    with pytest.raises(RuntimeError, match="abort"):
-        with unit as transaction:
-            transaction.execute(
-                DatabaseStatement(
-                    "INSERT INTO records (value) VALUES (:value)",
-                    {"value": "rolled-back"},
-                )
+    with pytest.raises(RuntimeError, match="abort"), unit as transaction:
+        transaction.execute(
+            DatabaseStatement(
+                "INSERT INTO records (value) VALUES (:value)",
+                {"value": "rolled-back"},
             )
-            unit.after_commit(callback)
-            raise RuntimeError("abort")
+        )
+        unit.after_commit(callback)
+        raise RuntimeError("abort")
 
     assert unit.state is UnitOfWorkState.ROLLED_BACK
     assert called is False
@@ -111,16 +110,15 @@ def test_after_commit_failure_is_sanitized_after_authoritative_commit() -> None:
         nonlocal later_callback_called
         later_callback_called = True
 
-    with pytest.raises(UnitOfWorkAfterCommitError) as captured:
-        with unit as transaction:
-            transaction.execute(
-                DatabaseStatement(
-                    "INSERT INTO records (value) VALUES (:value)",
-                    {"value": "committed"},
-                )
+    with pytest.raises(UnitOfWorkAfterCommitError) as captured, unit as transaction:
+        transaction.execute(
+            DatabaseStatement(
+                "INSERT INTO records (value) VALUES (:value)",
+                {"value": "committed"},
             )
-            unit.after_commit(fail)
-            unit.after_commit(later_callback)
+        )
+        unit.after_commit(fail)
+        unit.after_commit(later_callback)
 
     assert captured.value.callback_index == 0
     assert captured.value.reason is PlatformReason.PERMANENT_FAILURE
@@ -138,9 +136,11 @@ def test_after_commit_callback_must_return_none() -> None:
     _create_records(manager)
     unit = manager.unit_of_work()
 
-    with pytest.raises(UnitOfWorkAfterCommitError) as captured:
-        with unit:
-            unit.after_commit(lambda: cast(None, "unexpected"))
+    def unexpected_result() -> object:
+        return "unexpected"
+
+    with pytest.raises(UnitOfWorkAfterCommitError) as captured, unit:
+        unit.after_commit(unexpected_result)
 
     assert isinstance(captured.value.protected_cause, TypeError)
     assert unit.state is UnitOfWorkState.AFTER_COMMIT_FAILED
@@ -169,7 +169,7 @@ def test_unit_of_work_fails_closed_on_lifecycle_misuse_and_callback_overflow() -
 
     with unit:
         with pytest.raises(TypeError, match="must be callable"):
-            unit.after_commit(cast(object, None))  # type: ignore[arg-type]
+            unit.after_commit(None)  # type: ignore[arg-type]
         unit.after_commit(lambda: None)
         with pytest.raises(UnitOfWorkLifecycleError):
             unit.after_commit(lambda: None)
@@ -229,9 +229,8 @@ class _FailingExitContext(AbstractContextManager[DatabaseTransaction]):
 def test_unit_of_work_rejects_suppressed_body_failures() -> None:
     unit = UnitOfWork(_SuppressingContext())
 
-    with pytest.raises(UnitOfWorkLifecycleError) as captured:
-        with unit:
-            raise RuntimeError("body failed")
+    with pytest.raises(UnitOfWorkLifecycleError) as captured, unit:
+        raise RuntimeError("body failed")
 
     assert isinstance(captured.value.protected_cause, RuntimeError)
     assert unit.state is UnitOfWorkState.FAILED
