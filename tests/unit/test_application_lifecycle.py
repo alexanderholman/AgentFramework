@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
+from datetime import UTC, datetime
 
 import pytest
 
@@ -14,6 +15,7 @@ from af.framework.errors import (
     AsyncLifecycleRequired,
     ScopeDisposed,
 )
+from af.observability.signals import TelemetryKind, TelemetryPublisher, TelemetrySignal
 
 
 class _Value:
@@ -63,6 +65,14 @@ class _RecordingResource:
 
     def close(self) -> None:
         self._events.append(f"resource:{self._provider_id}")
+
+
+class _TelemetrySink:
+    def __init__(self) -> None:
+        self.signals: list[TelemetrySignal] = []
+
+    def emit(self, signal: TelemetrySignal) -> None:
+        self.signals.append(signal)
 
 
 def test_application_registers_all_providers_before_topological_boot() -> None:
@@ -188,6 +198,50 @@ def test_shutdown_is_reverse_order_and_idempotent() -> None:
         "shutdown:first",
         "resource:first",
     ]
+
+
+def test_application_publishes_complete_lifecycle_transitions() -> None:
+    sink = _TelemetrySink()
+    application = Application(
+        Container(),
+        (),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime(2026, 7, 24, tzinfo=UTC),
+    )
+
+    application.start()
+    application.shutdown()
+
+    assert [signal.kind for signal in sink.signals] == [TelemetryKind.LIFECYCLE] * 7
+    assert [dict(signal.attributes) for signal in sink.signals] == [
+        {"from_state": "constructed", "to_state": "registered"},
+        {"from_state": "registered", "to_state": "booting"},
+        {"from_state": "booting", "to_state": "booted"},
+        {"from_state": "booted", "to_state": "serving"},
+        {"from_state": "serving", "to_state": "draining"},
+        {"from_state": "draining", "to_state": "shutting_down"},
+        {"from_state": "shutting_down", "to_state": "shutdown"},
+    ]
+    assert {signal.name for signal in sink.signals} == {"application.lifecycle"}
+
+
+def test_application_lifecycle_telemetry_failure_is_isolated() -> None:
+    class BrokenPublisher:
+        def publish(self, signal: TelemetrySignal) -> None:
+            del signal
+            raise RuntimeError("optional telemetry unavailable")
+
+    application = Application(
+        Container(),
+        (),
+        telemetry=BrokenPublisher(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 7, 24, tzinfo=UTC),
+    )
+
+    application.start()
+    application.shutdown()
+
+    assert application.state is ApplicationState.SHUTDOWN
 
 
 def test_deferred_provider_registers_but_boots_only_when_activated() -> None:

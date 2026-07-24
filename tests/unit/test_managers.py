@@ -25,6 +25,13 @@ from af.framework.managers import (
     Manager,
     ManagerConfigurationError,
 )
+from af.observability.signals import (
+    DegradationState,
+    LivenessState,
+    ReadinessState,
+    TelemetryPublisher,
+    TelemetrySignal,
+)
 
 _DIGEST_A = "a" * 64
 _DIGEST_B = "b" * 64
@@ -77,6 +84,7 @@ def _manager(
     connections=None,
     default: str | None = "primary",
     clock=None,
+    telemetry=None,
 ) -> Manager[_Driver]:
     return Manager(
         manager_id="database",
@@ -89,6 +97,7 @@ def _manager(
         deployment_profile="production",
         policy_version="policy-v1",
         clock=clock or (lambda: _NOW),
+        telemetry=telemetry,
     )
 
 
@@ -106,6 +115,85 @@ def _register_healthy(
         verifier=verifier or (lambda _ref, _driver, binding: _evidence(binding)),
         disposer=disposer,
     )
+
+
+class _TelemetrySink:
+    def __init__(self) -> None:
+        self.signals: list[TelemetrySignal] = []
+
+    def emit(self, signal: TelemetrySignal) -> None:
+        self.signals.append(signal)
+
+
+def test_manager_publishes_driver_health_and_quarantine_transitions() -> None:
+    sink = _TelemetrySink()
+    manager = _manager(telemetry=TelemetryPublisher((sink,)))
+    evidence: list[CapabilityEvidence] = []
+    _register_healthy(
+        manager,
+        verifier=lambda _ref, _driver, _binding: evidence[-1],
+    )
+    evidence.append(_evidence(manager.binding("primary")))
+
+    manager.connection()
+    evidence.append(
+        _evidence(
+            manager.binding("primary"),
+            health=HealthStatus.DEGRADED,
+            evidence_digest="d" * 64,
+        )
+    )
+    with pytest.raises(ConnectionQuarantinedError):
+        manager.connection()
+    manager.close()
+
+    states = [signal.health_state for signal in sink.signals]
+    assert [state.liveness for state in states if state is not None] == [
+        LivenessState.LIVE,
+        LivenessState.LIVE,
+    ]
+    assert states[0] is not None
+    assert states[0].readiness is ReadinessState.READY
+    assert states[0].degradation is DegradationState.HEALTHY
+    assert states[1] is not None
+    assert states[1].readiness is ReadinessState.NOT_READY
+    assert states[1].degradation is DegradationState.QUARANTINED
+    assert [dict(signal.attributes) for signal in sink.signals] == [
+        {"driver": "remote", "manager": "database", "transition": "healthy"},
+        {"driver": "remote", "manager": "database", "transition": "quarantined"},
+    ]
+
+
+def test_manager_publishes_explicit_stopped_transition_on_close() -> None:
+    sink = _TelemetrySink()
+    manager = _manager(telemetry=TelemetryPublisher((sink,)))
+    _register_healthy(manager)
+
+    manager.connection()
+    manager.close()
+
+    states = [signal.health_state for signal in sink.signals]
+    assert [state.liveness for state in states if state is not None] == [
+        LivenessState.LIVE,
+        LivenessState.STOPPED,
+    ]
+    assert dict(sink.signals[-1].attributes)["transition"] == "stopped"
+    assert states[1] is not None
+    assert states[1].readiness is ReadinessState.NOT_READY
+    assert states[1].degradation is DegradationState.HEALTHY
+
+
+def test_manager_telemetry_failure_is_isolated() -> None:
+    class BrokenPublisher:
+        def publish(self, signal: TelemetrySignal) -> None:
+            del signal
+            raise RuntimeError("optional telemetry unavailable")
+
+    manager = _manager(telemetry=BrokenPublisher())  # type: ignore[arg-type]
+    _register_healthy(manager)
+
+    assert manager.connection().identity == 1
+    manager.close()
 
 
 def test_default_and_named_connections_are_lazy_deterministic_and_cached() -> None:

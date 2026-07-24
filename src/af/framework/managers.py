@@ -17,6 +17,16 @@ from typing import Protocol, cast, final
 
 from af.framework.container import ProviderRegistrar, Resolver, Scope
 from af.framework.errors import PlatformError, PlatformReason, ServiceNotBound
+from af.observability.context import TelemetryContext
+from af.observability.signals import (
+    CapabilityState,
+    DegradationState,
+    HealthState,
+    LivenessState,
+    ReadinessState,
+    TelemetryPublisher,
+    TelemetrySignal,
+)
 
 __all__ = (
     "CapabilityBinding",
@@ -494,6 +504,7 @@ def bind_manager(
     deployment_profile: str,
     policy_version: str,
     clock: Callable[[], datetime] | None = None,
+    telemetry: TelemetryPublisher | None = None,
 ) -> None:
     """Bind one application-owned manager assembled from inert driver declarations."""
     try:
@@ -518,6 +529,7 @@ def bind_manager(
             deployment_profile=normalized_profile,
             policy_version=normalized_policy,
             clock=clock,
+            telemetry=telemetry,
         )
         driver_names = sorted({definition[0] for definition in manager._definitions.values()})
         for driver_name in driver_names:
@@ -569,6 +581,7 @@ class Manager[T]:
         deployment_profile: str,
         policy_version: str,
         clock: Callable[[], datetime] | None = None,
+        telemetry: TelemetryPublisher | None = None,
     ) -> None:
         try:
             self._manager_id = _identifier(manager_id, "manager id")
@@ -607,6 +620,7 @@ class Manager[T]:
         self._default = default
         self._definitions = definitions
         self._clock = clock if clock is not None else (lambda: datetime.now(UTC))
+        self._telemetry = telemetry
         self._registrations: dict[str, _DriverRegistration[T]] = {}
         self._cache: dict[str, _CachedDriver[T]] = {}
         self._owned_drivers: dict[int, T] = {}
@@ -617,6 +631,63 @@ class Manager[T]:
         self._closing = False
         self._closed = False
         self._lock = RLock()
+
+    def _publish_driver_health(
+        self,
+        ref: ConnectionRef,
+        evidence: CapabilityEvidence,
+        transition: str,
+    ) -> None:
+        if self._telemetry is None:
+            return
+        try:
+            observed_at = evidence.observed_at
+            if transition == "quarantined":
+                state = HealthState(
+                    liveness=LivenessState.LIVE,
+                    readiness=ReadinessState.NOT_READY,
+                    degradation=DegradationState.QUARANTINED,
+                    capability=CapabilityState.MISMATCH,
+                    reason_code="driver.quarantined",
+                    fresh_until=evidence.expires_at,
+                )
+            elif transition == "stopped":
+                observed_at = _aware_utc(self._clock(), "manager clock")
+                state = HealthState(
+                    liveness=LivenessState.STOPPED,
+                    readiness=ReadinessState.NOT_READY,
+                    degradation=DegradationState.HEALTHY,
+                    capability=CapabilityState.AVAILABLE,
+                    reason_code="driver.stopped",
+                    fresh_until=observed_at,
+                )
+            else:
+                degraded = evidence.health is HealthStatus.DEGRADED
+                state = HealthState(
+                    liveness=LivenessState.LIVE,
+                    readiness=ReadinessState.READY,
+                    degradation=(
+                        DegradationState.DEGRADED if degraded else DegradationState.HEALTHY
+                    ),
+                    capability=CapabilityState.AVAILABLE,
+                    reason_code=("driver.degraded" if degraded else "driver.healthy"),
+                    fresh_until=evidence.expires_at,
+                )
+            self._telemetry.publish(
+                TelemetrySignal.health(
+                    name="manager.driver-health",
+                    observed_at=observed_at,
+                    state=state,
+                    context=TelemetryContext(operation="manager.driver-health"),
+                    attributes={
+                        "driver": ref.driver_name,
+                        "manager": self._manager_id,
+                        "transition": transition,
+                    },
+                )
+            )
+        except Exception:
+            return
 
     @property
     def manager_id(self) -> str:
@@ -784,6 +855,11 @@ class Manager[T]:
                 self._resolution_order.remove(connection_name)
             if cached is None:
                 continue
+            self._publish_driver_health(
+                self._definition(connection_name).ref,
+                cached.evidence,
+                "stopped",
+            )
             self._release_driver(cached.driver)
             try:
                 self._dispose(cached)
@@ -890,6 +966,11 @@ class Manager[T]:
         self._owned_drivers[id(driver)] = driver
         self._cache[definition.ref.connection_name] = cached
         self._resolution_order.append(definition.ref.connection_name)
+        self._publish_driver_health(
+            definition.ref,
+            evidence,
+            evidence.health.value,
+        )
         return driver
 
     def _reuse_cached(
@@ -948,7 +1029,14 @@ class Manager[T]:
             raise ConnectionQuarantinedError(
                 protected_cause=RuntimeError("cached driver changed during validation")
             )
+        previous_health = cached.evidence.health
         cached.evidence = current
+        if current.health is not previous_health:
+            self._publish_driver_health(
+                definition.ref,
+                current,
+                current.health.value,
+            )
         return cached.driver
 
     def _verify(
@@ -1007,6 +1095,11 @@ class Manager[T]:
             raise CapabilityValidationError(protected_cause=cause)
 
     def _quarantine(self, name: str, cached: _CachedDriver[T]) -> Exception | None:
+        self._publish_driver_health(
+            self._definition(name).ref,
+            cached.evidence,
+            "quarantined",
+        )
         if self._cache.get(name) is not cached:
             self._quarantined.add(name)
             return None
