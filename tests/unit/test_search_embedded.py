@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 
+import af.search.embedded as embedded_module
 from af.framework.errors import PlatformReason
 from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
 from af.search.embedded import EmbeddedSearchDriver, SearchDriverIneligible
@@ -66,6 +69,7 @@ def test_embedded_search_indexes_every_canonical_source_and_persists(tmp_path: P
 
     assert [hit.resource_id for hit in hits] == [hit.resource_id for hit in persisted]
     assert {hit.resource_id for hit in hits} == {item.resource_id for item in resources}
+    assert all(hit.tenant_id == "tenant-a" for hit in hits)
     assert all(hit.acl_evidence == ("group:research",) for hit in hits)
     assert all(hit.provenance for hit in hits)
 
@@ -90,6 +94,19 @@ def test_policy_filters_are_enforced_before_top_k(tmp_path: Path) -> None:
         hits = driver.search(_query(acl=("group:allowed",), limit=1))
 
     assert tuple(hit.resource_id for hit in hits) == ("resource-a",)
+
+
+def test_tenant_is_part_of_hit_identity_for_colliding_resources(tmp_path: Path) -> None:
+    tenant_a = _resource("resource-a", tenant_id="tenant-a")
+    tenant_b = _resource("resource-a", tenant_id="tenant-b")
+
+    with EmbeddedSearchDriver(tmp_path / "tenant-identity.sqlite3") as driver:
+        driver.upsert((tenant_a, tenant_b))
+        hits = driver.search(_query(tenant_id="tenant-b"))
+
+    assert len(hits) == 1
+    assert hits[0].resource_id == "resource-a"
+    assert hits[0].tenant_id == "tenant-b"
 
 
 def test_upsert_replaces_projection_and_delete_tombstones_identity(tmp_path: Path) -> None:
@@ -117,12 +134,15 @@ def test_upsert_replaces_projection_and_delete_tombstones_identity(tmp_path: Pat
 @pytest.mark.parametrize(
     "filters",
     [
-        (SearchFilter("tenant_id", ("tenant-a",)),),
-        (SearchFilter("acl", ("group:research",)),),
         (
             SearchFilter("tenant_id", ("tenant-a",)),
             SearchFilter("acl", ("group:research",)),
             SearchFilter("language", ("en",)),
+        ),
+        (
+            SearchFilter("tenant_id", ("tenant-a",)),
+            SearchFilter("acl", ("group:research",)),
+            SearchFilter("format", ("markdown",)),
         ),
     ],
 )
@@ -186,3 +206,38 @@ def test_embedded_search_rejects_invalid_operations_and_is_idempotent() -> None:
     driver.cancel()
     driver.close()
     driver.close()
+
+
+def test_manual_interrupt_is_reported_as_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = Event()
+    release = Event()
+    calls = 0
+
+    def controlled_monotonic() -> float:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            started.set()
+            assert release.wait(timeout=5)
+        return 0.0
+
+    with EmbeddedSearchDriver(tmp_path / "cancel.sqlite3") as driver:
+        driver.upsert(tuple(_resource(f"resource-{index}") for index in range(200)))
+        monkeypatch.setattr(embedded_module, "monotonic", controlled_monotonic)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(driver.search, _query())
+            assert started.wait(timeout=5)
+            driver.cancel()
+            release.set()
+
+            with pytest.raises(SearchDriverIneligible) as captured:
+                pending.result(timeout=5)
+
+        assert driver.search(_query())
+
+    assert captured.value.reason is PlatformReason.CANCELLED
+    assert str(captured.value) == "operation was cancelled"

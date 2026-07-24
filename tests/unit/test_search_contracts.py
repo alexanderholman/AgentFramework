@@ -57,6 +57,22 @@ def test_resource_envelope_snapshots_mutable_inputs() -> None:
         envelope.attributes["language"] = "es"  # type: ignore[index]
 
 
+def test_resource_envelope_accepts_normal_document_whitespace() -> None:
+    envelope = ResourceEnvelope(
+        resource_id="resource-1",
+        kind=ResourceKind.MARKDOWN,
+        source_id="source-1",
+        authoritative_locator="af://source-1/resource-1",
+        tenant_id="tenant-a",
+        projection_version=1,
+        acl=("tenant:tenant-a",),
+        provenance=("sha256:" + "b" * 64,),
+        text="# Heading\r\n\r\nBody\twith indentation\n",
+    )
+
+    assert envelope.text == "# Heading\r\n\r\nBody\twith indentation\n"
+
+
 def test_query_requires_policy_pushdown_before_top_k() -> None:
     query = SearchQuery(
         text="interface energy",
@@ -74,6 +90,21 @@ def test_query_requires_policy_pushdown_before_top_k() -> None:
 
 
 @pytest.mark.parametrize(
+    "filters",
+    [
+        (SearchFilter("format", ("markdown",)),),
+        (SearchFilter("tenant_id", ("tenant-a",)),),
+        (SearchFilter("acl", ("group:research",)),),
+    ],
+)
+def test_query_rejects_missing_policy_filters(
+    filters: tuple[SearchFilter, ...],
+) -> None:
+    with pytest.raises(ValueError):
+        SearchQuery(text="interface energy", filters=filters)
+
+
+@pytest.mark.parametrize(
     "kwargs",
     [
         {"text": ""},
@@ -87,7 +118,10 @@ def test_query_requires_policy_pushdown_before_top_k() -> None:
 def test_query_rejects_ambiguous_or_unbounded_inputs(kwargs: dict[str, object]) -> None:
     options: dict[str, object] = {
         "text": "interface energy",
-        "filters": (SearchFilter("tenant_id", ("tenant-a",)),),
+        "filters": (
+            SearchFilter("tenant_id", ("tenant-a",)),
+            SearchFilter("acl", ("group:research",)),
+        ),
         "limit": 10,
         "deadline_ms": 100,
     }
@@ -102,6 +136,7 @@ def test_hit_always_carries_identity_locator_acl_and_provenance() -> None:
         resource_id="resource-1",
         source_id="source-1",
         authoritative_locator="af://source-1/resource-1",
+        tenant_id="tenant-a",
         projection_version=4,
         acl_evidence=("tenant:tenant-a", "user:alex"),
         provenance=("sha256:" + "c" * 64,),
@@ -112,6 +147,7 @@ def test_hit_always_carries_identity_locator_acl_and_provenance() -> None:
 
     assert hit.rank == 1
     assert hit.score == 0.75
+    assert hit.tenant_id == "tenant-a"
     assert hit.acl_evidence == ("tenant:tenant-a", "user:alex")
 
 
@@ -131,12 +167,35 @@ def test_hit_always_carries_identity_locator_acl_and_provenance() -> None:
             provenance=("sha256:" + "d" * 64,),
             text="text",
         ),
+        lambda: ResourceEnvelope(
+            resource_id="resource-1",
+            kind=ResourceKind.TEXT,
+            source_id="source-1",
+            authoritative_locator="af://source-1/resource-1",
+            tenant_id="tenant-a",
+            projection_version=1,
+            acl=("tenant:tenant-a",),
+            provenance=("sha256:" + "d" * 64,),
+            text="unsafe\x00content",
+        ),
         lambda: SearchHit(
             resource_id="resource-1",
             source_id="source-1",
             authoritative_locator="af://source-1/resource-1",
+            tenant_id="tenant-a",
             projection_version=1,
             acl_evidence=(),
+            provenance=("sha256:" + "e" * 64,),
+            score=1.0,
+            rank=1,
+        ),
+        lambda: SearchHit(
+            resource_id="resource-1",
+            source_id="source-1",
+            authoritative_locator="af://source-1/resource-1",
+            tenant_id="not a tenant",
+            projection_version=1,
+            acl_evidence=("tenant:tenant-a",),
             provenance=("sha256:" + "e" * 64,),
             score=1.0,
             rank=1,
