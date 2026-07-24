@@ -27,6 +27,7 @@ from af.messaging.local_bus import (
     LocalEventMiddleware,
     LocalEventTelemetryMiddleware,
 )
+from af.messaging.outbox import OutboxIntegrityError, OutboxRecord, TransactionalOutbox
 from af.messaging.schema import MessageSchema, MessageSchemaRegistry, PayloadUpcaster
 
 __all__ = (
@@ -50,8 +51,11 @@ __all__ = (
     "MessageSchema",
     "MessageSchemaRegistry",
     "MessageUpcastError",
+    "OutboxIntegrityError",
+    "OutboxRecord",
     "PayloadLimits",
     "PayloadUpcaster",
     "PolicyContext",
+    "TransactionalOutbox",
     "UnsupportedMessageSchema",
 )
