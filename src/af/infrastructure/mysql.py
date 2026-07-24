@@ -77,6 +77,12 @@ class _MySQLCursor(DatabaseCursor):
                 reason=PlatformReason.SHUTDOWN_FAILED,
                 stage="database.cursor",
             )
+        if self._transaction.cancelled:
+            self.close()
+            raise DatabaseOperationError(
+                reason=PlatformReason.CANCELLED,
+                stage="database.cursor",
+            )
         try:
             raw = self._result.fetchone()
         except SQLAlchemyError as error:
@@ -173,6 +179,11 @@ class _MySQLTransaction:
 
     def execute(self, statement: DatabaseStatement, /) -> int:
         self._assert_active()
+        if self.cancelled:
+            raise DatabaseOperationError(
+                reason=PlatformReason.CANCELLED,
+                stage="database.execute",
+            )
         if not isinstance(statement, DatabaseStatement):
             raise TypeError("database execution requires a DatabaseStatement")
         if self._read_only and not statement.read_only:
@@ -196,6 +207,11 @@ class _MySQLTransaction:
 
     def stream(self, statement: DatabaseStatement, /) -> DatabaseCursor:
         self._assert_active()
+        if self.cancelled:
+            raise DatabaseOperationError(
+                reason=PlatformReason.CANCELLED,
+                stage="database.query",
+            )
         if not isinstance(statement, DatabaseStatement):
             raise TypeError("database query requires a DatabaseStatement")
         if not statement.read_only:
@@ -301,6 +317,7 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
         del error, traceback
         transaction = self._transaction
         root = self._root
+        cancelled = transaction is not None and transaction.cancelled
         try:
             if root is None:
                 raise DatabaseOperationError(
@@ -308,18 +325,29 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
                     stage="database.transaction",
                 )
             try:
-                if error_type is None:
+                if transaction is not None:
+                    transaction.finish()
+            except BaseException:
+                try:
+                    root.rollback()
+                except SQLAlchemyError as database_error:
+                    raise _failure(database_error, stage="database.transaction") from None
+                raise
+            try:
+                if error_type is None and not cancelled:
                     root.commit()
                 else:
                     root.rollback()
             except SQLAlchemyError as database_error:
                 raise _failure(database_error, stage="database.transaction") from None
-            finally:
-                if transaction is not None:
-                    transaction.finish()
-                self._driver._transaction_active = False
         finally:
+            self._driver._transaction_active = False
             self._driver._lock.release()
+        if cancelled and error_type is None:
+            raise DatabaseOperationError(
+                reason=PlatformReason.CANCELLED,
+                stage="database.transaction",
+            )
         return False
 
 
