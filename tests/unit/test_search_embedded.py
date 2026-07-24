@@ -132,9 +132,11 @@ def test_embedded_search_rejects_queries_it_cannot_filter_before_ranking(
 ) -> None:
     query = SearchQuery(text="energy", filters=filters)
 
-    with EmbeddedSearchDriver(tmp_path / "ineligible.sqlite3") as driver:
-        with pytest.raises(SearchDriverIneligible) as captured:
-            driver.search(query)
+    with (
+        EmbeddedSearchDriver(tmp_path / "ineligible.sqlite3") as driver,
+        pytest.raises(SearchDriverIneligible) as captured,
+    ):
+        driver.search(query)
 
     assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
     assert str(captured.value) == "required capability is unavailable"
