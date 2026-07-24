@@ -45,15 +45,14 @@ def test_postgresql_driver_executes_and_rolls_back_with_sanitized_contract(
                     {"id": 1, "value": "kept"},
                 )
             )
-            with pytest.raises(RuntimeError, match="discard"):
-                with transaction.savepoint("nested"):
-                    transaction.execute(
-                        DatabaseStatement(
-                            "INSERT INTO records (id, value) VALUES (:id, :value)",
-                            {"id": 2, "value": "discarded"},
-                        )
+            with pytest.raises(RuntimeError, match="discard"), transaction.savepoint("nested"):
+                transaction.execute(
+                    DatabaseStatement(
+                        "INSERT INTO records (id, value) VALUES (:id, :value)",
+                        {"id": 2, "value": "discarded"},
                     )
-                    raise RuntimeError("discard")
+                )
+                raise RuntimeError("discard")
         with driver.transaction(read_only=True) as transaction:
             rows = transaction.query(
                 DatabaseStatement(
@@ -70,9 +69,7 @@ def test_postgresql_stream_is_bounded_by_transaction(monkeypatch: pytest.MonkeyP
             transaction.execute(DatabaseStatement("CREATE TABLE records (id INTEGER)"))
             transaction.execute(DatabaseStatement("INSERT INTO records VALUES (1)"))
         with driver.transaction(read_only=True) as transaction:
-            cursor = transaction.stream(
-                DatabaseStatement("SELECT id FROM records", read_only=True)
-            )
+            cursor = transaction.stream(DatabaseStatement("SELECT id FROM records", read_only=True))
             assert next(cursor)["id"] == 1
         with pytest.raises(DatabaseOperationError) as captured:
             next(cursor)
@@ -83,9 +80,11 @@ def test_postgresql_read_only_and_capabilities_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with _driver(monkeypatch) as driver:
-        with driver.transaction(read_only=True) as transaction:
-            with pytest.raises(DatabaseOperationError) as captured:
-                transaction.execute(DatabaseStatement("CREATE TABLE denied (id INTEGER)"))
+        with (
+            pytest.raises(DatabaseOperationError) as captured,
+            driver.transaction(read_only=True) as transaction,
+        ):
+            transaction.execute(DatabaseStatement("CREATE TABLE denied (id INTEGER)"))
         assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
         with pytest.raises(UnsupportedDatabaseFeature):
             driver.require(DatabaseFeature.JSON)
