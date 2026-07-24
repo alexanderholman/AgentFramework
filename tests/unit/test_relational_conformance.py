@@ -19,7 +19,11 @@ def test_sqlite_passes_shared_relational_real_service_suite() -> None:
         with SQLiteDriver(":memory:") as driver:
             yield driver
 
-    hook: RealServiceHook[DatabaseDriver] = RealServiceHook("sqlite", fixture, enabled=True)
+    hook: RealServiceHook[DatabaseDriver] = RealServiceHook(
+        "sqlite",
+        fixture,
+        enabled=True,
+    )
     report = RelationalDriverConformanceSuite().run_real(hook)
 
     assert report.evidence is ConformanceEvidence.REAL_SERVICE
