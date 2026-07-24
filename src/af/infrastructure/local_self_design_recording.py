@@ -11,13 +11,13 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from af.framework.self_design_recording import (
+    SELF_DESIGN_RECORD_MAX_BYTES,
     DesignPlanRecord,
     DesignPlanRecorder,
     DesignRecordingError,
     DesignRecordingRequest,
     DesignRecordResult,
     DesignRecordStatus,
-    SELF_DESIGN_RECORD_MAX_BYTES,
 )
 from af.framework.version_control import MANIFEST_MAX_BYTES
 
