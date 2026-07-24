@@ -382,13 +382,24 @@ class IndexLifecycleManager:
             )
             return result
 
-    def mark_ready(self, build: IndexBuild, *, checkpoint: str) -> IndexStatus:
-        """Seal a populated build at a validated source checkpoint."""
+    def mark_ready(
+        self,
+        build: IndexBuild,
+        *,
+        checkpoint: str,
+        empty_snapshot: bool = False,
+    ) -> IndexStatus:
+        """Seal a build at a validated source checkpoint with explicit empty intent."""
 
         checkpoint = _identifier(checkpoint, "checkpoint")
+        if type(empty_snapshot) is not bool:
+            raise ValueError("search empty-snapshot intent must be boolean")
         with self._lock:
             status = self._record(build)
-            if status.phase is not IndexPhase.BUILDING or status.indexed_resources == 0:
+            if (
+                status.phase is not IndexPhase.BUILDING
+                or (status.indexed_resources == 0) != empty_snapshot
+            ):
                 raise _failure(
                     PlatformReason.INTEGRITY_FAILURE,
                     stage="search.index.ready",
