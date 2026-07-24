@@ -1,0 +1,31 @@
+name: Temporary Ruff Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/self-design-local-recording-124
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      - name: Install locked development environment
+        run: uv sync --locked --no-sources --extra dev
+      - name: Show exact Ruff diagnostics
+        run: |
+          uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff format --check src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
+          uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff check --output-format concise src/af/application/self_design_recording.py src/af/framework/self_design_recording.py src/af/infrastructure/local_self_design_recording.py tests/integration/test_local_self_design_recording.py tests/unit/test_self_design_recording.py
