@@ -57,16 +57,4 @@ jobs:
         run: uv sync --locked --extra dev
 
       - name: Run the repeatable AF quality gate
-        shell: bash
-        run: |
-          set -o pipefail
-          python scripts/af_dev.py --action check --execute 2>&1 | tee af-quality.log
-
-      - name: Upload quality-gate diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: af-python-quality-diagnostics
-          path: af-quality.log
-          if-no-files-found: error
-          retention-days: 1
+        run: python scripts/af_dev.py --action check --execute
