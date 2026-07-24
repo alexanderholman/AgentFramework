@@ -147,13 +147,10 @@ def test_search_manager_operations_require_verified_capabilities(
     manager.close()
 
 
-
 def test_search_manager_preserves_generic_capability_inputs(tmp_path: Path) -> None:
     manager = _manager(tmp_path / "search.sqlite3")
 
-    driver = manager.connection(
-        requires=CapabilitySet((SearchFeature.FULL_TEXT.value,))
-    )
+    driver = manager.connection(requires=CapabilitySet((SearchFeature.FULL_TEXT.value,)))
     assert manager.connection(requires=SearchFeature.INDEXING.value) is driver
     with pytest.raises(ValueError):
         manager.connection(requires=(object(),))  # type: ignore[arg-type]
@@ -213,7 +210,9 @@ def test_search_provider_rejects_missing_or_duplicate_registrations() -> None:
     }
     with pytest.raises(ManagerConfigurationError):
         bind_search_manager(
-            Registrar(), registrations=(), **common  # type: ignore[arg-type]
+            Registrar(),
+            registrations=(),
+            **common,  # type: ignore[arg-type]
         )
     with pytest.raises(ManagerConfigurationError):
         bind_search_manager(
@@ -263,9 +262,7 @@ def test_embedded_registration_rejects_invalid_runtime_evidence_time(
         policy_version="policy-v1",
         clock=lambda: _NOW,
     )
-    manager.install(
-        embedded_search_registration(clock=lambda: datetime(2026, 7, 24))
-    )
+    manager.install(embedded_search_registration(clock=lambda: datetime(2026, 7, 24)))
 
     with pytest.raises(CapabilityValidationError):
         manager.connection()
