@@ -20,6 +20,7 @@ __all__ = ("EmbeddedSearchDriver", "SearchDriverIneligible")
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,254}[A-Za-z0-9])?$")
 _TOKEN = re.compile(r"\w+", re.UNICODE)
+_HIGHLIGHT_WHITESPACE = re.compile(r"[\t\r\n]+")
 _SUPPORTED_FILTERS = frozenset({"tenant_id", "acl"})
 
 
@@ -285,7 +286,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             evidence = tuple(value for value in stored_acl if value in allowed)
             provenance = tuple(json.loads(str(row[6])))
             score = max(0.0, -float(cast(float, row[7])))
-            highlight = str(row[8])
+            highlight = _HIGHLIGHT_WHITESPACE.sub(" ", str(row[8]))
             yield SearchHit(
                 resource_id=str(row[0]),
                 source_id=str(row[1]),
