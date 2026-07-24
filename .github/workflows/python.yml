@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: af-python-${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +39,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'push' && github.event.after || github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -55,66 +55,6 @@ jobs:
 
       - name: Install locked development environment
         run: uv sync --locked --extra dev
-
-      - name: Harden migration bounds and reversal preflight
-        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/issue-17-migration-core' }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          source = Path("src/af/framework/migrations.py")
-          text = source.read_text()
-          replacements = (
-              (
-                  "from enum import StrEnum\n",
-                  "from enum import StrEnum\nfrom itertools import islice\n",
-              ),
-              (
-                  "_MAX_PROBES = 256\n",
-                  "_MAX_PROBES = 256\n_MAX_EXPECTED_ROWS = 1_000\n",
-              ),
-              (
-                  '''        if type(self.expected_rows) is not tuple or any(\n            not isinstance(row, DatabaseRow) for row in self.expected_rows\n        ):\n            raise ValueError("migration probe expected rows must be an exact tuple")\n''',
-                  '''        if (\n            type(self.expected_rows) is not tuple\n            or len(self.expected_rows) > _MAX_EXPECTED_ROWS\n            or any(not isinstance(row, DatabaseRow) for row in self.expected_rows)\n        ):\n            raise ValueError("migration probe expected rows must be a bounded exact tuple")\n''',
-              ),
-              (
-                  "        snapshot = tuple(migrations)\n",
-                  "        snapshot = tuple(islice(iter(migrations), _MAX_MIGRATIONS + 1))\n",
-              ),
-              (
-                  '''        with self.lock():\n            plan = self.plan_down(steps=steps)\n            for migration_id in plan.migration_ids:\n                migration = self._by_id[migration_id]\n                if not migration.down:\n                    raise MigrationIrreversibleError(migration_id)\n                with self._driver.transaction() as transaction:\n''',
-                  '''        with self.lock():\n            plan = self.plan_down(steps=steps)\n            selected = tuple(self._by_id[migration_id] for migration_id in plan.migration_ids)\n            for migration in selected:\n                if not migration.down:\n                    raise MigrationIrreversibleError(migration.migration_id)\n            for migration in selected:\n                migration_id = migration.migration_id\n                with self._driver.transaction() as transaction:\n''',
-              ),
-          )
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f"expected one migration source match, found {text.count(old)}")
-              text = text.replace(old, new)
-          source.write_text(text)
-
-          tests = Path("tests/unit/test_migrations.py")
-          test_text = tests.read_text()
-          marker = "\ndef test_migration_contracts_reject_ambiguous_or_unbounded_inputs() -> None:\n"
-          additions = '''\ndef test_down_preflights_all_selected_migrations_before_mutation() -> None:\n    driver = SQLiteDriver(":memory:")\n    irreversible = Migration(\n        "20260724080000_irreversible_base",\n        (_statement("CREATE TABLE irreversible_base (id INTEGER)"),),\n    )\n    reversible = Migration(\n        "20260724080100_reversible_latest",\n        (_statement("CREATE TABLE reversible_latest (id INTEGER)"),),\n        (_statement("DROP TABLE reversible_latest"),),\n    )\n    runner = _runner(driver, (irreversible, reversible))\n    runner.bootstrap()\n    runner.apply_up()\n\n    with pytest.raises(MigrationIrreversibleError):\n        runner.apply_down(steps=2)\n\n    assert _table_exists(driver, "irreversible_base")\n    assert _table_exists(driver, "reversible_latest")\n    assert len(_ledger_rows(driver)) == 2\n    driver.close()\n\n\ndef test_migration_catalogue_snapshot_and_probe_rows_are_bounded() -> None:\n    driver = SQLiteDriver(":memory:")\n\n    def endless_catalogue():\n        while True:\n            yield _migration_one()\n\n    with pytest.raises(ValueError, match="catalogue"):\n        MigrationRunner(\n            driver,\n            endless_catalogue(),\n            owner_id="bounded-runner",\n            clock=lambda: _NOW,\n        )\n    rows = tuple(DatabaseRow(("value",), (index,)) for index in range(1_001))\n    with pytest.raises(ValueError, match="bounded exact tuple"):\n        MigrationProbe(DatabaseStatement("SELECT 1", read_only=True), rows)\n    driver.close()\n\n'''
-          if test_text.count(marker) != 1:
-              raise SystemExit("migration test insertion marker changed")
-          tests.write_text(test_text.replace(marker, additions + marker))
-          PY
-          uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff format src/af/framework/migrations.py tests/unit/test_migrations.py
-          uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff check --fix src/af/framework/migrations.py tests/unit/test_migrations.py
-
-      - name: Commit migration hardening
-        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/issue-17-migration-core' }}
-        shell: bash
-        run: |
-          if ! git diff --quiet -- src/af/framework/migrations.py tests/unit/test_migrations.py; then
-            git config user.name "AgentFramework Codex"
-            git config user.email "actions@users.noreply.github.com"
-            git add src/af/framework/migrations.py tests/unit/test_migrations.py
-            git commit -m "fix(data): bound migration inputs and preflight reversal"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
 
       - name: Run the repeatable AF quality gate
         run: python scripts/af_dev.py --action check --execute
