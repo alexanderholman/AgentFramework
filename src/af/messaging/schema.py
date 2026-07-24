@@ -7,7 +7,6 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from threading import RLock
-from typing import cast
 
 from af.messaging.envelopes import EnvelopeKind, MessageEnvelope, PayloadLimits
 from af.messaging.errors import (
@@ -210,9 +209,3 @@ class MessageSchemaRegistry:
     def _require_mutable(self) -> None:
         if self._frozen:
             raise InvalidMessageSchema("message schema registry is frozen")
-
-
-def _payload_upcaster(value: object) -> PayloadUpcaster:
-    """Typing-only helper retained for strict callable narrowing."""
-
-    return cast(PayloadUpcaster, value)
