@@ -149,6 +149,19 @@ effects first create a durable transactional intent/outbox; acknowledgement foll
 intent and the channel's declared completion policy so a crash cannot silently lose or
 duplicate an untracked effect.
 
+### Unit of work and after-commit callbacks
+
+`DatabaseManager.unit_of_work()` selects the same named, read/write-routed,
+capability-verified driver as `transaction()` and returns a single-use transaction boundary.
+It carries a finite ordered set of process-local callbacks. Successful commit runs all
+registered callbacks in order and reports their sanitized aggregate failures; rollback and
+commit failure run none. Registration beyond the configured finite bound fails before another
+callback is retained.
+
+After-commit callbacks are deliberately non-durable. Cross-process publication, external
+effects, retries, and work that must survive a crash use the transactional outbox. A callback
+failure after commit does not imply that the authoritative database transaction was reversed.
+
 ## Delivery semantics
 
 | Mechanism | Meaning | Baseline guarantee |
