@@ -21,6 +21,7 @@ from af.framework.migrations import (
     MigrationIntegrityError,
     MigrationIrreversibleError,
     MigrationLockUnavailable,
+    MigrationMode,
     MigrationProbe,
     MigrationRunner,
     MigrationVerificationError,
@@ -79,6 +80,47 @@ def _migration_two() -> Migration:
         (_statement("CREATE TABLE gadgets (id INTEGER PRIMARY KEY, widget_id INTEGER)"),),
         (_statement("DROP TABLE gadgets"),),
         (_probe_table("gadgets"),),
+    )
+
+
+def _legacy_event_migration() -> Migration:
+    return Migration(
+        "20260724080200_seed_event",
+        (_statement("INSERT INTO migration_events (value) VALUES (1)"),),
+        (_statement("DELETE FROM migration_events WHERE value = 1"),),
+        (
+            MigrationProbe(
+                DatabaseStatement(
+                    "SELECT value FROM migration_events ORDER BY value",
+                    read_only=True,
+                ),
+                (DatabaseRow(("value",), (1,)),),
+            ),
+        ),
+    )
+
+
+def _data_event_migration(
+    *,
+    accept_pre_mode_checksum: bool | None = None,
+    up: tuple[DatabaseStatement, ...] | None = None,
+) -> Migration:
+    legacy = _legacy_event_migration()
+    if accept_pre_mode_checksum is None:
+        return Migration(
+            legacy.migration_id,
+            legacy.up if up is None else up,
+            legacy.down,
+            legacy.verify,
+            mode=MigrationMode.DATA,
+        )
+    return Migration(
+        legacy.migration_id,
+        legacy.up if up is None else up,
+        legacy.down,
+        legacy.verify,
+        mode=MigrationMode.DATA,
+        accept_pre_mode_checksum=accept_pre_mode_checksum,
     )
 
 
@@ -254,11 +296,68 @@ class StreamingDriver:
         pass
 
 
+class NonTransactionalDDLSQLiteDriver(SQLiteDriver):
+    """SQLite-backed test service that advertises only portable data guarantees."""
+
+    @property
+    def features(self) -> frozenset[DatabaseFeature]:
+        return frozenset(
+            {
+                DatabaseFeature.TRANSACTIONS,
+                DatabaseFeature.STREAMING,
+            }
+        )
+
+    def supports(self, feature: DatabaseFeature, /) -> bool:
+        return feature in self.features
+
+
 def _applied_row(migration_id: str, checksum: str) -> DatabaseRow:
     return DatabaseRow(
         ("migration_id", "checksum", "batch", "applied_order", "applied_at"),
         (migration_id, checksum, 1, 1, "2026-07-24T08:00:00.000000Z"),
     )
+
+
+def _record_applied(
+    driver: SQLiteDriver,
+    migrations: tuple[Migration, ...],
+) -> None:
+    with driver.transaction() as transaction:
+        for applied_order, migration in enumerate(migrations, start=1):
+            transaction.execute(
+                DatabaseStatement(
+                    "INSERT INTO af_migrations VALUES "
+                    "(:id, :checksum, 1, :applied_order, :applied_at)",
+                    {
+                        "id": migration.migration_id,
+                        "checksum": migration.checksum,
+                        "applied_order": applied_order,
+                        "applied_at": "2026-07-24T08:00:00.000000Z",
+                    },
+                )
+            )
+
+
+def _lock_rows(driver: SQLiteDriver) -> tuple[DatabaseRow, ...]:
+    with driver.transaction(read_only=True) as transaction:
+        return transaction.query(
+            DatabaseStatement(
+                "SELECT lock_name FROM af_migration_locks ORDER BY lock_name",
+                read_only=True,
+            )
+        )
+
+
+def _event_values(driver: SQLiteDriver) -> tuple[int, ...]:
+    with driver.transaction(read_only=True) as transaction:
+        rows = transaction.query(
+            DatabaseStatement(
+                "SELECT value FROM migration_events ORDER BY value",
+                read_only=True,
+            )
+        )
+    return tuple(cast(int, row["value"]) for row in rows)
 
 
 def test_migration_ledger_read_stops_after_catalogue_bound_and_closes_cursor() -> None:
@@ -559,6 +658,356 @@ def test_migration_provider_requires_streaming_from_named_connection() -> None:
     )
 
 
+def test_default_schema_mode_preserves_the_legacy_checksum() -> None:
+    migration = _migration_one()
+
+    assert migration.mode is MigrationMode.SCHEMA
+    assert migration.checksum == "79d156748a6e07e1d20c0e86002665bcc2ae87f7e96cbf0c4e57b197914940a0"
+
+
+def test_explicit_data_mode_changes_the_checksum_identity() -> None:
+    legacy = _migration_one()
+    data = Migration(
+        legacy.migration_id,
+        legacy.up,
+        legacy.down,
+        legacy.verify,
+        mode=MigrationMode.DATA,
+    )
+
+    assert data.checksum == "c7747d94cdc5f4b2c9dc148b4f4b2c29eaca01ff984d42cdc738447ac481dbe3"
+    assert data.checksum != legacy.checksum
+
+
+def test_data_mode_rejects_an_applied_pre_mode_checksum_by_default() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    legacy = _legacy_event_migration()
+    data = _data_event_migration()
+    runner = MigrationRunner(
+        driver,
+        (data,),
+        owner_id="pre-mode-default",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+    _record_applied(driver, (legacy,))
+
+    with pytest.raises(MigrationIntegrityError):
+        runner.plan_up()
+
+    driver.close()
+
+
+def test_data_mode_opt_in_accepts_matching_pre_mode_checksum_for_verify_and_down() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    legacy = _legacy_event_migration()
+    data = _data_event_migration(accept_pre_mode_checksum=True)
+    runner = MigrationRunner(
+        driver,
+        (data,),
+        owner_id="pre-mode-accepted",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+    with driver.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement("CREATE TABLE migration_events (value INTEGER PRIMARY KEY)")
+        )
+        transaction.execute(data.up[0])
+    _record_applied(driver, (legacy,))
+
+    assert not driver.supports(DatabaseFeature.TRANSACTIONAL_DDL)
+    assert (
+        data.migration_id,
+        data.up,
+        data.down,
+        data.verify,
+    ) == (
+        legacy.migration_id,
+        legacy.up,
+        legacy.down,
+        legacy.verify,
+    )
+    assert runner.plan_up().empty
+    assert runner.verify() == (data.migration_id,)
+    assert runner.apply_down().migration_ids == (data.migration_id,)
+    assert _event_values(driver) == ()
+    assert _ledger_rows(driver) == ()
+    driver.close()
+
+
+def test_data_mode_opt_in_still_rejects_pre_mode_content_drift() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    legacy = _legacy_event_migration()
+    drifted = _data_event_migration(
+        accept_pre_mode_checksum=True,
+        up=(_statement("INSERT INTO migration_events (value) VALUES (2)"),),
+    )
+    runner = MigrationRunner(
+        driver,
+        (drifted,),
+        owner_id="pre-mode-drift",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+    _record_applied(driver, (legacy,))
+
+    with pytest.raises(MigrationIntegrityError):
+        runner.plan_up()
+
+    driver.close()
+
+
+def test_fresh_data_mode_opt_in_records_the_current_checksum() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    legacy = _legacy_event_migration()
+    data = _data_event_migration(accept_pre_mode_checksum=True)
+    runner = MigrationRunner(
+        driver,
+        (data,),
+        owner_id="pre-mode-fresh",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+    with driver.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement("CREATE TABLE migration_events (value INTEGER PRIMARY KEY)")
+        )
+
+    assert runner.apply_up().migration_ids == (data.migration_id,)
+
+    rows = _ledger_rows(driver)
+    assert len(rows) == 1
+    assert data.checksum == _data_event_migration().checksum
+    assert rows[0]["checksum"] == data.checksum
+    assert rows[0]["checksum"] != legacy.checksum
+    driver.close()
+
+
+def test_pre_mode_checksum_opt_in_is_data_only_and_strictly_boolean() -> None:
+    legacy = _legacy_event_migration()
+
+    with pytest.raises(ValueError, match="pre-mode checksum"):
+        Migration(
+            legacy.migration_id,
+            legacy.up,
+            legacy.down,
+            legacy.verify,
+            accept_pre_mode_checksum=True,
+        )
+    with pytest.raises(ValueError, match="pre-mode checksum"):
+        Migration(
+            legacy.migration_id,
+            legacy.up,
+            legacy.down,
+            legacy.verify,
+            mode=MigrationMode.DATA,
+            accept_pre_mode_checksum=cast(bool, 1),
+        )
+
+
+def test_migration_repr_shows_policy_without_pre_mode_checksum_detail() -> None:
+    legacy = _legacy_event_migration()
+    data = _data_event_migration(accept_pre_mode_checksum=True)
+
+    rendered = repr(data)
+
+    assert "accept_pre_mode_checksum=True" in rendered
+    assert data.checksum in rendered
+    assert legacy.checksum not in rendered
+
+
+def test_apply_up_preflights_the_entire_mixed_plan_before_mutation() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    with driver.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement("CREATE TABLE migration_events (value INTEGER PRIMARY KEY)")
+        )
+    data = Migration(
+        "20260724080000_seed_event",
+        (_statement("INSERT INTO migration_events (value) VALUES (1)"),),
+        (_statement("DELETE FROM migration_events WHERE value = 1"),),
+        mode=MigrationMode.DATA,
+    )
+    schema = Migration(
+        "20260724080100_create_unsupported_schema",
+        (_statement("CREATE TABLE unsupported_schema (id INTEGER PRIMARY KEY)"),),
+        (_statement("DROP TABLE unsupported_schema"),),
+    )
+    runner = MigrationRunner(
+        driver,
+        (data, schema),
+        owner_id="mixed-plan",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+
+    with pytest.raises(UnsupportedDatabaseFeature) as captured:
+        runner.apply_up()
+
+    assert captured.value.feature is DatabaseFeature.TRANSACTIONAL_DDL
+    assert _event_values(driver) == ()
+    assert not _table_exists(driver, "unsupported_schema")
+    assert _ledger_rows(driver) == ()
+    driver.close()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_apply_down_preflights_the_entire_plan_before_mutation(dry_run: bool) -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    schema = Migration(
+        "20260724080000_create_unsupported_schema",
+        (_statement("CREATE TABLE unsupported_schema (id INTEGER PRIMARY KEY)"),),
+        (_statement("DROP TABLE unsupported_schema"),),
+    )
+    data = Migration(
+        "20260724080100_seed_event",
+        (_statement("INSERT INTO migration_events (value) VALUES (1)"),),
+        (_statement("DELETE FROM migration_events WHERE value = 1"),),
+        mode=MigrationMode.DATA,
+    )
+    runner = MigrationRunner(
+        driver,
+        (schema, data),
+        owner_id="down-mixed-plan",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+    with driver.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement("CREATE TABLE migration_events (value INTEGER PRIMARY KEY)")
+        )
+        transaction.execute(_statement("INSERT INTO migration_events (value) VALUES (1)"))
+        transaction.execute(_statement("CREATE TABLE unsupported_schema (id INTEGER PRIMARY KEY)"))
+    _record_applied(driver, (schema, data))
+
+    with pytest.raises(UnsupportedDatabaseFeature) as captured:
+        runner.apply_down(steps=2, dry_run=dry_run)
+
+    assert captured.value.feature is DatabaseFeature.TRANSACTIONAL_DDL
+    assert _event_values(driver) == (1,)
+    assert _table_exists(driver, "unsupported_schema")
+    assert tuple(row["migration_id"] for row in _ledger_rows(driver)) == (
+        schema.migration_id,
+        data.migration_id,
+    )
+    driver.close()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_apply_down_reports_irreversibility_before_capability_failure(
+    dry_run: bool,
+) -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    irreversible = Migration(
+        "20260724080000_irreversible_event",
+        (_statement("INSERT INTO migration_events (value) VALUES (1)"),),
+        mode=MigrationMode.DATA,
+    )
+    schema = Migration(
+        "20260724080100_create_unsupported_schema",
+        (_statement("CREATE TABLE unsupported_schema (id INTEGER PRIMARY KEY)"),),
+        (_statement("DROP TABLE unsupported_schema"),),
+    )
+    runner = MigrationRunner(
+        driver,
+        (irreversible, schema),
+        owner_id="down-precedence",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+    with driver.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement("CREATE TABLE migration_events (value INTEGER PRIMARY KEY)")
+        )
+        transaction.execute(_statement("INSERT INTO migration_events (value) VALUES (1)"))
+        transaction.execute(_statement("CREATE TABLE unsupported_schema (id INTEGER PRIMARY KEY)"))
+    _record_applied(driver, (irreversible, schema))
+
+    with pytest.raises(MigrationIrreversibleError) as captured:
+        runner.apply_down(steps=2, dry_run=dry_run)
+
+    assert captured.value.migration_id == irreversible.migration_id
+    assert _event_values(driver) == (1,)
+    assert _table_exists(driver, "unsupported_schema")
+    assert len(_ledger_rows(driver)) == 2
+    driver.close()
+
+
+def test_unsupported_schema_dry_run_rejects_without_mutating_state() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    migration = Migration(
+        "20260724080000_create_unsupported_schema",
+        (_statement("CREATE TABLE unsupported_schema (id INTEGER PRIMARY KEY)"),),
+        (_statement("DROP TABLE unsupported_schema"),),
+    )
+    runner = MigrationRunner(
+        driver,
+        (migration,),
+        owner_id="schema-dry-run",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+
+    with pytest.raises(UnsupportedDatabaseFeature) as captured:
+        runner.apply_up(dry_run=True)
+
+    assert captured.value.feature is DatabaseFeature.TRANSACTIONAL_DDL
+    assert runner.plan_up().migration_ids == (migration.migration_id,)
+    assert not _table_exists(driver, "unsupported_schema")
+    assert _ledger_rows(driver) == ()
+    assert _lock_rows(driver) == ()
+    driver.close()
+
+
+def test_empty_plans_do_not_require_transactional_ddl() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    runner = MigrationRunner(
+        driver,
+        (),
+        owner_id="empty-plan",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+
+    assert runner.apply_up().empty
+    assert runner.apply_up(dry_run=True).empty
+    assert runner.apply_down().empty
+    assert runner.apply_down(dry_run=True).empty
+    assert _ledger_rows(driver) == ()
+    driver.close()
+
+
+def test_data_only_migration_succeeds_without_transactional_ddl() -> None:
+    driver = NonTransactionalDDLSQLiteDriver(":memory:")
+    with driver.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement("CREATE TABLE migration_events (value INTEGER PRIMARY KEY)")
+        )
+    migration = Migration(
+        "20260724080000_seed_event",
+        (_statement("INSERT INTO migration_events (value) VALUES (1)"),),
+        (_statement("DELETE FROM migration_events WHERE value = 1"),),
+        mode=MigrationMode.DATA,
+    )
+    runner = MigrationRunner(
+        driver,
+        (migration,),
+        owner_id="data-only",
+        clock=lambda: _NOW,
+    )
+    runner.bootstrap()
+
+    assert runner.apply_up().migration_ids == (migration.migration_id,)
+    assert _event_values(driver) == (1,)
+    assert tuple(row["migration_id"] for row in _ledger_rows(driver)) == (migration.migration_id,)
+
+    assert runner.apply_down().migration_ids == (migration.migration_id,)
+    assert _event_values(driver) == ()
+    assert _ledger_rows(driver) == ()
+    driver.close()
+
+
 def test_bootstrap_is_idempotent_and_fresh_plan_is_deterministic() -> None:
     driver = SQLiteDriver(":memory:")
     runner = _runner(driver, (_migration_two(), _migration_one()))
@@ -847,6 +1296,12 @@ def test_migration_catalogue_snapshot_and_probe_rows_are_bounded() -> None:
 
 def test_migration_contracts_reject_ambiguous_or_unbounded_inputs() -> None:
     write = _statement("CREATE TABLE valid_table (id INTEGER)")
+    with pytest.raises(ValueError, match="migration mode"):
+        Migration(
+            "20260724080300_invalid_mode",
+            (write,),
+            mode=cast(MigrationMode, "data"),
+        )
     with pytest.raises(ValueError, match="canonical timestamped"):
         Migration("not-canonical", (write,))
     with pytest.raises(ValueError, match="up statements"):

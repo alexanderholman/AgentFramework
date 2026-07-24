@@ -206,6 +206,7 @@ def test_sqlite_capabilities_fail_explicitly_and_close_is_idempotent() -> None:
     driver = SQLiteDriver(":memory:")
 
     assert driver.supports(DatabaseFeature.TRANSACTIONS)
+    assert driver.supports(DatabaseFeature.TRANSACTIONAL_DDL)
     assert driver.supports(DatabaseFeature.SAVEPOINTS)
     assert driver.supports(DatabaseFeature.STREAMING)
     assert driver.supports(DatabaseFeature.CANCELLATION)
@@ -310,6 +311,7 @@ def test_sqlite_rejects_invalid_contract_calls_and_finished_transaction_use() ->
         assert driver.features == frozenset(
             {
                 DatabaseFeature.TRANSACTIONS,
+                DatabaseFeature.TRANSACTIONAL_DDL,
                 DatabaseFeature.SAVEPOINTS,
                 DatabaseFeature.STREAMING,
                 DatabaseFeature.CANCELLATION,

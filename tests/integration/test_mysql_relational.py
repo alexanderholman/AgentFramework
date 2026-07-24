@@ -93,6 +93,7 @@ def test_mysql_pool_drains_and_exposes_verified_capabilities() -> None:
                 DatabaseFeature.POOLING,
             }
         )
+        assert not pool.supports(DatabaseFeature.TRANSACTIONAL_DDL)
         with pool.transaction(read_only=True) as transaction:
             rows = transaction.query(DatabaseStatement("SELECT 1 AS value", read_only=True))
         assert rows[0]["value"] == 1
@@ -131,6 +132,7 @@ def test_mysql_registration_binds_runtime_identity_and_evidence() -> None:
             DatabaseFeature.CANCELLATION.value,
         }
     )
+    assert not evidence.capabilities.supports((DatabaseFeature.TRANSACTIONAL_DDL.value,))
     disposer = registration.disposer
     if disposer is not None:
         disposer(driver)

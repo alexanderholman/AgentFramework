@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 import threading
 import time
 from contextlib import nullcontext
@@ -18,6 +20,7 @@ from af.framework.relational import (
     DatabaseStatement,
     UnsupportedDatabaseFeature,
 )
+from af.infrastructure import sqlite as sqlite_module
 from af.infrastructure.sqlite import SQLiteDriver
 from af.infrastructure.sqlite_manager import sqlite_registration
 
@@ -349,19 +352,33 @@ def test_sqlite_pool_registration_reports_only_verified_runtime_capabilities(
         requires=(
             DatabaseFeature.POOLING,
             DatabaseFeature.CANCELLATION,
+            DatabaseFeature.TRANSACTIONAL_DDL,
         )
     )
 
     assert isinstance(driver, DatabasePool)
     assert driver.supports(DatabaseFeature.POOLING)
     assert driver.supports(DatabaseFeature.CANCELLATION)
+    assert driver.supports(DatabaseFeature.TRANSACTIONAL_DDL)
     assert manager.evidence().capabilities.supports(
         (
             DatabaseFeature.POOLING.value,
             DatabaseFeature.CANCELLATION.value,
+            DatabaseFeature.TRANSACTIONAL_DDL.value,
         )
     )
     manager.close()
+
+
+def test_sqlite_manifest_identity_includes_af_driver_and_runtime_bytes() -> None:
+    driver_file = sqlite_module.__file__
+    if driver_file is None:
+        raise AssertionError("SQLite driver source identity is unavailable")
+    expected = hashlib.sha256(
+        Path(driver_file).read_bytes() + b"\0" + Path(sqlite3.__file__).read_bytes()
+    ).hexdigest()
+
+    assert sqlite_registration().manifest.artifact_digest == expected
 
 
 def test_unpooled_sqlite_evidence_does_not_claim_pooling() -> None:
@@ -383,6 +400,8 @@ def test_unpooled_sqlite_evidence_does_not_claim_pooling() -> None:
     driver = manager.connection()
 
     assert isinstance(driver, SQLiteDriver)
+    assert driver.supports(DatabaseFeature.TRANSACTIONAL_DDL)
+    assert manager.evidence().capabilities.supports((DatabaseFeature.TRANSACTIONAL_DDL.value,))
     assert not driver.supports(DatabaseFeature.POOLING)
     assert not manager.evidence().capabilities.supports((DatabaseFeature.POOLING.value,))
     with pytest.raises(CapabilityValidationError):

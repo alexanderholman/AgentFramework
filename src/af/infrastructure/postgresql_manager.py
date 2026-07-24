@@ -29,6 +29,7 @@ __all__ = ("postgresql_registration",)
 _CAPABILITIES = CapabilitySet(
     (
         DatabaseFeature.TRANSACTIONS.value,
+        DatabaseFeature.TRANSACTIONAL_DDL.value,
         DatabaseFeature.SAVEPOINTS.value,
         DatabaseFeature.STREAMING.value,
         DatabaseFeature.CANCELLATION.value,
@@ -140,6 +141,7 @@ def postgresql_registration(
             raise ValueError("PostgreSQL runtime capability verification failed")
         expected_features = {
             DatabaseFeature.TRANSACTIONS,
+            DatabaseFeature.TRANSACTIONAL_DDL,
             DatabaseFeature.SAVEPOINTS,
             DatabaseFeature.STREAMING,
             DatabaseFeature.CANCELLATION,

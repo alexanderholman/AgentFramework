@@ -28,13 +28,16 @@ __all__ = ("sqlite_registration",)
 _CAPABILITIES = CapabilitySet(
     (
         DatabaseFeature.TRANSACTIONS.value,
+        DatabaseFeature.TRANSACTIONAL_DDL.value,
         DatabaseFeature.SAVEPOINTS.value,
         DatabaseFeature.STREAMING.value,
         DatabaseFeature.CANCELLATION.value,
         DatabaseFeature.POOLING.value,
     )
 )
-_ARTIFACT_DIGEST = hashlib.sha256(Path(sqlite3.__file__).read_bytes()).hexdigest()
+_ARTIFACT_DIGEST = hashlib.sha256(
+    Path(__file__).with_name("sqlite.py").read_bytes() + b"\0" + Path(sqlite3.__file__).read_bytes()
+).hexdigest()
 _DEPENDENCY_DIGEST = hashlib.sha256(
     (
         f"{platform.python_implementation()}:{platform.python_version()}:{sqlite3.sqlite_version}"
@@ -125,6 +128,7 @@ def sqlite_registration(
             raise ValueError("SQLite runtime capability verification failed")
         expected_features = {
             DatabaseFeature.TRANSACTIONS,
+            DatabaseFeature.TRANSACTIONAL_DDL,
             DatabaseFeature.SAVEPOINTS,
             DatabaseFeature.STREAMING,
             DatabaseFeature.CANCELLATION,

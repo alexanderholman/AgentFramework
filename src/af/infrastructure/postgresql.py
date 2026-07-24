@@ -30,6 +30,7 @@ _SAVEPOINT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _CORE_FEATURES = frozenset(
     {
         DatabaseFeature.TRANSACTIONS,
+        DatabaseFeature.TRANSACTIONAL_DDL,
         DatabaseFeature.SAVEPOINTS,
         DatabaseFeature.STREAMING,
     }

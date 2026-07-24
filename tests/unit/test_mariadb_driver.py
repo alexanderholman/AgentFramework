@@ -40,6 +40,7 @@ def test_mariadb_driver_executes_savepoints_and_read_only_transactions(
                 DatabaseFeature.STREAMING,
             }
         )
+        assert not driver.supports(DatabaseFeature.TRANSACTIONAL_DDL)
         with driver.transaction() as transaction:
             transaction.execute(DatabaseStatement("CREATE TABLE records (id INTEGER, value TEXT)"))
             transaction.execute(

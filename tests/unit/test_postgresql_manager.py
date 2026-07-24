@@ -21,6 +21,7 @@ from af.infrastructure.postgresql_manager import postgresql_registration
 _FEATURES = frozenset(
     {
         DatabaseFeature.TRANSACTIONS,
+        DatabaseFeature.TRANSACTIONAL_DDL,
         DatabaseFeature.SAVEPOINTS,
         DatabaseFeature.STREAMING,
         DatabaseFeature.CANCELLATION,
@@ -104,11 +105,16 @@ def test_postgresql_registration_is_inert_and_verifies_exact_runtime(
 
     assert isinstance(driver, _VerifiedDriver)
     assert registration.manifest.capabilities.supports(
-        {DatabaseFeature.CANCELLATION.value, DatabaseFeature.POOLING.value}
+        {
+            DatabaseFeature.CANCELLATION.value,
+            DatabaseFeature.POOLING.value,
+            DatabaseFeature.TRANSACTIONAL_DDL.value,
+        }
     )
     assert evidence.binding == binding
     assert evidence.health is HealthStatus.HEALTHY
     assert evidence.capabilities.supports(feature.value for feature in _FEATURES)
+    assert evidence.capabilities.supports((DatabaseFeature.TRANSACTIONAL_DDL.value,))
 
 
 def test_postgresql_registration_builds_bounded_pool_and_rejects_invalid_config(
