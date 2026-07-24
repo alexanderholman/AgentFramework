@@ -33,6 +33,7 @@ _MAX_BATCH = 1_000
 _MAX_ATTEMPTS = 1_000
 _MAX_LEASE = timedelta(hours=24)
 _MAX_RETRY_DELAY = timedelta(days=7)
+_RELEASED_EXPIRY = datetime(1000, 1, 1, tzinfo=UTC)
 
 
 class OutboxPublisher(Protocol):
@@ -304,7 +305,7 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                           AND owner_id = :owner_id
                           AND renewal = :renewal""",
                         {
-                            "released_at": _timestamp(released_at),
+                            "released_at": _timestamp(_RELEASED_EXPIRY),
                             "relay_name": self._relay_name,
                             "owner_id": self._owner_id,
                             "renewal": generation,
