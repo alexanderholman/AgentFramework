@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
 from itertools import islice
 
-from af.framework.container import ProviderRegistrar, Scope, ServiceProvider
+from af.framework.container import ProviderRegistrar, Resolver, Scope, ServiceProvider
 from af.framework.database_manager import DatabaseManager
 from af.framework.migrations import Migration, MigrationRunner
 from af.framework.relational import DatabaseFeature
@@ -54,8 +54,8 @@ class MigrationProvider(ServiceProvider):
         clock = self._clock
         lock_lease = self._lock_lease
 
-        def create_runner(resolver: object) -> MigrationRunner:
-            manager = resolver.resolve(DatabaseManager)  # type: ignore[attr-defined]
+        def create_runner(resolver: Resolver) -> MigrationRunner:
+            manager = resolver.resolve(DatabaseManager)
             driver = manager.connection(
                 connection,
                 requires=(DatabaseFeature.TRANSACTIONS,),
