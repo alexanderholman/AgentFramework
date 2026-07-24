@@ -13,20 +13,21 @@ from af.search.lifecycle import (
     IndexLifecycleError,
     IndexLifecycleManager,
     IndexPhase,
+    IndexStatus,
     ResourceIdentity,
 )
 
 _NOW = datetime(2026, 7, 24, 15, tzinfo=UTC)
 
 
-def _resource(resource_id: str) -> ResourceEnvelope:
+def _resource(resource_id: str, *, projection_version: int = 2) -> ResourceEnvelope:
     return ResourceEnvelope(
         resource_id=resource_id,
         kind=ResourceKind.TEXT,
         source_id="source-primary",
         authoritative_locator=f"af://source-primary/{resource_id}",
         tenant_id="tenant-a",
-        projection_version=2,
+        projection_version=projection_version,
         acl=("group:research",),
         provenance=("sha256:" + resource_id[-1] * 64,),
         text="bounded searchable energy content",
@@ -203,3 +204,175 @@ def test_lifecycle_handles_and_bulk_results_fail_closed() -> None:
             base_index=None,
             started_at=_NOW,
         )
+
+
+def test_lifecycle_validates_clocks_intervals_batches_and_projection_versions() -> None:
+    with pytest.raises(ValueError):
+        IndexLifecycleManager(RecordingBackend(), stale_after=timedelta(0))
+    with pytest.raises(ValueError):
+        IndexLifecycleManager(
+            RecordingBackend(),
+            clock=lambda: datetime(2026, 7, 24),
+        ).begin("catalog", projection_version=2)
+    with pytest.raises(ValueError):
+        IndexLifecycleManager(RecordingBackend()).begin("catalog", projection_version=0)
+
+    manager = IndexLifecycleManager(RecordingBackend(), clock=lambda: _NOW)
+    build = manager.begin("catalog", projection_version=2)
+    with pytest.raises(ValueError):
+        manager.apply(build, ())
+    with pytest.raises(ValueError):
+        manager.apply(build, (_resource("resource-a"), _resource("resource-a")))
+    with pytest.raises(ValueError):
+        manager.apply(build, (_resource("resource-a", projection_version=3),))
+    with pytest.raises(TypeError):
+        ResourceIdentity.from_resource(object())  # type: ignore[arg-type]
+
+
+def test_backend_create_and_bulk_failures_are_sanitized() -> None:
+    class ObserveFailure(RecordingBackend):
+        def active_index(self, alias: str) -> str | None:
+            del alias
+            raise RuntimeError("sensitive alias failure")
+
+    class CreateFailure(RecordingBackend):
+        def create_index(self, name: str, *, projection_version: int) -> None:
+            del name, projection_version
+            raise RuntimeError("sensitive create failure")
+
+    with pytest.raises(IndexLifecycleError) as observed:
+        IndexLifecycleManager(ObserveFailure(), clock=lambda: _NOW).begin(
+            "catalog", projection_version=2
+        )
+    with pytest.raises(IndexLifecycleError) as created:
+        IndexLifecycleManager(CreateFailure(), clock=lambda: _NOW).begin(
+            "catalog", projection_version=2
+        )
+    assert observed.value.reason is PlatformReason.PERMANENT_FAILURE
+    assert created.value.reason is PlatformReason.PERMANENT_FAILURE
+    assert "sensitive" not in str(observed.value)
+    assert "sensitive" not in str(created.value)
+
+    class BulkFailure(RecordingBackend):
+        def bulk_upsert(
+            self,
+            name: str,
+            resources: tuple[ResourceEnvelope, ...],
+        ) -> BulkIndexResult:
+            del name, resources
+            raise RuntimeError("sensitive bulk failure")
+
+    manager = IndexLifecycleManager(BulkFailure(), clock=lambda: _NOW)
+    build = manager.begin("catalog", projection_version=2)
+    with pytest.raises(IndexLifecycleError) as bulk:
+        manager.apply(build, (_resource("resource-a"),))
+    assert bulk.value.reason is PlatformReason.PERMANENT_FAILURE
+    assert manager.status(build).phase is IndexPhase.FAILED
+
+
+def test_cutover_and_rollback_backend_fences_fail_closed() -> None:
+    backend = RecordingBackend()
+    manager = IndexLifecycleManager(backend, clock=lambda: _NOW)
+    with pytest.raises(IndexLifecycleError):
+        manager.rollback("catalog")
+
+    build = manager.begin("catalog", projection_version=2)
+    manager.apply(build, (_resource("resource-a"),))
+    manager.mark_ready(build, checkpoint="event-0001")
+    backend.force_alias_conflict = True
+    with pytest.raises(IndexLifecycleError) as cutover:
+        manager.cutover(build)
+    assert cutover.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+    backend = RecordingBackend()
+    manager = IndexLifecycleManager(backend, clock=lambda: _NOW)
+    build = manager.begin("catalog", projection_version=2)
+    manager.apply(build, (_resource("resource-a"),))
+    manager.mark_ready(build, checkpoint="event-0001")
+    manager.cutover(build)
+    backend.aliases["catalog"] = "catalog-g99999999"
+    with pytest.raises(IndexLifecycleError) as rollback:
+        manager.rollback("catalog")
+    assert rollback.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+def test_rebuild_of_managed_generation_retires_and_restores_prior_state() -> None:
+    backend = RecordingBackend(active=None)
+    manager = IndexLifecycleManager(backend, clock=lambda: _NOW)
+    first = manager.begin("catalog", projection_version=1)
+    manager.apply(first, (_resource("resource-a", projection_version=1),))
+    manager.mark_ready(first, checkpoint="event-0001")
+    manager.cutover(first)
+
+    second = manager.begin("catalog", projection_version=2)
+    manager.apply(second, (_resource("resource-b"),))
+    manager.mark_ready(second, checkpoint="event-0002")
+    manager.cutover(second)
+
+    assert manager.status(first).phase is IndexPhase.RETIRED
+    assert manager.rollback("catalog") == first.physical_name
+    assert manager.status(first).phase is IndexPhase.ACTIVE
+    assert manager.status(second).phase is IndexPhase.RETIRED
+
+
+def test_recovery_observation_and_deletion_failures_are_sanitized() -> None:
+    current = [_NOW]
+    backend = RecordingBackend()
+    manager = IndexLifecycleManager(
+        backend,
+        clock=lambda: current[0],
+        stale_after=timedelta(minutes=1),
+    )
+    build = manager.begin("catalog", projection_version=2)
+    current[0] += timedelta(minutes=2)
+
+    class DeleteFailureBackend(RecordingBackend):
+        def delete_index(self, name: str) -> None:
+            del name
+            raise RuntimeError("sensitive deletion failure")
+
+    failing = DeleteFailureBackend()
+    failing_manager = IndexLifecycleManager(
+        failing,
+        clock=lambda: current[0],
+        stale_after=timedelta(minutes=1),
+    )
+    failing_build = failing_manager.begin("catalog", projection_version=2)
+    current[0] += timedelta(minutes=2)
+    with pytest.raises(IndexLifecycleError) as deleted:
+        failing_manager.recover_stale("catalog")
+    assert deleted.value.reason is PlatformReason.PERMANENT_FAILURE
+    assert failing_manager.status(failing_build).phase is IndexPhase.BUILDING
+
+    backend.aliases["catalog"] = build.physical_name
+    assert manager.recover_stale("catalog") == ()
+
+
+def test_status_and_value_contracts_reject_invalid_state() -> None:
+    identity = ResourceIdentity("tenant-a", "source-primary", "resource-a")
+    with pytest.raises(ValueError):
+        ResourceIdentity("not a tenant", "source-primary", "resource-a")
+    with pytest.raises(ValueError):
+        BulkIndexFailure(identity, "not a reason")
+    with pytest.raises(ValueError):
+        BulkIndexResult(attempted=(identity, identity))
+    with pytest.raises(ValueError):
+        IndexStatus(
+            build=object(),  # type: ignore[arg-type]
+            phase=IndexPhase.BUILDING,
+            indexed_resources=0,
+            checkpoint=None,
+            updated_at=_NOW,
+        )
+
+    manager = IndexLifecycleManager(RecordingBackend(), clock=lambda: _NOW)
+    unknown = IndexBuild(
+        logical_name="catalog",
+        physical_name="catalog-g00000002",
+        generation=2,
+        projection_version=2,
+        base_index="catalog-g00000001",
+        started_at=_NOW,
+    )
+    with pytest.raises(IndexLifecycleError):
+        manager.status(unknown)
