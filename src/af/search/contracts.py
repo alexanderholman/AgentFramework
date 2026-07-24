@@ -59,9 +59,7 @@ def _identifier(value: object, field_name: str) -> str:
     return text
 
 
-def _evidence(
-    values: object, field_name: str, *, digest: bool = False
-) -> tuple[str, ...]:
+def _evidence(values: object, field_name: str, *, digest: bool = False) -> tuple[str, ...]:
     if type(values) is not tuple or not values or len(values) > _MAX_VALUES:
         raise ValueError(f"search {field_name} evidence is invalid")
     checked: list[str] = []
@@ -91,9 +89,7 @@ class ResourceEnvelope:
     attributes: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "resource_id", _identifier(self.resource_id, "resource id")
-        )
+        object.__setattr__(self, "resource_id", _identifier(self.resource_id, "resource id"))
         if not isinstance(self.kind, ResourceKind):
             raise ValueError("search resource kind is invalid")
         object.__setattr__(self, "source_id", _identifier(self.source_id, "source id"))
@@ -111,13 +107,8 @@ class ResourceEnvelope:
             "provenance",
             _evidence(self.provenance, "provenance", digest=True),
         )
-        object.__setattr__(
-            self, "text", _bounded(self.text, "resource text", limit=_MAX_TEXT)
-        )
-        if (
-            not isinstance(self.attributes, Mapping)
-            or len(self.attributes) > _MAX_ATTRIBUTES
-        ):
+        object.__setattr__(self, "text", _bounded(self.text, "resource text", limit=_MAX_TEXT))
+        if not isinstance(self.attributes, Mapping) or len(self.attributes) > _MAX_ATTRIBUTES:
             raise ValueError("search resource attributes are invalid")
         snapshot: dict[str, str] = {}
         for key, value in self.attributes.items():
@@ -203,9 +194,7 @@ class SearchHit:
     highlights: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "resource_id", _identifier(self.resource_id, "resource id")
-        )
+        object.__setattr__(self, "resource_id", _identifier(self.resource_id, "resource id"))
         object.__setattr__(self, "source_id", _identifier(self.source_id, "source id"))
         object.__setattr__(
             self,
@@ -233,9 +222,7 @@ class SearchHit:
         object.__setattr__(
             self,
             "highlights",
-            tuple(
-                _bounded(value, "highlight", limit=8_192) for value in self.highlights
-            ),
+            tuple(_bounded(value, "highlight", limit=8_192) for value in self.highlights),
         )
 
     def __repr__(self) -> str:
