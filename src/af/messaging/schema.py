@@ -163,7 +163,9 @@ class MessageSchemaRegistry:
             raise InvalidMessageSchema("message schema normalization requires an envelope")
         with self._lock:
             if not self._frozen:
-                raise InvalidMessageSchema("message schema registry must be frozen before normalization")
+                raise InvalidMessageSchema(
+                    "message schema registry must be frozen before normalization"
+                )
             schema = self._schemas.get(envelope.metadata.message_type)
             if schema is None:
                 raise UnsupportedMessageSchema("message schema type is not registered")

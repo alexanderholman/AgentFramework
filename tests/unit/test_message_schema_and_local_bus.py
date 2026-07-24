@@ -347,9 +347,11 @@ def test_local_bus_requires_event_schemas_and_frozen_declarations() -> None:
     with pytest.raises(InvalidMessageSchema, match="only domain or integration"):
         command_bus.subscribe("tasks.changed", lambda envelope: None)
 
+    def listener(envelope: MessageEnvelope) -> None:
+        del envelope
+
     registry = _registry()
     bus = LocalEventBus(registry, max_listeners_per_event=1)
-    listener = lambda envelope: None
     bus.subscribe("tasks.changed", listener)
     with pytest.raises(InvalidMessageSchema, match="already registered"):
         bus.subscribe("tasks.changed", listener)
