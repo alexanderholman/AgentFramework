@@ -17,9 +17,7 @@ _REPOSITORY = re.compile(
 _REF = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,254})$")
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-_CANDIDATE_ID = re.compile(
-    r"^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9](?:[A-Za-z0-9._-]{0,95})$"
-)
+_CANDIDATE_ID = re.compile(r"^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9](?:[A-Za-z0-9._-]{0,95})$")
 _TRACE_ID = re.compile(r"^[a-z][a-z0-9._:-]{0,127}$")
 _MAX_CANDIDATES = 1_000
 _MAX_METRIC = 10_000
@@ -110,10 +108,7 @@ class DesignCandidate:
     complete: bool
 
     def __post_init__(self) -> None:
-        if (
-            type(self.candidate_id) is not str
-            or _CANDIDATE_ID.fullmatch(self.candidate_id) is None
-        ):
+        if type(self.candidate_id) is not str or _CANDIDATE_ID.fullmatch(self.candidate_id) is None:
             raise ValueError("self-design candidate identity is invalid")
         if type(self.revision) is not str or _SHA256.fullmatch(self.revision) is None:
             raise ValueError("self-design candidate revision is invalid")
@@ -293,10 +288,7 @@ class DesignAssessment:
     reason: DesignReason
 
     def __post_init__(self) -> None:
-        if (
-            type(self.candidate_id) is not str
-            or _CANDIDATE_ID.fullmatch(self.candidate_id) is None
-        ):
+        if type(self.candidate_id) is not str or _CANDIDATE_ID.fullmatch(self.candidate_id) is None:
             raise ValueError("self-design assessment identity is invalid")
         if not isinstance(self.reason, DesignReason):
             raise ValueError("self-design assessment reason is invalid")
@@ -335,9 +327,7 @@ class DesignDecision:
         if len({item.candidate_id for item in ordered}) != len(ordered):
             raise ValueError("self-design assessment identities must be unique")
         object.__setattr__(self, "assessments", ordered)
-        if (self.reason is DesignReason.SELECTED) != (
-            self.selected_candidate_id is not None
-        ):
+        if (self.reason is DesignReason.SELECTED) != (self.selected_candidate_id is not None):
             raise ValueError("self-design selected decision is inconsistent")
 
     def _payload(self) -> dict[str, object]:
@@ -596,9 +586,7 @@ class SelfDesignPlanner:
         known = {item.candidate_id for item in candidates}
         graph = {
             item.candidate_id: tuple(
-                dependency
-                for dependency in item.dependency_ids
-                if dependency in known
+                dependency for dependency in item.dependency_ids if dependency in known
             )
             for item in candidates
         }

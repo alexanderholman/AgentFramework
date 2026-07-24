@@ -145,9 +145,7 @@ class SelfDesignPlannerTests(unittest.TestCase):
         second = candidate("task:126", dependency_ids=("task:124",))
 
         stopped = self.planner.plan(snapshot(first, second), policy(), now=NOW)
-        reasons = {
-            item.candidate_id: item.reason for item in stopped.decision.assessments
-        }
+        reasons = {item.candidate_id: item.reason for item in stopped.decision.assessments}
 
         self.assertEqual(
             reasons,
@@ -192,9 +190,7 @@ class SelfDesignPlannerTests(unittest.TestCase):
         )
 
         stopped = self.planner.plan(observed, policy(), now=NOW)
-        reasons = {
-            item.candidate_id: item.reason for item in stopped.decision.assessments
-        }
+        reasons = {item.candidate_id: item.reason for item in stopped.decision.assessments}
 
         self.assertEqual(
             reasons,
