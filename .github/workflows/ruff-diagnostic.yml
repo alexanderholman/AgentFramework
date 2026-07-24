@@ -1,9 +1,7 @@
 name: Temporary Ruff Diagnostic
 
 on:
-  push:
-    branches:
-      - agent/self-design-local-recording-124
+  pull_request:
 
 permissions:
   contents: read
@@ -15,7 +13,7 @@ jobs:
       - name: Check out exact head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
