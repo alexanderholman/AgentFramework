@@ -56,6 +56,7 @@ class LivenessState(StrEnum):
 
     UNKNOWN = "unknown"
     LIVE = "live"
+    STOPPED = "stopped"
     DEAD = "dead"
 
 
