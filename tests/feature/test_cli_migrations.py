@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -25,10 +27,13 @@ runner = CliRunner()
 class DatabaseProvider(ServiceProvider):
     provider_id = "test.database"
 
+    def __init__(self, database: str = ":memory:") -> None:
+        self._database = database
+
     def register(self, registrar: ProviderRegistrar) -> None:
         bind_database_manager(
             registrar,
-            connections={"primary": {"driver": "sqlite", "database": ":memory:"}},
+            connections={"primary": {"driver": "sqlite", "database": self._database}},
             default="primary",
             read="primary",
             write="primary",
@@ -57,13 +62,13 @@ def _migration() -> Migration:
     )
 
 
-def _application():  # type: ignore[no-untyped-def]
+def _application(database: str = ":memory:"):  # type: ignore[no-untyped-def]
     return create_application(
         settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
         providers=(
-            DatabaseProvider(),
+            DatabaseProvider(database),
             MigrationProvider(
                 migrations=(_migration(),),
                 connection="primary",
@@ -77,6 +82,10 @@ def _application():  # type: ignore[no-untyped-def]
 def test_migration_cli_plans_applies_reports_verifies_and_reverses() -> None:
     application = _application()
     cli = create_cli(application)
+
+    bootstrapped = runner.invoke(cli, ["migrations", "bootstrap"])
+    assert bootstrapped.exit_code == 0
+    assert json.loads(bootstrapped.stdout) == {"bootstrapped": True}
 
     planned = runner.invoke(cli, ["migrations", "plan"])
     assert planned.exit_code == 0
@@ -114,6 +123,37 @@ def test_migration_cli_plans_applies_reports_verifies_and_reverses() -> None:
     assert reversed_result.exit_code == 0
     assert json.loads(reversed_result.stdout)["direction"] == "down"
     assert json.loads(runner.invoke(cli, ["migrations", "status"]).stdout)["applied"] == []
+    application.shutdown()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["migrations", "plan"],
+        ["migrations", "status"],
+        ["migrations", "verify"],
+        ["migrations", "up", "--dry-run"],
+        ["migrations", "down", "--dry-run"],
+    ],
+)
+def test_migration_cli_inspection_does_not_bootstrap_metadata(
+    tmp_path: Path,
+    arguments: list[str],
+) -> None:
+    database = tmp_path / "migration-inspection.sqlite3"
+    application = _application(str(database))
+
+    result = runner.invoke(create_cli(application), arguments)
+
+    assert result.exit_code == 2
+    with sqlite3.connect(database) as connection:
+        metadata = connection.execute(
+            """SELECT name FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN ('af_migrations', 'af_migration_locks')
+            ORDER BY name"""
+        ).fetchall()
+    assert metadata == []
     application.shutdown()
 
 
