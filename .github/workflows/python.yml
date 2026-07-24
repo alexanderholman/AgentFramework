@@ -57,25 +57,4 @@ jobs:
         run: uv sync --locked --extra dev
 
       - name: Run the repeatable AF quality gate
-        shell: bash
-        run: |
-          set -o pipefail
-          python scripts/af_dev.py --action check --execute 2>&1 | tee af-quality.log
-
-      - name: Materialize formatter diagnostic
-        if: failure()
-        run: |
-          mkdir -p diagnostics
-          cp tests/unit/test_unit_of_work_hardening.py diagnostics/
-          uv run --no-config --no-env-file --offline --locked --no-sources --extra dev ruff format diagnostics/test_unit_of_work_hardening.py
-
-      - name: Upload quality-gate diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: af-python-quality-diagnostics
-          path: |
-            af-quality.log
-            diagnostics/test_unit_of_work_hardening.py
-          if-no-files-found: error
-          retention-days: 1
+        run: python scripts/af_dev.py --action check --execute
