@@ -77,7 +77,7 @@ class UnitOfWork(AbstractContextManager[DatabaseTransaction]):
             raise ValueError("unit-of-work callback limit is invalid")
         self._transaction_context = transaction_context
         self._max_after_commit_callbacks = max_after_commit_callbacks
-        self._callbacks: list[Callable[[], None]] = []
+        self._callbacks: list[Callable[[], object]] = []
         self._transaction: DatabaseTransaction | None = None
         self._state = UnitOfWorkState.NEW
 
@@ -91,8 +91,8 @@ class UnitOfWork(AbstractContextManager[DatabaseTransaction]):
             raise UnitOfWorkLifecycleError()
         return self._transaction
 
-    def after_commit(self, callback: Callable[[], None], /) -> None:
-        """Register one synchronous callback while the transaction is active."""
+    def after_commit(self, callback: Callable[[], object], /) -> None:
+        """Register one synchronous callback whose runtime result must be ``None``."""
 
         if self._state is not UnitOfWorkState.ACTIVE:
             raise UnitOfWorkLifecycleError()
