@@ -232,10 +232,12 @@ def test_migration_lease_excludes_concurrent_real_service_owner(
         second = _runner(second_driver, (), owner=f"{backend}-owner-b")
         first.bootstrap()
 
-        with first.lock():
-            with pytest.raises(MigrationLockUnavailable):
-                with second.lock():
-                    pass
+        with (
+            first.lock(),
+            pytest.raises(MigrationLockUnavailable),
+            second.lock(),
+        ):
+            pass
 
         with second.lock():
             pass
