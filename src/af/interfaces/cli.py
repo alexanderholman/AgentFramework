@@ -3,19 +3,59 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated
+import re
+from collections.abc import Callable
+from importlib import import_module
+from typing import Annotated, cast
 
 import typer
 
 from af.application.ideons import InterpretRequest
 from af.bootstrap import AFApplication, create_application
 from af.domain.ideons.records import ContextGraph
-from af.framework.errors import AFError
+from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 from af.interfaces.presenters import agent_route_to_dict, delete_to_dict, task_to_dict
 
+_APPLICATION_FACTORY = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
+    r"[A-Za-z_][A-Za-z0-9_]*$"
+)
+_MAX_APPLICATION_FACTORY_LENGTH = 256
 
-def create_cli(application: AFApplication | None = None) -> typer.Typer:
+
+def _load_application_factory(value: str) -> Callable[[], AFApplication]:
+    if (
+        type(value) is not str
+        or len(value) > _MAX_APPLICATION_FACTORY_LENGTH
+        or _APPLICATION_FACTORY.fullmatch(value) is None
+    ):
+        raise PlatformError(
+            PlatformReason.CONFIGURATION_INVALID,
+            stage="cli.application-factory",
+        )
+    module_name, attribute = value.split(":", maxsplit=1)
+    try:
+        candidate = getattr(import_module(module_name), attribute)
+    except Exception as error:
+        raise PlatformError(
+            PlatformReason.CONFIGURATION_INVALID,
+            stage="cli.application-factory",
+            protected_cause=error,
+        ) from None
+    if not callable(candidate):
+        raise PlatformError(
+            PlatformReason.CONFIGURATION_INVALID,
+            stage="cli.application-factory",
+        )
+    return cast(Callable[[], AFApplication], candidate)
+
+
+def create_cli(
+    application: AFApplication | None = None,
+    *,
+    application_factory: Callable[[], AFApplication] | None = None,
+) -> typer.Typer:
     cli = typer.Typer(name="af", no_args_is_help=True, help="AF Agent Framework")
     task_commands = typer.Typer(name="tasks", no_args_is_help=True, help="Persisted Task CRUD")
     ideon_commands = typer.Typer(
@@ -28,13 +68,33 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
         no_args_is_help=True,
         help="Plan, inspect, apply, reverse, and verify database migrations",
     )
+    if application is not None and application_factory is not None:
+        raise ValueError("provide application or application_factory, not both")
     owns_application = application is None
     cached_application = application
+    configured_factory = application_factory or create_application
+    requires_application_type = application_factory is not None
+    accepts_operator_factory = application is None and application_factory is None
 
     def current() -> AFApplication:
         nonlocal cached_application
         if cached_application is None:
-            cached_application = create_application()
+            try:
+                resolved = configured_factory()
+            except AFError:
+                raise
+            except Exception as error:
+                raise PlatformError(
+                    PlatformReason.CONFIGURATION_INVALID,
+                    stage="cli.application-factory",
+                    protected_cause=error,
+                ) from None
+            if requires_application_type and not isinstance(resolved, AFApplication):
+                raise PlatformError(
+                    PlatformReason.CONFIGURATION_INVALID,
+                    stage="cli.application-factory",
+                )
+            cached_application = resolved
         return cached_application
 
     def fail(error: Exception) -> None:
@@ -42,7 +102,31 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
         raise typer.Exit(code=2)
 
     @cli.callback()
-    def lifecycle(context: typer.Context) -> None:
+    def lifecycle(
+        context: typer.Context,
+        factory_path: Annotated[
+            str | None,
+            typer.Option(
+                "--application-factory",
+                help="Explicit project application factory as module:callable",
+            ),
+        ] = None,
+    ) -> None:
+        nonlocal configured_factory, requires_application_type
+        if factory_path is not None:
+            if not accepts_operator_factory:
+                fail(
+                    PlatformError(
+                        PlatformReason.CONFIGURATION_INVALID,
+                        stage="cli.application-factory",
+                    )
+                )
+            try:
+                configured_factory = _load_application_factory(factory_path)
+                requires_application_type = True
+            except (AFError, TypeError, ValueError) as error:
+                fail(error)
+
         def close_owned_application() -> None:
             nonlocal cached_application
             if owns_application and cached_application is not None:
