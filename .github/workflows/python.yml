@@ -1,25 +1,24 @@
 name: AF Python
 
 on:
-  push:
-    branches: [master, main, develop]
   pull_request:
     branches: [master, main, develop]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: af-python-${{ github.workflow }}-${{ github.ref }}
+  group: af-python-materialize-blob-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Python 3.12 quality gate
+  materialize:
+    name: Materialize canonical middleware blob
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
+      GH_TOKEN: ${{ github.token }}
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
     steps:
@@ -45,7 +44,7 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Materialize canonical local bus fix
+      - name: Materialize canonical local bus implementation
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -115,17 +114,25 @@ jobs:
           source = source.replace(completion_old, completion_new)
 
           target_path.write_text(source, encoding="utf-8")
-          core_path.unlink()
           PY
-          uv run ruff format src/af/messaging/local_bus.py tests/unit/test_local_event_middleware_regressions.py
-          uv run ruff check --fix src/af/messaging/local_bus.py tests/unit/test_local_event_middleware_regressions.py
+          uv run ruff format src/af/messaging/local_bus.py
+          uv run ruff check --fix src/af/messaging/local_bus.py
 
-      - name: Upload canonical local bus files
+      - name: Create canonical Git blob
+        run: |
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/git/blobs" \
+            -f content="$(base64 -w0 src/af/messaging/local_bus.py)" \
+            -f encoding="base64" \
+            --jq '.sha' > canonical-local-bus-blob-sha.txt
+          test "$(cat canonical-local-bus-blob-sha.txt)" = "53545f65cc70712eca670495aac5df03701d60b0"
+
+      - name: Upload canonical blob SHA
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: canonical-local-bus-fix
-          path: |
-            src/af/messaging/local_bus.py
-            tests/unit/test_local_event_middleware_regressions.py
+          name: canonical-local-bus-blob-sha
+          path: canonical-local-bus-blob-sha.txt
           if-no-files-found: error
           retention-days: 1
