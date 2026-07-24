@@ -56,13 +56,15 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Capture lint diagnostics
-        run: python scripts/af_dev.py --action lint --execute > lint-diagnostics.txt 2>&1 || true
+      - name: Materialize Ruff lint-fix patch
+        run: |
+          uv run ruff check --fix src/af tests scripts
+          git diff --binary -- src/af tests scripts > ruff-lint-fix.patch
 
-      - name: Upload lint diagnostics
+      - name: Upload Ruff lint-fix patch
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: lint-diagnostics
-          path: lint-diagnostics.txt
+          name: ruff-lint-fix-patch
+          path: ruff-lint-fix.patch
           if-no-files-found: error
           retention-days: 1
