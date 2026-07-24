@@ -106,6 +106,11 @@ def _query() -> SearchQuery:
 
 
 def test_opensearch_passes_shared_real_service_suite() -> None:
+    # Load the optional client before the process-state guard so one-time dependency
+    # warning registration is not misattributed to an individual driver operation.
+    _url()
+    _module()
+
     @contextmanager
     def fixture() -> Iterator[SearchDriver]:
         index = _index("conformance")
@@ -187,9 +192,10 @@ def test_opensearch_real_bulk_partial_failure_never_reports_full_success() -> No
             body={
                 "processors": [
                     {
-                        "fail": {
+                        "set": {
                             "if": "ctx.resource_id == 'resource-b'",
-                            "message": "private-opensearch-rejection",
+                            "field": "projection_version",
+                            "value": "private-opensearch-rejection",
                         }
                     }
                 ]
