@@ -64,7 +64,7 @@ class LocalEventMiddleware(Protocol):
         envelope: MessageEnvelope,
         call_next: AsyncLocalEventCallNext,
         /,
-    ) -> object: ...
+    ) -> Awaitable[LocalEventDispatchReport]: ...
 
 
 class LocalEventTelemetryMiddleware:
@@ -313,7 +313,7 @@ class LocalEventBus:
             return pending
 
         try:
-            result = extension.dispatch_async(envelope, call_next)
+            result: object = extension.dispatch_async(envelope, call_next)
             if inspect.isasyncgen(result):
                 await result.aclose()
                 raise InvalidMessageSchema(
