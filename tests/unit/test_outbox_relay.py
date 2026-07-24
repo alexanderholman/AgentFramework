@@ -287,9 +287,7 @@ def test_expired_stolen_lease_prevents_stale_publication_acknowledgement(tmp_pat
     assert stealing.called
     with first_driver.transaction(read_only=True) as transaction:
         pending = outbox.pending(transaction, now=clock())
-    assert tuple(item.envelope.metadata.message_id for item in pending) == (
-        "event-at-least-once",
-    )
+    assert tuple(item.envelope.metadata.message_id for item in pending) == ("event-at-least-once",)
     first_driver.close()
     second_driver.close()
 
