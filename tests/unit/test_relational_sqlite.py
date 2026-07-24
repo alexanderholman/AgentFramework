@@ -181,6 +181,7 @@ def test_sqlite_capabilities_fail_explicitly_and_close_is_idempotent() -> None:
     assert driver.supports(DatabaseFeature.TRANSACTIONS)
     assert driver.supports(DatabaseFeature.SAVEPOINTS)
     assert driver.supports(DatabaseFeature.STREAMING)
+    assert driver.supports(DatabaseFeature.CANCELLATION)
     assert not driver.supports(DatabaseFeature.ADVISORY_LOCKS)
     with pytest.raises(UnsupportedDatabaseFeature) as captured:
         driver.require(DatabaseFeature.ADVISORY_LOCKS)
@@ -284,6 +285,7 @@ def test_sqlite_rejects_invalid_contract_calls_and_finished_transaction_use() ->
                 DatabaseFeature.TRANSACTIONS,
                 DatabaseFeature.SAVEPOINTS,
                 DatabaseFeature.STREAMING,
+                DatabaseFeature.CANCELLATION,
             }
         )
         with pytest.raises(TypeError):

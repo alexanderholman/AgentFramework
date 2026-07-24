@@ -28,12 +28,23 @@ _FEATURES = frozenset(
         DatabaseFeature.TRANSACTIONS,
         DatabaseFeature.SAVEPOINTS,
         DatabaseFeature.STREAMING,
+        DatabaseFeature.CANCELLATION,
     }
 )
 
 
 def _failure(error: BaseException, *, stage: str) -> DatabaseOperationError:
-    return DatabaseOperationError(stage=stage, protected_cause=error)
+    reason = (
+        PlatformReason.CANCELLED
+        if isinstance(error, sqlite3.Error)
+        and getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT
+        else PlatformReason.PERMANENT_FAILURE
+    )
+    return DatabaseOperationError(
+        reason=reason,
+        stage=stage,
+        protected_cause=error,
+    )
 
 
 class _SQLiteCursor(DatabaseCursor):
@@ -237,16 +248,16 @@ class SQLiteDriver(AbstractContextManager["SQLiteDriver"]):
             path = database
         else:
             raise ValueError("SQLite database path must be non-empty")
-        if path != ":memory:":
-            Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
         try:
+            if path != ":memory:":
+                Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
             self._connection = sqlite3.connect(
                 path,
                 isolation_level=None,
                 check_same_thread=False,
             )
             self._connection.execute("PRAGMA foreign_keys = ON")
-        except sqlite3.Error as error:
+        except (OSError, sqlite3.Error) as error:
             raise _failure(error, stage="database.connect") from None
         self._lock = RLock()
         self._transaction_active = False
@@ -281,6 +292,17 @@ class SQLiteDriver(AbstractContextManager["SQLiteDriver"]):
         if type(read_only) is not bool:
             raise ValueError("database transaction read-only flag must be boolean")
         return _SQLiteTransactionContext(self, read_only=read_only)
+
+    def cancel(self) -> None:
+        """Interrupt an operation running on this connection from another thread."""
+
+        if self._closed:
+            return
+        try:
+            self._connection.interrupt()
+        except sqlite3.Error as error:
+            if not self._closed:
+                raise _failure(error, stage="database.cancel") from None
 
     def close(self) -> None:
         with self._lock:
