@@ -1496,3 +1496,41 @@ Two merge blockers in the PR's deterministic reference slice:
 - Script: `[SCRIPT:af-dev]`
 
 ---
+
+---
+
+## Run #025 - Repository-Local Version-Control Bootstrap
+**Date**: 2026-07-24
+**Agent**: Codex
+**Status**: Completed
+
+### Inputs
+- Governed self-operation epic #120
+- Priority bootstrap issue #123
+- The required literal command `af init version control`
+
+### Outputs
+- Added immutable version-control request, observation, manifest, and result contracts
+- Added a lightweight application controller and composition root
+- Added a guarded Git backend for the local bare coordination remote and worktree reserve
+- Added the nested Typer command with stable JSON output and sanitized exit-code-2 errors
+- Added deterministic unit, integration, concurrency, tamper, and CLI coverage
+
+### Verified Results
+- Focused suite: 64 passed
+- Ruff format and lint: passed for all eight intended implementation and test files
+- Strict mypy: passed for the four new source modules
+- Git backend branch coverage: 92 percent
+- Independent static re-review: no remaining release blocker
+
+### Issues Encountered
+- Final review found and the implementation corrected worktree-config URL redirection,
+  dangling-manifest partial mutation, protocol typing, SHA-256 format drift, unsafe bare
+  state, push-URL drift, concurrency, and credential-redaction edge cases
+- The complete repository gate and hosted pull-request CI remain to run on the published
+  branch; no result is claimed here for those gates
+
+### Related References
+- Epic #120
+- Issue #123
+- `[SCRIPT:af-dev]`

@@ -2502,3 +2502,52 @@ does not weaken the external candidate evidence or maintainer-approval requireme
 - Clarified: `README.md`, `INSTALL.md`, `SECURITY.md`, `scripts/registry.yaml`
 
 ---
+
+---
+
+## [DEC-038] Use a Manifest-Owned Local Bare Remote as the Self-Operation Coordination Plane
+**Date**: 2026-07-24
+**Status**: Accepted
+**Decision Maker**: Alexander Holman / Codex implementation of issue #123
+
+### Context
+AF self-operation needs isolated branches without making GitHub or the operator's upstream
+the coordination mechanism. The bootstrap must be useful immediately after cloning while
+remaining deterministic, local, auditable, and authority-neutral.
+
+### Decision
+1. Place one private bare coordination repository and reserved worktree root under the Git
+   common directory so linked work can share local branch state.
+2. Bind ownership and topology to a canonical digest-bearing manifest; do not adopt or
+   repair unowned pre-existing state.
+3. Seed only the attached current branch, preserve the repository object format, and
+   serialize initializers with a common-directory lock.
+4. Observe but never fetch from, push to, rewrite, or expose credentials from the upstream.
+5. Reject configuration or filesystem features that can redirect or extend the bounded
+   local operation, including worktree-scope configuration, URL rewrites, push URLs,
+   symlinks, alternates, and custom hooks.
+6. Keep later branch creation, code execution, publication, review, qualification, and
+   admission outside this command's authority.
+
+### Consequences
+**Positive:**
+- Parallel AF stages receive a deterministic local coordination plane.
+- Bootstrap is idempotent, network-free, inspectable, and safe to rerun.
+- Existing Git and upstream state remain authoritative and untouched.
+
+**Negative:**
+- Repositories using worktree-scope Git configuration must remove or separately admit it
+  before initialization.
+- Invalid or partially owned managed state requires explicit operator resolution; AF does
+  not perform destructive repair.
+- This foundation alone does not create worktrees or implement the self-operation stages.
+
+### Related Decisions
+- DEC-028 (Adopt an Async-Capable Application and Provider Lifecycle)
+- Epic #120 and issue #123
+
+### Output References
+- `src/af/framework/version_control.py`
+- `src/af/infrastructure/git_version_control.py`
+- `src/af/interfaces/cli.py`
+- Version-control unit, integration, and feature tests

@@ -8,15 +8,19 @@ from collections.abc import Callable
 from contextlib import suppress
 from importlib import import_module
 from inspect import iscoroutine
+from pathlib import Path
 from typing import Annotated, cast
 
 import typer
 
 from af.application.ideons import InterpretRequest
+from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication, create_application
+from af.bootstrap_version_control import create_version_control_controller
 from af.domain.ideons.records import ContextGraph
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
+from af.framework.version_control import VersionControlRequest
 from af.interfaces.presenters import agent_route_to_dict, delete_to_dict, task_to_dict
 
 _APPLICATION_FACTORY = re.compile(
@@ -61,6 +65,7 @@ def create_cli(
     application: AFApplication | None = None,
     *,
     application_factory: Callable[[], AFApplication] | None = None,
+    version_control: VersionControlController | None = None,
 ) -> typer.Typer:
     cli = typer.Typer(name="af", no_args_is_help=True, help="AF Agent Framework")
     task_commands = typer.Typer(name="tasks", no_args_is_help=True, help="Persisted Task CRUD")
@@ -74,10 +79,21 @@ def create_cli(
         no_args_is_help=True,
         help="Plan, inspect, apply, reverse, and verify database migrations",
     )
+    initialization_commands = typer.Typer(
+        name="init",
+        no_args_is_help=True,
+        help="Initialize AF's local operating foundations",
+    )
+    version_commands = typer.Typer(
+        name="version",
+        no_args_is_help=True,
+        help="Initialize version-control foundations",
+    )
     if application is not None and application_factory is not None:
         raise ValueError("provide application or application_factory, not both")
     owns_application = application is None
     cached_application = application
+    cached_version_control = version_control
     configured_factory: Callable[[], object] = (
         create_application if application_factory is None else application_factory
     )
@@ -123,6 +139,12 @@ def create_cli(
             else:
                 cached_application = cast(AFApplication, resolved)
         return cached_application
+
+    def current_version_control() -> VersionControlController:
+        nonlocal cached_version_control
+        if cached_version_control is None:
+            cached_version_control = create_version_control_controller()
+        return cached_version_control
 
     def fail(error: Exception) -> None:
         typer.echo(str(error), err=True)
@@ -313,6 +335,43 @@ def create_cli(
         except (AFError, TypeError, ValueError) as error:
             fail(error)
 
+    @version_commands.command("control")
+    def initialize_version_control(
+        upstream_remote: Annotated[
+            str | None,
+            typer.Option(
+                "--upstream-remote",
+                help="Authoritative existing remote; required when discovery is ambiguous",
+            ),
+        ] = None,
+        coordination_remote: Annotated[
+            str,
+            typer.Option(
+                "--coordination-remote",
+                help="Managed local bare-remote name",
+            ),
+        ] = "af-local",
+    ) -> None:
+        """Establish private local coordination for isolated AF branches."""
+        try:
+            result = current_version_control().initialize(
+                VersionControlRequest(
+                    cwd=Path.cwd(),
+                    upstream_remote=upstream_remote,
+                    coordination_remote=coordination_remote,
+                )
+            )
+            typer.echo(
+                json.dumps(
+                    result.to_dict(),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+        except (AFError, TypeError, ValueError) as error:
+            fail(error)
+
     @cli.command()
     def serve(
         host: Annotated[str | None, typer.Option()] = None,
@@ -368,6 +427,8 @@ def create_cli(
         except AFError as error:
             fail(error)
 
+    initialization_commands.add_typer(version_commands, name="version")
+    cli.add_typer(initialization_commands, name="init")
     cli.add_typer(task_commands, name="tasks")
     cli.add_typer(migration_commands, name="migrations")
     cli.add_typer(ideon_commands, name="ideon")

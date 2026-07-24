@@ -1539,3 +1539,53 @@ can verify evidence and authorize deployment.
 - SPEC-017 (Canonical Production Policy and External Admission Evidence)
 
 ---
+
+---
+
+## [SPEC-024] Repository-Local Version-Control Coordination Bootstrap
+**Date**: 2026-07-24
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Provide the literal `af init version control` command as the bounded foundation for
+parallel AF development. The command records the current committed branch and sanitized
+upstream identity, then establishes a private bare coordination repository in the Git
+common directory without contacting or changing the upstream.
+
+### Requirements
+- MUST require a Git worktree, committed attached HEAD, and supported SHA-1 or SHA-256
+  object format
+- MUST deterministically select an explicit, tracked, or sole non-AF upstream and fail on
+  absent, ambiguous, multi-URL, or unsupported configuration
+- MUST redact credentials and URL query or fragment material from all persisted and public
+  observations
+- MUST create `<git-common-dir>/af/remotes/coordination.git`, reserve
+  `<git-common-dir>/af/worktrees`, register the exact local `af-local` URL by default, and
+  seed only the current branch
+- MUST serialize concurrent initialization and emit a canonical digest-bound manifest
+- MUST treat existing managed state as untrusted and reject missing ownership, path or
+  object-format drift, push URLs, symlinks, alternates, custom hooks, unsupported local or
+  worktree configuration, and malformed storage
+- MUST run Git without a shell, interactive credentials, ambient Git redirection, or
+  non-file transport and MUST bound command time and captured output
+- MUST be idempotent and grant no publish, pull-request, merge, issue, or admission
+  authority
+
+### Tests
+- **TEST-024-1**: A normal clone initializes stable JSON, a same-format bare remote, the
+  exact current branch, reserved worktree root, and canonical manifest
+- **TEST-024-2**: Exact and concurrent reruns are idempotent; a new local commit refreshes
+  only the local seed and manifest
+- **TEST-024-3**: Detached, unborn, non-repository, ambiguous, conflicting, excessive, and
+  malformed Git states fail closed before unintended mutation
+- **TEST-024-4**: Credential forms, ambient Git variables, worktree URL rewrites, dangerous
+  hooks, alternates, and internal or dangling symlinks cannot escape or redirect the
+  managed operation
+- **TEST-024-5**: The nested CLI command emits canonical JSON and maps sanitized expected
+  failures to exit code 2
+
+### Related Specs
+- SPEC-008 (Script-First Automation and Only Write Once)
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- Epic #120 and bootstrap issue #123
