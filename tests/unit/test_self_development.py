@@ -229,6 +229,9 @@ class SelfDevelopmentPlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "candidate identities must be unique"):
             snapshot(candidate("issue:120"), candidate("issue:120"))
 
+        with self.assertRaisesRegex(ValueError, "candidates are invalid"):
+            snapshot(*(candidate(f"issue:{index}") for index in range(1_001)))
+
         with self.assertRaisesRegex(ValueError, "head SHA"):
             replace(snapshot(candidate("issue:120")), head_sha="master")
 
@@ -237,6 +240,33 @@ class SelfDevelopmentPlannerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "aware"):
             replace(candidate("issue:120"), created_at=datetime(2026, 7, 24))
+
+    def test_candidate_and_policy_bounds_fail_closed(self) -> None:
+        for field_name, value in (
+            ("priority", 10),
+            ("blocking_impact", 10_001),
+            ("risk", 10_001),
+        ):
+            with (
+                self.subTest(field_name=field_name),
+                self.assertRaisesRegex(ValueError, field_name.replace("_", " ")),
+            ):
+                replace(candidate("issue:120"), **{field_name: value})
+
+        with self.assertRaisesRegex(ValueError, "procedure identity"):
+            replace(candidate("issue:120"), procedure_id="Not Canonical")
+
+        with self.assertRaisesRegex(ValueError, "eligibility facts"):
+            replace(candidate("issue:120"), dependencies_ready=1)
+
+        for invalid_fields in (
+            {"max_snapshot_age_seconds": 0},
+            {"max_snapshot_age_seconds": 86_401},
+            {"required_gates": ()},
+            {"required_gates": ("pytest", "pytest")},
+        ):
+            with self.subTest(invalid_fields=invalid_fields), self.assertRaises(ValueError):
+                replace(policy(), **invalid_fields)
 
     def test_snapshot_head_is_bound_into_digest(self) -> None:
         first = snapshot(candidate("issue:120"))
