@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,6 +17,7 @@ from af.framework.relational import (
     DatabaseStatement,
     UnsupportedDatabaseFeature,
 )
+from af.infrastructure import sqlite as sqlite_module
 from af.infrastructure.sqlite import SQLiteDriver
 from af.testing.conformance import (
     ConformanceCase,
@@ -137,6 +141,29 @@ def test_sqlite_stream_is_bounded_by_transaction_lifetime() -> None:
             next(cursor)
 
 
+def test_sqlite_cursor_close_is_idempotent_and_sanitized() -> None:
+    transaction = Mock()
+    transaction.active = True
+    raw_cursor = Mock()
+    raw_cursor.description = ()
+    close_failure = sqlite3.OperationalError("private sqlite close detail")
+    raw_cursor.close.side_effect = close_failure
+    cursor = sqlite_module._SQLiteCursor(
+        cast(Any, transaction),
+        cast(Any, raw_cursor),
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        cursor.close()
+    cursor.close()
+
+    assert captured.value.stage == "database.cursor-close"
+    assert captured.value.protected_cause is close_failure
+    assert "private sqlite close detail" not in str(captured.value)
+    assert "private sqlite close detail" not in repr(captured.value)
+    assert raw_cursor.close.call_count == 1
+
+
 def test_sqlite_read_only_mode_cannot_be_bypassed_by_statement_metadata() -> None:
     with SQLiteDriver(":memory:") as driver:
         _create_schema(driver)
@@ -189,9 +216,9 @@ def test_sqlite_capabilities_fail_explicitly_and_close_is_idempotent() -> None:
 
     driver.close()
     driver.close()
-    with pytest.raises(DatabaseOperationError) as captured:
+    with pytest.raises(DatabaseOperationError) as closed:
         driver.transaction()
-    assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
+    assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
 def test_sqlite_rejects_nested_top_level_transactions_and_active_shutdown() -> None:
