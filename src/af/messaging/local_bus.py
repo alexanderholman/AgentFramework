@@ -177,9 +177,9 @@ class LocalEventBus:
                 raise InvalidMessageSchema(
                     "local event middleware must define sync and async dispatch"
                 )
-            if inspect.iscoroutinefunction(
+            if inspect.iscoroutinefunction(extension.dispatch) or inspect.isasyncgenfunction(
                 extension.dispatch
-            ) or inspect.isasyncgenfunction(extension.dispatch):
+            ):
                 raise InvalidMessageSchema(
                     "local event synchronous middleware dispatch cannot be asynchronous"
                 )
