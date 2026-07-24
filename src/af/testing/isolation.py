@@ -91,8 +91,7 @@ class ProcessStateGuard:
             ):
                 surfaces.append("warnings")
             if any(
-                thread not in snapshot.threads and thread.is_alive()
-                for thread in current.threads
+                thread not in snapshot.threads and thread.is_alive() for thread in current.threads
             ):
                 surfaces.append("threads")
             _restore_process_state(snapshot, surfaces)
@@ -108,8 +107,7 @@ class ProcessStateGuard:
             add_note = getattr(exc, "add_note", None)
             if callable(add_note):
                 add_note(
-                    "AF testing detected process-global state changes on: "
-                    + ", ".join(normalized)
+                    "AF testing detected process-global state changes on: " + ", ".join(normalized)
                 )
             return False
         raise ProcessStateLeak(normalized)
@@ -258,9 +256,8 @@ def inspect_test_application(application: TestApplication) -> ApplicationLeakRep
 
     root = lifecycle._root
     with root._ownership_lock:
-        retained_resources += (
-            len(root._container_owned_resources)
-            + len(root._externally_owned_resources)
+        retained_resources += len(root._container_owned_resources) + len(
+            root._externally_owned_resources
         )
 
     retained_resources += len(lifecycle._provider_resources)
@@ -291,9 +288,7 @@ def assert_test_application_clean(application: TestApplication) -> None:
     application.assert_clean()
     report = inspect_test_application(application)
     if not report.clean:
-        raise AssertionError(
-            "test application leaked state: " + ", ".join(report.leaked_surfaces)
-        )
+        raise AssertionError("test application leaked state: " + ", ".join(report.leaked_surfaces))
 
 
 def _collect_scopes(roots: tuple[Container, ...]) -> tuple[Container, ...]:
