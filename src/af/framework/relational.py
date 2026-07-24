@@ -44,6 +44,8 @@ class DatabaseFeature(StrEnum):
     JSON = "json"
     VECTOR = "vector"
     FULL_TEXT_SEARCH = "full-text-search"
+    POOLING = "pooling"
+    CANCELLATION = "cancellation"
 
 
 class DatabaseOperationError(PlatformError):
@@ -200,5 +202,7 @@ class DatabaseDriver(Protocol):
         *,
         read_only: bool = False,
     ) -> AbstractContextManager[DatabaseTransaction]: ...
+
+    def cancel(self) -> None: ...
 
     def close(self) -> None: ...
