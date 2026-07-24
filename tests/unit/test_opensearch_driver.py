@@ -1,0 +1,403 @@
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Mapping
+
+import pytest
+from af.search.opensearch import (
+    OpenSearchDriver,
+    OpenSearchOperationError,
+    opensearch_index_body,
+)
+
+from af.framework.errors import PlatformReason
+from af.search.contracts import (
+    ResourceEnvelope,
+    ResourceKind,
+    SearchFilter,
+    SearchQuery,
+)
+
+
+def _resource(
+    resource_id: str,
+    *,
+    tenant_id: str = "tenant-a",
+    acl: tuple[str, ...] = ("group:research",),
+    text: str = "bounded searchable energy content",
+    projection_version: int = 1,
+) -> ResourceEnvelope:
+    return ResourceEnvelope(
+        resource_id=resource_id,
+        kind=ResourceKind.TEXT,
+        source_id="source-primary",
+        authoritative_locator=f"af://source-primary/{resource_id}",
+        tenant_id=tenant_id,
+        projection_version=projection_version,
+        acl=acl,
+        provenance=("sha256:" + "a" * 64,),
+        text=text,
+        attributes={"language": "en"},
+    )
+
+
+def _query(
+    *,
+    tenant_ids: tuple[str, ...] = ("tenant-a",),
+    acl: tuple[str, ...] = ("group:research",),
+    limit: int = 20,
+    deadline_ms: int = 1_000,
+) -> SearchQuery:
+    return SearchQuery(
+        text="energy",
+        filters=(
+            SearchFilter("tenant_id", tenant_ids),
+            SearchFilter("acl", acl),
+        ),
+        limit=limit,
+        deadline_ms=deadline_ms,
+    )
+
+
+class _Indices:
+    def __init__(self) -> None:
+        self.mapping: object = {"af-search": {"mappings": opensearch_index_body()["mappings"]}}
+
+    def get_mapping(
+        self,
+        *,
+        index: object,
+        params: object = None,
+        headers: object = None,
+    ) -> object:
+        del index, params, headers
+        return self.mapping
+
+
+class RecordingClient:
+    def __init__(self) -> None:
+        self.indices = _Indices()
+        self.info_response: object = {"version": {"distribution": "opensearch", "number": "3.7.0"}}
+        self.bulk_response: object | None = None
+        self.search_response: object = {
+            "timed_out": False,
+            "_shards": {"failed": 0},
+            "hits": {"hits": []},
+        }
+        self.delete_response: object = {"_id": "unused", "result": "not_found"}
+        self.bulk_calls: list[tuple[object, object, object]] = []
+        self.search_calls: list[tuple[object, object, object]] = []
+        self.delete_calls: list[tuple[object, object, object]] = []
+        self.closed = 0
+
+    def info(self, *, params: object = None, headers: object = None) -> object:
+        del params, headers
+        return self.info_response
+
+    def bulk(
+        self,
+        *,
+        body: object,
+        index: object = None,
+        params: object = None,
+        headers: object = None,
+    ) -> object:
+        del headers
+        self.bulk_calls.append((index, body, params))
+        if self.bulk_response is not None:
+            return self.bulk_response
+        assert type(body) is tuple
+        return {
+            "errors": False,
+            "items": [
+                {"index": {"_id": action["index"]["_id"], "status": 201}} for action in body[::2]
+            ],
+        }
+
+    def search(
+        self,
+        *,
+        body: object = None,
+        index: object = None,
+        params: object = None,
+        headers: object = None,
+    ) -> object:
+        del headers
+        self.search_calls.append((index, body, params))
+        return self.search_response
+
+    def delete(
+        self,
+        *,
+        index: object,
+        id: object,
+        params: object = None,
+        headers: object = None,
+    ) -> object:
+        del headers
+        self.delete_calls.append((index, id, params))
+        return self.delete_response
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def _document_id(resource: ResourceEnvelope) -> str:
+    identity = "\0".join((resource.tenant_id, resource.source_id, resource.resource_id))
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _hit_source(resource: ResourceEnvelope) -> dict[str, object]:
+    return {
+        "resource_id": resource.resource_id,
+        "source_id": resource.source_id,
+        "authoritative_locator": resource.authoritative_locator,
+        "tenant_id": resource.tenant_id,
+        "projection_version": resource.projection_version,
+        "acl": list(resource.acl),
+        "provenance": list(resource.provenance),
+    }
+
+
+def test_opensearch_bulk_write_uses_stable_identity_and_canonical_document() -> None:
+    client = RecordingClient()
+    resource = _resource("resource-a")
+    driver = OpenSearchDriver(client, index="af-search", request_timeout=5.0)
+
+    assert driver.upsert((resource,)) == 1
+
+    index, body, params = client.bulk_calls[0]
+    assert index == "af-search"
+    assert params == {"refresh": "wait_for", "request_timeout": 5.0}
+    assert body == (
+        {"index": {"_id": _document_id(resource)}},
+        {
+            "resource_id": "resource-a",
+            "kind": "text",
+            "source_id": "source-primary",
+            "authoritative_locator": "af://source-primary/resource-a",
+            "tenant_id": "tenant-a",
+            "projection_version": 1,
+            "acl": ["group:research"],
+            "provenance": ["sha256:" + "a" * 64],
+            "text": "bounded searchable energy content",
+            "attributes": {"language": "en"},
+        },
+    )
+
+
+def test_opensearch_pushes_tenant_and_acl_filters_before_top_k() -> None:
+    client = RecordingClient()
+    resource = _resource("resource-a")
+    client.search_response = {
+        "timed_out": False,
+        "_shards": {"failed": 0},
+        "hits": {
+            "hits": [
+                {
+                    "_id": _document_id(resource),
+                    "_score": 2.5,
+                    "_source": _hit_source(resource),
+                }
+            ]
+        },
+    }
+    driver = OpenSearchDriver(client, index="af-search", request_timeout=5.0)
+
+    hits = driver.search(
+        _query(
+            tenant_ids=("tenant-a", "tenant-b"),
+            acl=("group:research", "user:alice"),
+            limit=1,
+            deadline_ms=250,
+        )
+    )
+
+    assert len(hits) == 1
+    assert hits[0].resource_id == "resource-a"
+    assert hits[0].acl_evidence == ("group:research",)
+    index, body, params = client.search_calls[0]
+    assert index == "af-search"
+    assert params == {"request_timeout": 0.25}
+    assert type(body) is dict
+    assert body["size"] == 1
+    assert body["query"]["bool"]["filter"] == [
+        {"terms": {"tenant_id": ["tenant-a", "tenant-b"]}},
+        {"terms": {"acl": ["group:research", "user:alice"]}},
+    ]
+    assert body["sort"] == [
+        {"_score": "desc"},
+        {"tenant_id": "asc"},
+        {"source_id": "asc"},
+        {"resource_id": "asc"},
+    ]
+
+
+def test_opensearch_rejects_backend_policy_leaks_and_unknown_filters() -> None:
+    client = RecordingClient()
+    leaked = _resource("resource-a", tenant_id="tenant-private", acl=("group:private",))
+    client.search_response = {
+        "timed_out": False,
+        "_shards": {"failed": 0},
+        "hits": {
+            "hits": [
+                {
+                    "_id": _document_id(leaked),
+                    "_score": 100.0,
+                    "_source": _hit_source(leaked),
+                }
+            ]
+        },
+    }
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.search(_query())
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert "tenant-private" not in str(captured.value)
+    query = SearchQuery(
+        text="energy",
+        filters=(
+            SearchFilter("tenant_id", ("tenant-a",)),
+            SearchFilter("acl", ("group:research",)),
+            SearchFilter("language", ("en",)),
+        ),
+    )
+    with pytest.raises(OpenSearchOperationError) as unsupported:
+        driver.search(query)
+    assert unsupported.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+    assert len(client.search_calls) == 1
+
+
+def test_opensearch_bulk_partial_failure_is_exhaustive_and_sanitized() -> None:
+    client = RecordingClient()
+    first = _resource("resource-a")
+    second = _resource("resource-b")
+    client.bulk_response = {
+        "errors": True,
+        "items": [
+            {"index": {"_id": _document_id(first), "status": 201}},
+            {
+                "index": {
+                    "_id": _document_id(second),
+                    "status": 429,
+                    "error": {"reason": "private-index-secret"},
+                }
+            },
+        ],
+    }
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.upsert((first, second))
+
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert "private-index-secret" not in str(captured.value)
+    assert "private-index-secret" not in repr(captured.value)
+
+    client.bulk_response = {"errors": False, "items": []}
+    with pytest.raises(OpenSearchOperationError) as malformed:
+        driver.upsert((first,))
+    assert malformed.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+def test_opensearch_delete_is_tenant_scoped_and_idempotent() -> None:
+    client = RecordingClient()
+    resource = _resource("resource-a", tenant_id="tenant-b")
+    expected_id = _document_id(resource)
+    client.delete_response = {"_id": expected_id, "result": "deleted"}
+    driver = OpenSearchDriver(client, index="af-search", request_timeout=3.0)
+
+    assert driver.delete(
+        tenant_id="tenant-b",
+        source_id="source-primary",
+        resource_id="resource-a",
+    )
+    assert client.delete_calls == [
+        (
+            "af-search",
+            expected_id,
+            {"ignore": 404, "refresh": "wait_for", "request_timeout": 3.0},
+        )
+    ]
+
+    client.delete_response = {"_id": expected_id, "result": "not_found"}
+    assert not driver.delete(
+        tenant_id="tenant-b",
+        source_id="source-primary",
+        resource_id="resource-a",
+    )
+
+
+def test_opensearch_timeouts_cancellation_and_shutdown_are_honest() -> None:
+    client = RecordingClient()
+    client.search_response = {
+        "timed_out": True,
+        "_shards": {"failed": 0},
+        "hits": {"hits": []},
+    }
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as timed_out:
+        driver.search(_query())
+    assert timed_out.value.reason is PlatformReason.CANCELLED
+
+    with pytest.raises(OpenSearchOperationError) as unsupported:
+        driver.cancel()
+    assert unsupported.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+
+    driver.close()
+    driver.close()
+    assert client.closed == 1
+    with pytest.raises(OpenSearchOperationError) as closed:
+        driver.upsert((_resource("resource-a"),))
+    assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        {},
+        {"af-search": {"mappings": {}}},
+        {
+            "af-search": {
+                "mappings": {
+                    **opensearch_index_body()["mappings"],
+                    "dynamic": True,
+                }
+            }
+        },
+        {
+            "first": {"mappings": opensearch_index_body()["mappings"]},
+            "second": {"mappings": opensearch_index_body()["mappings"]},
+        },
+    ],
+)
+def test_opensearch_requires_one_preexisting_strict_af_mapping(mapping: object) -> None:
+    client = RecordingClient()
+    client.indices.mapping = mapping
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        OpenSearchDriver(client, index="af-search")
+
+    assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {},
+        {"version": {"distribution": "elasticsearch", "number": "9.1.0"}},
+        {"version": {"distribution": "opensearch", "number": "2.19.6"}},
+        {"version": {"distribution": "opensearch", "number": "private\nsecret"}},
+    ],
+)
+def test_opensearch_rejects_unverified_service_identity(info: Mapping[str, object]) -> None:
+    client = RecordingClient()
+    client.info_response = info
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        OpenSearchDriver(client, index="af-search")
+
+    assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE

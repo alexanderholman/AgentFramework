@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+import hashlib
+import importlib
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from types import ModuleType
+from uuid import uuid4
+
+import pytest
+from af.search.opensearch import OpenSearchDriver, opensearch_index_body
+from af.search.opensearch_manager import opensearch_registration
+
+from af.framework.managers import CapabilityBinding, ConnectionRef, HealthStatus
+from af.search.manager import SearchDriver, SearchFeature
+from af.testing import ConformanceEvidence, RealServiceHook, SearchDriverConformanceSuite
+
+
+def _url() -> str:
+    value = os.environ.get("AF_OPENSEARCH_TEST_URL")
+    if value is None:
+        pytest.skip("AF_OPENSEARCH_TEST_URL is not configured")
+    return value
+
+
+def _expected_version() -> str:
+    value = os.environ.get("AF_OPENSEARCH_TEST_VERSION")
+    if value is None:
+        pytest.skip("AF_OPENSEARCH_TEST_VERSION is not configured")
+    return value
+
+
+def _module() -> ModuleType:
+    return importlib.import_module("opensearchpy")
+
+
+def _client() -> object:
+    constructor = _module().OpenSearch
+    return constructor(
+        [_url()],
+        http_compress=True,
+        timeout=5.0,
+        max_retries=0,
+        retry_on_timeout=False,
+    )
+
+
+def _index(prefix: str) -> str:
+    return f"af-{prefix}-{uuid4().hex}"
+
+
+def _create(index: str) -> None:
+    client = _client()
+    try:
+        client.indices.create(  # type: ignore[attr-defined]
+            index=index,
+            body=opensearch_index_body(),
+            params={"wait_for_active_shards": "1"},
+        )
+    finally:
+        client.close()  # type: ignore[attr-defined]
+
+
+def _drop(index: str) -> None:
+    client = _client()
+    try:
+        client.indices.delete(  # type: ignore[attr-defined]
+            index=index,
+            params={"ignore": 404},
+        )
+    finally:
+        client.close()  # type: ignore[attr-defined]
+
+
+def test_opensearch_passes_shared_real_service_suite() -> None:
+    @contextmanager
+    def fixture() -> Iterator[SearchDriver]:
+        index = _index("conformance")
+        _create(index)
+        client = _client()
+        driver = OpenSearchDriver(client, index=index, request_timeout=5.0)
+        try:
+            yield driver
+        finally:
+            driver.close()
+            _drop(index)
+
+    report = SearchDriverConformanceSuite().run_real(
+        RealServiceHook("opensearch-3-7", fixture, enabled=True)
+    )
+
+    assert report.evidence is ConformanceEvidence.REAL_SERVICE
+    assert report.integration == "opensearch-3-7"
+
+
+def test_opensearch_3_7_registration_binds_client_and_service_identity() -> None:
+    index = _index("registration")
+    _create(index)
+    observed_at = datetime(2026, 7, 24, 16, tzinfo=UTC)
+    registration = opensearch_registration(clock=lambda: observed_at)
+    ref = ConnectionRef("search", "primary", "opensearch")
+    driver = registration.factory(
+        ref,
+        {
+            "driver": "opensearch",
+            "url": _url(),
+            "index": index,
+            "request_timeout": 5.0,
+        },
+    )
+    binding = CapabilityBinding(
+        driver_version=registration.manifest.version,
+        artifact_digest=registration.manifest.artifact_digest,
+        dependency_graph_digest=registration.manifest.dependency_graph_digest,
+        configuration_digest=hashlib.sha256(b"opensearch-real-config").hexdigest(),
+        deployment_profile="integration",
+        policy_version="policy-v1",
+    )
+    try:
+        evidence = registration.verifier(ref, driver, binding)
+        assert isinstance(driver, OpenSearchDriver)
+        assert driver.server_version == _expected_version() == "3.7.0"
+        assert evidence.binding == binding
+        assert evidence.health is HealthStatus.HEALTHY
+        assert evidence.observed_at == observed_at
+        assert evidence.capabilities.supports(
+            {
+                SearchFeature.POLICY_PUSHDOWN.value,
+                SearchFeature.FULL_TEXT.value,
+                SearchFeature.INDEXING.value,
+                SearchFeature.TOMBSTONES.value,
+                SearchFeature.PERSISTENCE.value,
+            }
+        )
+        assert not evidence.capabilities.supports((SearchFeature.CANCELLATION.value,))
+    finally:
+        disposer = registration.disposer
+        if disposer is not None:
+            disposer(driver)
+        else:
+            driver.close()
+        _drop(index)
