@@ -33,11 +33,13 @@ def _url() -> str:
 
 
 def test_mariadb_server_identity_is_verified() -> None:
-    with MariaDBDriver(_url()) as driver:
-        with driver.transaction(read_only=True) as transaction:
-            rows = transaction.query(
-                DatabaseStatement("SELECT VERSION() AS version", read_only=True)
-            )
+    with (
+        MariaDBDriver(_url()) as driver,
+        driver.transaction(read_only=True) as transaction,
+    ):
+        rows = transaction.query(
+            DatabaseStatement("SELECT VERSION() AS version", read_only=True)
+        )
     version = rows[0]["version"]
     assert isinstance(version, str)
     assert "MariaDB" in version
