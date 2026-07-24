@@ -14,17 +14,23 @@ from af.messaging.errors import (
     InvalidMessageEnvelope,
     InvalidMessageSchema,
     LocalEventListenerError,
+    LocalEventMiddlewareError,
     MessageUpcastError,
     UnsupportedMessageSchema,
 )
 from af.messaging.local_bus import (
+    AsyncLocalEventCallNext,
     LocalEventBus,
+    LocalEventCallNext,
     LocalEventDispatchReport,
     LocalEventListener,
+    LocalEventMiddleware,
+    LocalEventTelemetryMiddleware,
 )
 from af.messaging.schema import MessageSchema, MessageSchemaRegistry, PayloadUpcaster
 
 __all__ = (
+    "AsyncLocalEventCallNext",
     "EnvelopeKind",
     "FrozenJsonArray",
     "FrozenJsonObject",
@@ -32,9 +38,13 @@ __all__ = (
     "InvalidMessageSchema",
     "JsonEnvelopeCodec",
     "LocalEventBus",
+    "LocalEventCallNext",
     "LocalEventDispatchReport",
     "LocalEventListener",
     "LocalEventListenerError",
+    "LocalEventMiddleware",
+    "LocalEventMiddlewareError",
+    "LocalEventTelemetryMiddleware",
     "MessageEnvelope",
     "MessageMetadata",
     "MessageSchema",
