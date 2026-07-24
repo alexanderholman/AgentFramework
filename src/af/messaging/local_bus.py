@@ -31,7 +31,7 @@ type LocalEventListener = Callable[[MessageEnvelope], object]
 def _is_async_callable(value: object) -> bool:
     if inspect.iscoroutinefunction(value) or inspect.isasyncgenfunction(value):
         return True
-    call = getattr(value, "__call__", None)
+    call = inspect.getattr_static(value, "__call__", None)
     return inspect.iscoroutinefunction(call) or inspect.isasyncgenfunction(call)
 
 
