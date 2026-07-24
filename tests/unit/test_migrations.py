@@ -297,9 +297,8 @@ def test_database_lease_prevents_concurrent_runner_and_releases_cleanly(tmp_path
     first.bootstrap()
 
     with first.lock():
-        with pytest.raises(MigrationLockUnavailable) as captured:
-            with second.lock():
-                pass
+        with pytest.raises(MigrationLockUnavailable) as captured, second.lock():
+            pass
         assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
 
     with second.lock():
