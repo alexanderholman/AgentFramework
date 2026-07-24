@@ -383,12 +383,12 @@ class IndexLifecycleManager:
             return result
 
     def mark_ready(self, build: IndexBuild, *, checkpoint: str) -> IndexStatus:
-        """Seal a populated build at a validated source checkpoint."""
+        """Seal a build at a validated source checkpoint, including an empty snapshot."""
 
         checkpoint = _identifier(checkpoint, "checkpoint")
         with self._lock:
             status = self._record(build)
-            if status.phase is not IndexPhase.BUILDING or status.indexed_resources == 0:
+            if status.phase is not IndexPhase.BUILDING:
                 raise _failure(
                     PlatformReason.INTEGRITY_FAILURE,
                     stage="search.index.ready",
