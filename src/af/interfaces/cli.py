@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from contextlib import suppress
 from importlib import import_module
 from inspect import iscoroutine
 from typing import Annotated, cast
@@ -107,6 +108,8 @@ def create_cli(
                         try:
                             resolved.close()
                         except Exception as error:
+                            with suppress(Exception):
+                                resolved.close()
                             raise PlatformError(
                                 PlatformReason.CONFIGURATION_INVALID,
                                 stage="cli.application-factory",
