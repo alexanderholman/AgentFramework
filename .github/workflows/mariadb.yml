@@ -61,12 +61,6 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Prepare canonical formatting diagnostic
-        run: |
-          mkdir -p formatted/tests/integration
-          cp tests/integration/test_mariadb_relational.py formatted/tests/integration/
-          uv run ruff format formatted/tests/integration/test_mariadb_relational.py
-
       - name: Check MariaDB changed slice
         id: quality
         continue-on-error: true
@@ -123,7 +117,6 @@ jobs:
             mariadb-quality.log
             mariadb-integration.log
             canonical-gate.log
-            formatted/tests/integration/test_mariadb_relational.py
             src/af/infrastructure/mariadb.py
             src/af/infrastructure/mariadb_manager.py
             src/af/infrastructure/mysql.py
