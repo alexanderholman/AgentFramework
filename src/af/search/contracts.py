@@ -20,6 +20,7 @@ __all__ = (
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,254}[A-Za-z0-9])?$")
 _FIELD = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+_UNSAFE_DOCUMENT_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]")
 _MAX_TEXT = 1_048_576
 _MAX_ATTRIBUTES = 64
 _MAX_FILTERS = 64
@@ -57,6 +58,17 @@ def _identifier(value: object, field_name: str) -> str:
     if _IDENTIFIER.fullmatch(text) is None:
         raise ValueError(f"search {field_name} must be canonical")
     return text
+
+
+def _document(value: object) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > _MAX_TEXT
+        or _UNSAFE_DOCUMENT_CHARACTER.search(value)
+    ):
+        raise ValueError("search resource text must be bounded document content")
+    return value
 
 
 def _evidence(values: object, field_name: str, *, digest: bool = False) -> tuple[str, ...]:
@@ -107,7 +119,7 @@ class ResourceEnvelope:
             "provenance",
             _evidence(self.provenance, "provenance", digest=True),
         )
-        object.__setattr__(self, "text", _bounded(self.text, "resource text", limit=_MAX_TEXT))
+        object.__setattr__(self, "text", _document(self.text))
         if not isinstance(self.attributes, Mapping) or len(self.attributes) > _MAX_ATTRIBUTES:
             raise ValueError("search resource attributes are invalid")
         snapshot: dict[str, str] = {}
@@ -157,8 +169,11 @@ class SearchQuery:
             or len(self.filters) > _MAX_FILTERS
             or any(not isinstance(item, SearchFilter) for item in self.filters)
             or len({item.field for item in self.filters}) != len(self.filters)
+            or not {"tenant_id", "acl"}.issubset(item.field for item in self.filters)
         ):
-            raise ValueError("search filters must be non-empty, bounded, and unique")
+            raise ValueError(
+                "search filters must include bounded, unique tenant and ACL policy predicates"
+            )
         if type(self.limit) is not int or not 1 <= self.limit <= 1_000:
             raise ValueError("search result limit is invalid")
         if type(self.deadline_ms) is not int or not 1 <= self.deadline_ms <= 60_000:
@@ -186,6 +201,7 @@ class SearchHit:
     resource_id: str
     source_id: str
     authoritative_locator: str
+    tenant_id: str
     projection_version: int
     acl_evidence: tuple[str, ...]
     provenance: tuple[str, ...]
@@ -201,6 +217,7 @@ class SearchHit:
             "authoritative_locator",
             _bounded(self.authoritative_locator, "authoritative locator", limit=2_048),
         )
+        object.__setattr__(self, "tenant_id", _identifier(self.tenant_id, "tenant id"))
         if type(self.projection_version) is not int or self.projection_version < 1:
             raise ValueError("search projection version must be positive")
         object.__setattr__(self, "acl_evidence", _evidence(self.acl_evidence, "ACL"))

@@ -36,6 +36,12 @@ def _failure(
     return SearchDriverIneligible(reason, stage=stage, protected_cause=protected_cause)
 
 
+def _operation_reason(error: sqlite3.Error) -> PlatformReason:
+    if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+        return PlatformReason.CANCELLED
+    return PlatformReason.PERMANENT_FAILURE
+
+
 def _identity(value: object) -> str:
     if type(value) is not str or _IDENTIFIER.fullmatch(value) is None:
         raise ValueError("search identity must be canonical")
@@ -92,9 +98,13 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             ) from None
         self._lock = RLock()
         self._closed = False
+        self._closing = False
+
+    def _shutdown_started(self) -> bool:
+        return self._closed or self._closing
 
     def _assert_open(self) -> None:
-        if self._closed:
+        if self._shutdown_started():
             raise _failure(PlatformReason.SHUTDOWN_FAILED, stage="search.embedded.connection")
 
     def upsert(self, resources: tuple[ResourceEnvelope, ...], /) -> int:
@@ -152,7 +162,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             except sqlite3.Error as error:
                 self._connection.rollback()
                 raise _failure(
-                    PlatformReason.PERMANENT_FAILURE,
+                    _operation_reason(error),
                     stage="search.embedded.upsert",
                     protected_cause=error,
                 ) from None
@@ -174,7 +184,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                 )
             except sqlite3.Error as error:
                 raise _failure(
-                    PlatformReason.PERMANENT_FAILURE,
+                    _operation_reason(error),
                     stage="search.embedded.delete",
                     protected_cause=error,
                 ) from None
@@ -201,6 +211,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                 resource_id,
                 source_id,
                 authoritative_locator,
+                tenant_id,
                 projection_version,
                 acl_json,
                 provenance_json,
@@ -214,7 +225,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                   FROM json_each(acl_json)
                   WHERE value IN ({acl_placeholders})
               )
-            ORDER BY rank_score ASC, resource_id ASC, source_id ASC
+            ORDER BY rank_score ASC, resource_id ASC, source_id ASC, tenant_id ASC
             LIMIT ?
         """
         deadline = monotonic() + query.deadline_ms / 1_000
@@ -229,13 +240,8 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                     )
                 )
             except sqlite3.Error as error:
-                reason = (
-                    PlatformReason.CANCELLED
-                    if monotonic() >= deadline
-                    else PlatformReason.PERMANENT_FAILURE
-                )
                 raise _failure(
-                    reason,
+                    _operation_reason(error),
                     stage="search.embedded.query",
                     protected_cause=error,
                 ) from None
@@ -249,16 +255,17 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
     ) -> Iterator[SearchHit]:
         allowed = frozenset(requested_acl)
         for rank, row in enumerate(rows, start=1):
-            stored_acl = tuple(json.loads(str(row[4])))
+            stored_acl = tuple(json.loads(str(row[5])))
             evidence = tuple(value for value in stored_acl if value in allowed)
-            provenance = tuple(json.loads(str(row[5])))
-            score = max(0.0, -float(cast(float, row[6])))
-            highlight = str(row[7])
+            provenance = tuple(json.loads(str(row[6])))
+            score = max(0.0, -float(cast(float, row[7])))
+            highlight = str(row[8])
             yield SearchHit(
                 resource_id=str(row[0]),
                 source_id=str(row[1]),
                 authoritative_locator=str(row[2]),
-                projection_version=cast(int, row[3]),
+                tenant_id=str(row[3]),
+                projection_version=cast(int, row[4]),
                 acl_evidence=evidence,
                 provenance=provenance,
                 score=score,
@@ -267,22 +274,35 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             )
 
     def cancel(self) -> None:
-        if not self._closed:
+        if self._shutdown_started():
+            return
+        try:
             self._connection.interrupt()
+        except sqlite3.Error as error:
+            if self._shutdown_started():
+                return
+            raise _failure(
+                PlatformReason.PERMANENT_FAILURE,
+                stage="search.embedded.cancel",
+                protected_cause=error,
+            ) from None
 
     def close(self) -> None:
         with self._lock:
-            if self._closed:
+            if self._closed or self._closing:
                 return
+            self._closing = True
             try:
                 self._connection.close()
             except sqlite3.Error as error:
+                self._closing = False
                 raise _failure(
                     PlatformReason.SHUTDOWN_FAILED,
                     stage="search.embedded.shutdown",
                     protected_cause=error,
                 ) from None
             self._closed = True
+            self._closing = False
 
     def __enter__(self) -> EmbeddedSearchDriver:
         self._assert_open()
