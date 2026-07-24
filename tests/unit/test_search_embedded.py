@@ -734,6 +734,52 @@ def test_cancel_is_idempotent_once_concurrent_shutdown_begins() -> None:
     driver.close()
 
 
+@pytest.mark.parametrize(
+    "control_flow",
+    [
+        KeyboardInterrupt(),
+        SearchDriverIneligible(PlatformReason.CANCELLED, stage="test.cancel"),
+    ],
+)
+def test_cancel_preserves_control_flow_when_shutdown_wins_race(
+    control_flow: BaseException,
+) -> None:
+    interrupt_started = Event()
+    connection_closed = Event()
+
+    class ControlFlowInterruptConnection(sqlite3.Connection):
+        def interrupt(self) -> None:
+            interrupt_started.set()
+            assert connection_closed.wait(timeout=5)
+            raise control_flow
+
+        def close(self) -> None:
+            super().close()
+            connection_closed.set()
+
+    driver = EmbeddedSearchDriver(":memory:")
+    driver._connection.close()
+    driver._connection = sqlite3.connect(
+        ":memory:",
+        check_same_thread=False,
+        factory=ControlFlowInterruptConnection,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        cancelling = pool.submit(driver.cancel)
+        assert interrupt_started.wait(timeout=5)
+        closing = pool.submit(driver.close)
+        closing.result(timeout=5)
+        captured: BaseException | None = None
+
+        try:
+            cancelling.result(timeout=5)
+        except BaseException as error:
+            captured = error
+
+    assert captured is control_flow
+
+
 def test_base_exception_during_close_allows_cleanup_retry() -> None:
     class InterruptingCloseConnection(sqlite3.Connection):
         close_attempts = 0
