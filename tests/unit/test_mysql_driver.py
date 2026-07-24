@@ -142,9 +142,7 @@ def test_mysql_cancellation_marker_discards_results_and_recovers(
             pytest.raises(DatabaseOperationError) as streamed,
             driver.transaction(read_only=True) as transaction,
         ):
-            cursor = transaction.stream(
-                DatabaseStatement("SELECT 1 AS value", read_only=True)
-            )
+            cursor = transaction.stream(DatabaseStatement("SELECT 1 AS value", read_only=True))
             driver._cancellation.set()
             next(cursor)
         assert streamed.value.reason is PlatformReason.CANCELLED
