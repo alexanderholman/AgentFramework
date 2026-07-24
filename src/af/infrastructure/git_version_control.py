@@ -795,15 +795,26 @@ class GitVersionControlBackend:
             if key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
                 environment.pop(key)
         for key in (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_ASKPASS",
+            "GIT_COMMON_DIR",
             "GIT_CONFIG",
             "GIT_CONFIG_COUNT",
             "GIT_CONFIG_PARAMETERS",
             "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_COMMON_DIR",
+            "GIT_EDITOR",
+            "GIT_EXEC_PATH",
+            "GIT_EXTERNAL_DIFF",
             "GIT_INDEX_FILE",
             "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_PAGER",
+            "GIT_PROXY_COMMAND",
+            "GIT_SEQUENCE_EDITOR",
+            "GIT_SSH",
+            "GIT_SSH_COMMAND",
+            "GIT_TEMPLATE_DIR",
+            "GIT_WORK_TREE",
+            "SSH_ASKPASS",
         ):
             environment.pop(key, None)
         environment["GIT_ALLOW_PROTOCOL"] = "file"
