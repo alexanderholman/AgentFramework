@@ -71,18 +71,23 @@ jobs:
             uv run ruff format --check \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
+              src/af/messaging/outbox.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
-              tests/integration/test_mysql_relational.py
+              tests/integration/test_mysql_relational.py \
+              tests/integration/test_transactional_outbox_relational.py
             uv run ruff check \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
+              src/af/messaging/outbox.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
-              tests/integration/test_mysql_relational.py
+              tests/integration/test_mysql_relational.py \
+              tests/integration/test_transactional_outbox_relational.py
             uv run mypy \
               src/af/infrastructure/mysql.py \
-              src/af/infrastructure/mysql_manager.py
+              src/af/infrastructure/mysql_manager.py \
+              src/af/messaging/outbox.py
             uv run pytest -q \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py
@@ -95,7 +100,9 @@ jobs:
         run: |
           set -o pipefail
           uv run --with "pymysql==1.1.2" \
-            pytest -q tests/integration/test_mysql_relational.py \
+            pytest -q \
+              tests/integration/test_mysql_relational.py \
+              tests/integration/test_transactional_outbox_relational.py \
             2>&1 | tee mysql-integration.log
 
       - name: Run canonical gate without MySQL opt-in
@@ -119,9 +126,11 @@ jobs:
             canonical-gate.log
             src/af/infrastructure/mysql.py
             src/af/infrastructure/mysql_manager.py
+            src/af/messaging/outbox.py
             tests/unit/test_mysql_driver.py
             tests/unit/test_mysql_manager.py
             tests/integration/test_mysql_relational.py
+            tests/integration/test_transactional_outbox_relational.py
           if-no-files-found: error
           retention-days: 1
 
