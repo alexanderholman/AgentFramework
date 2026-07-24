@@ -73,6 +73,7 @@ def create_cli(
     owns_application = application is None
     cached_application = application
     configured_factory = application_factory or create_application
+    requires_application_type = application_factory is not None
     accepts_operator_factory = application is None and application_factory is None
 
     def current() -> AFApplication:
@@ -88,7 +89,7 @@ def create_cli(
                     stage="cli.application-factory",
                     protected_cause=error,
                 ) from None
-            if not isinstance(resolved, AFApplication):
+            if requires_application_type and not isinstance(resolved, AFApplication):
                 raise PlatformError(
                     PlatformReason.CONFIGURATION_INVALID,
                     stage="cli.application-factory",
@@ -111,7 +112,7 @@ def create_cli(
             ),
         ] = None,
     ) -> None:
-        nonlocal configured_factory
+        nonlocal configured_factory, requires_application_type
         if factory_path is not None:
             if not accepts_operator_factory:
                 fail(
@@ -122,6 +123,7 @@ def create_cli(
                 )
             try:
                 configured_factory = _load_application_factory(factory_path)
+                requires_application_type = True
             except (AFError, TypeError, ValueError) as error:
                 fail(error)
 
