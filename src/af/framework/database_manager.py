@@ -19,6 +19,7 @@ from af.framework.relational import (
     DatabaseFeature,
     DatabaseTransaction,
 )
+from af.framework.unit_of_work import UnitOfWork
 from af.observability.signals import TelemetryPublisher
 
 __all__ = ("DatabaseManager", "bind_database_manager")
@@ -123,6 +124,25 @@ class DatabaseManager(Manager[DatabaseDriver]):
         }
         driver = self.connection(target, requires=required)
         return driver.transaction(read_only=read_only)
+
+    def unit_of_work(
+        self,
+        name: str | None = None,
+        *,
+        read_only: bool = False,
+        requires: Iterable[DatabaseFeature] = (),
+        max_after_commit_callbacks: int = 1_024,
+    ) -> UnitOfWork:
+        """Create one routed unit of work without entering or executing it."""
+
+        return UnitOfWork(
+            self.transaction(
+                name,
+                read_only=read_only,
+                requires=requires,
+            ),
+            max_after_commit_callbacks=max_after_commit_callbacks,
+        )
 
 
 def bind_database_manager(
