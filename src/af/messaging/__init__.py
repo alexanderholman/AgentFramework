@@ -38,6 +38,17 @@ from af.messaging.projections import (
     TransactionalInbox,
     TransactionalProjectionGuard,
 )
+from af.messaging.relay import (
+    OutboxBatchReport,
+    OutboxPublisher,
+    OutboxPublishError,
+    OutboxRelay,
+    OutboxRelayError,
+    OutboxRelayIntegrityError,
+    OutboxRelayLease,
+    OutboxRelayLeaseUnavailable,
+    OutboxRetryPolicy,
+)
 from af.messaging.schema import MessageSchema, MessageSchemaRegistry, PayloadUpcaster
 
 __all__ = (
@@ -62,8 +73,17 @@ __all__ = (
     "MessageSchema",
     "MessageSchemaRegistry",
     "MessageUpcastError",
+    "OutboxBatchReport",
     "OutboxIntegrityError",
+    "OutboxPublishError",
+    "OutboxPublisher",
     "OutboxRecord",
+    "OutboxRelay",
+    "OutboxRelayError",
+    "OutboxRelayIntegrityError",
+    "OutboxRelayLease",
+    "OutboxRelayLeaseUnavailable",
+    "OutboxRetryPolicy",
     "PayloadLimits",
     "PayloadUpcaster",
     "PolicyContext",
