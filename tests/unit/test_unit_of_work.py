@@ -51,13 +51,12 @@ def test_unit_of_work_rollback_discards_state_and_callbacks() -> None:
         transaction.execute(DatabaseStatement("CREATE TABLE records (value TEXT)"))
 
     called: list[str] = []
-    with pytest.raises(RuntimeError, match="rollback"):
-        with UnitOfWork(driver) as unit:
-            unit.transaction.execute(
-                DatabaseStatement("INSERT INTO records VALUES (:value)", {"value": "discarded"})
-            )
-            unit.after_commit(lambda: called.append("published"))
-            raise RuntimeError("rollback")
+    with pytest.raises(RuntimeError, match="rollback"), UnitOfWork(driver) as unit:
+        unit.transaction.execute(
+            DatabaseStatement("INSERT INTO records VALUES (:value)", {"value": "discarded"})
+        )
+        unit.after_commit(lambda: called.append("published"))
+        raise RuntimeError("rollback")
 
     assert called == []
     assert _count(driver) == 0
@@ -72,10 +71,9 @@ def test_after_commit_failure_is_sanitized_after_all_callbacks_run() -> None:
         called.append("failed")
         raise RuntimeError("secret callback detail")
 
-    with pytest.raises(AfterCommitCallbackError) as captured:
-        with UnitOfWork(driver) as unit:
-            unit.after_commit(fail)
-            unit.after_commit(lambda: called.append("continued"))
+    with pytest.raises(AfterCommitCallbackError) as captured, UnitOfWork(driver) as unit:
+        unit.after_commit(fail)
+        unit.after_commit(lambda: called.append("continued"))
 
     assert called == ["failed", "continued"]
     assert captured.value.reason is PlatformReason.PERMANENT_FAILURE
@@ -111,9 +109,11 @@ class _CommitFailureDriver:
 
 def test_commit_failure_never_runs_after_commit_callbacks() -> None:
     called: list[str] = []
-    with pytest.raises(DatabaseOperationError) as captured:
-        with UnitOfWork(_CommitFailureDriver()) as unit:  # type: ignore[arg-type]
-            unit.after_commit(lambda: called.append("published"))
+    with (
+        pytest.raises(DatabaseOperationError) as captured,
+        UnitOfWork(_CommitFailureDriver()) as unit,  # type: ignore[arg-type]
+    ):
+        unit.after_commit(lambda: called.append("published"))
 
     assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
     assert called == []
@@ -129,9 +129,8 @@ def test_unit_of_work_rejects_invalid_or_out_of_scope_access() -> None:
     with pytest.raises(DatabaseOperationError) as callback_error:
         unit.after_commit(lambda: None)
     assert callback_error.value.reason is PlatformReason.CONTEXT_UNAVAILABLE
-    with pytest.raises(TypeError):
-        with UnitOfWork(driver) as active:
-            active.after_commit("not callable")  # type: ignore[arg-type]
+    with pytest.raises(TypeError), UnitOfWork(driver) as active:
+        active.after_commit("not callable")  # type: ignore[arg-type]
 
     with unit:
         with pytest.raises(DatabaseOperationError) as nested:
