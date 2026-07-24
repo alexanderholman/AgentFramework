@@ -101,6 +101,17 @@ jobs:
               tests/unit/test_outbox_relay.py
           } 2>&1 | tee mysql-quality.log
 
+      - name: Materialize formatter diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p formatted/src/af/messaging formatted/tests/unit
+          cp src/af/messaging/relay.py formatted/src/af/messaging/relay.py
+          cp tests/unit/test_outbox_relay.py formatted/tests/unit/test_outbox_relay.py
+          uv run ruff format \
+            formatted/src/af/messaging/relay.py \
+            formatted/tests/unit/test_outbox_relay.py
+
       - name: Run MySQL real-service certification
         id: integration
         continue-on-error: true
@@ -133,6 +144,7 @@ jobs:
             mysql-quality.log
             mysql-integration.log
             canonical-gate.log
+            formatted
             src/af/infrastructure/mysql.py
             src/af/infrastructure/mysql_manager.py
             src/af/messaging/outbox.py
