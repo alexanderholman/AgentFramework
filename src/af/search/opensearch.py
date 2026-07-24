@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import re
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from threading import RLock
+from time import monotonic
 from types import TracebackType
 from typing import Literal, Protocol
 
@@ -39,6 +41,7 @@ _MAX_BATCH = 10_000
 _MAX_BULK_ITEMS = 256
 _MAX_BULK_BYTES = 9_000_000
 _MAX_LONG = 9_223_372_036_854_775_807
+_MAX_SHARDS = 10_000
 
 
 class OpenSearchOperationError(PlatformError):
@@ -173,8 +176,44 @@ def _status_code(error: Exception) -> int | None:
     return None
 
 
-def _operation_reason(error: Exception) -> PlatformReason:
+def _transport_error_types() -> tuple[
+    tuple[type[Exception], ...],
+    tuple[type[Exception], ...],
+    tuple[type[Exception], ...],
+]:
+    try:
+        module = importlib.import_module("opensearchpy.exceptions")
+        ssl_error = _exception_type(vars(module).get("SSLError"))
+        timeout_error = _exception_type(vars(module).get("ConnectionTimeout"))
+        connection_error = _exception_type(vars(module).get("ConnectionError"))
+    except Exception:
+        return (), (), ()
+    if ssl_error is None or timeout_error is None or connection_error is None:
+        return (), (), ()
+    if not (
+        issubclass(ssl_error, connection_error) and issubclass(timeout_error, connection_error)
+    ):
+        return (), (), ()
+    return (ssl_error,), (timeout_error,), (connection_error,)
+
+
+def _exception_type(value: object) -> type[Exception] | None:
+    if not isinstance(value, type) or not issubclass(value, Exception):
+        return None
+    return value
+
+
+def _operation_reason(
+    error: Exception,
+) -> PlatformReason:
     status = _status_code(error)
+    ssl_errors, timeout_errors, connection_errors = _transport_error_types()
+    if isinstance(error, ssl_errors):
+        return PlatformReason.PERMANENT_FAILURE
+    if isinstance(error, timeout_errors):
+        return PlatformReason.TRANSIENT_FAILURE
+    if isinstance(error, connection_errors):
+        return PlatformReason.TRANSIENT_FAILURE
     if status in {401, 403}:
         return PlatformReason.AUTHORIZATION_DENIED
     if status == 404:
@@ -184,7 +223,11 @@ def _operation_reason(error: Exception) -> PlatformReason:
     return PlatformReason.PERMANENT_FAILURE
 
 
-def _call_failure(error: Exception, *, stage: str) -> OpenSearchOperationError:
+def _call_failure(
+    error: Exception,
+    *,
+    stage: str,
+) -> OpenSearchOperationError:
     return _failure(
         _operation_reason(error),
         stage=stage,
@@ -425,7 +468,7 @@ class OpenSearchDriver(AbstractContextManager["OpenSearchDriver"]):
             )
             status = None if acknowledgement is None else acknowledgement.get("status")
             document_id = None if acknowledgement is None else acknowledgement.get("_id")
-            if type(status) is not int or document_id != expected_id:
+            if type(status) is not int or not 200 <= status <= 599 or document_id != expected_id:
                 raise _integrity("search.opensearch.bulk-ack")
             if not 200 <= status < 300:
                 failed_statuses.append(status)
@@ -455,39 +498,57 @@ class OpenSearchDriver(AbstractContextManager["OpenSearchDriver"]):
                 PlatformReason.CAPABILITY_UNAVAILABLE,
                 stage="search.opensearch.policy-pushdown",
             )
-        timeout_seconds = min(self._request_timeout, query.deadline_ms / 1_000)
-        body: Mapping[str, object] = {
-            "_source": list(_SOURCE_FIELDS),
-            "query": {
-                "bool": {
-                    "must": [
-                        {
-                            "match": {
-                                "text": {
-                                    "query": query.text,
-                                    "operator": "and",
+        deadline_seconds = query.deadline_ms / 1_000
+        deadline = monotonic() + deadline_seconds
+        acquired = False
+        try:
+            acquired = self._lock.acquire(blocking=False)
+            remaining_ms = query.deadline_ms
+            if not acquired:
+                remaining = max(0.0, deadline - monotonic())
+                acquired = remaining > 0 and self._lock.acquire(timeout=remaining)
+                if acquired:
+                    remaining_ms = min(
+                        query.deadline_ms,
+                        int(max(0.0, deadline - monotonic()) * 1_000),
+                    )
+            if not acquired or remaining_ms < 1:
+                raise _failure(
+                    PlatformReason.CANCELLED,
+                    stage="search.opensearch.query-queue-timeout",
+                )
+            self._assert_open()
+            timeout_seconds = min(self._request_timeout, remaining_ms / 1_000)
+            body: Mapping[str, object] = {
+                "_source": list(_SOURCE_FIELDS),
+                "query": {
+                    "bool": {
+                        "must": [
+                            {
+                                "match": {
+                                    "text": {
+                                        "query": query.text,
+                                        "operator": "and",
+                                    }
                                 }
                             }
-                        }
-                    ],
-                    "filter": [
-                        {"terms": {"tenant_id": list(tenant_ids)}},
-                        {"terms": {"acl": list(requested_acl)}},
-                    ],
-                }
-            },
-            "size": query.limit,
-            "sort": [
-                {"_score": "desc"},
-                {"resource_id": "asc"},
-                {"source_id": "asc"},
-                {"tenant_id": "asc"},
-            ],
-            "timeout": f"{query.deadline_ms}ms",
-            "track_total_hits": False,
-        }
-        with self._lock:
-            self._assert_open()
+                        ],
+                        "filter": [
+                            {"terms": {"tenant_id": list(tenant_ids)}},
+                            {"terms": {"acl": list(requested_acl)}},
+                        ],
+                    }
+                },
+                "size": query.limit,
+                "sort": [
+                    {"_score": "desc"},
+                    {"resource_id": "asc"},
+                    {"source_id": "asc"},
+                    {"tenant_id": "asc"},
+                ],
+                "timeout": f"{remaining_ms}ms",
+                "track_total_hits": False,
+            }
             try:
                 response = self._client.search(
                     index=self._index,
@@ -499,6 +560,9 @@ class OpenSearchDriver(AbstractContextManager["OpenSearchDriver"]):
                 )
             except Exception as error:
                 raise _call_failure(error, stage="search.opensearch.query") from None
+        finally:
+            if acquired:
+                self._lock.release()
         return self._hits(
             response,
             query=query,
@@ -518,26 +582,35 @@ class OpenSearchDriver(AbstractContextManager["OpenSearchDriver"]):
         shards = None if root is None else _mapping(root.get("_shards"))
         hits_record = None if root is None else _mapping(root.get("hits"))
         raw_hits = None if hits_record is None else hits_record.get("hits")
+        total_shards = None if shards is None else shards.get("total")
+        successful_shards = None if shards is None else shards.get("successful")
+        skipped_shards = None if shards is None else shards.get("skipped")
         failed_shards = None if shards is None else shards.get("failed")
+        if root is not None and root.get("timed_out") is True:
+            raise _failure(
+                PlatformReason.CANCELLED,
+                stage="search.opensearch.query-timeout",
+            )
         if (
             root is None
             or type(root.get("timed_out")) is not bool
-            or root.get("timed_out")
+            or type(total_shards) is not int
+            or not 1 <= total_shards <= _MAX_SHARDS
+            or type(successful_shards) is not int
+            or successful_shards != total_shards
+            or type(skipped_shards) is not int
+            or not 0 <= skipped_shards <= total_shards
             or type(failed_shards) is not int
             or failed_shards != 0
             or type(raw_hits) is not list
             or len(raw_hits) > query.limit
         ):
-            if root is not None and root.get("timed_out") is True:
-                raise _failure(
-                    PlatformReason.CANCELLED,
-                    stage="search.opensearch.query-timeout",
-                )
             raise _integrity("search.opensearch.query-ack")
         allowed_tenants = frozenset(tenant_ids)
         allowed_acl = frozenset(requested_acl)
         identities: set[tuple[str, str, str]] = set()
         results: list[SearchHit] = []
+        sort_keys: list[tuple[float, str, str, str]] = []
         try:
             for rank, raw_hit in enumerate(raw_hits, start=1):
                 hit_record = _mapping(raw_hit)
@@ -567,19 +640,21 @@ class OpenSearchDriver(AbstractContextManager["OpenSearchDriver"]):
                 if identity in identities:
                     raise ValueError("OpenSearch returned a duplicate identity")
                 identities.add(identity)
-                results.append(
-                    SearchHit(
-                        resource_id=resource_id,
-                        source_id=source_id,
-                        authoritative_locator=source.get("authoritative_locator"),  # type: ignore[arg-type]
-                        tenant_id=tenant_id,
-                        projection_version=projection_version,
-                        acl_evidence=acl_evidence,
-                        provenance=provenance,
-                        score=hit_record.get("_score"),  # type: ignore[arg-type]
-                        rank=rank,
-                    )
+                hit = SearchHit(
+                    resource_id=resource_id,
+                    source_id=source_id,
+                    authoritative_locator=source.get("authoritative_locator"),  # type: ignore[arg-type]
+                    tenant_id=tenant_id,
+                    projection_version=projection_version,
+                    acl_evidence=acl_evidence,
+                    provenance=provenance,
+                    score=hit_record.get("_score"),  # type: ignore[arg-type]
+                    rank=rank,
                 )
+                results.append(hit)
+                sort_keys.append((-hit.score, resource_id, source_id, tenant_id))
+            if sort_keys != sorted(sort_keys):
+                raise ValueError("OpenSearch hit order is invalid")
         except (TypeError, ValueError) as error:
             raise _failure(
                 PlatformReason.INTEGRITY_FAILURE,

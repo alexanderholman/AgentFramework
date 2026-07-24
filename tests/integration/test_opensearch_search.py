@@ -13,6 +13,7 @@ import pytest
 
 from af.framework.errors import PlatformReason
 from af.framework.managers import CapabilityBinding, ConnectionRef, HealthStatus
+from af.search import opensearch as opensearch_module
 from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
 from af.search.manager import SearchDriver, SearchFeature
 from af.search.opensearch import (
@@ -178,6 +179,52 @@ def test_opensearch_3_7_registration_binds_client_and_service_identity() -> None
         else:
             driver.close()
         _drop(index)
+
+
+def test_opensearch_projection_persists_across_client_restart() -> None:
+    index = _index("persistence")
+    _create(index)
+    try:
+        first = OpenSearchDriver(_client(), index=index)
+        try:
+            assert first.upsert((_resource("resource-persistent"),)) == 1
+        finally:
+            first.close()
+
+        reopened = OpenSearchDriver(_client(), index=index)
+        try:
+            hits = reopened.search(_query())
+            assert [hit.resource_id for hit in hits] == ["resource-persistent"]
+        finally:
+            reopened.close()
+    finally:
+        _drop(index)
+
+
+def test_opensearch_3_7_uses_pinned_client_exception_types() -> None:
+    _url()
+    exceptions = importlib.import_module("opensearchpy.exceptions")
+    ssl_errors, timeout_errors, connection_errors = opensearch_module._transport_error_types()
+
+    assert ssl_errors == (exceptions.SSLError,)
+    assert timeout_errors == (exceptions.ConnectionTimeout,)
+    assert connection_errors == (exceptions.ConnectionError,)
+    assert (
+        opensearch_module._operation_reason(exceptions.SSLError("N/A", "private-tls-secret"))
+        is PlatformReason.PERMANENT_FAILURE
+    )
+    assert (
+        opensearch_module._operation_reason(
+            exceptions.ConnectionTimeout("TIMEOUT", "private-timeout-secret")
+        )
+        is PlatformReason.TRANSIENT_FAILURE
+    )
+    assert (
+        opensearch_module._operation_reason(
+            exceptions.ConnectionError("N/A", "private-network-secret")
+        )
+        is PlatformReason.TRANSIENT_FAILURE
+    )
 
 
 def test_opensearch_real_bulk_partial_failure_never_reports_full_success() -> None:

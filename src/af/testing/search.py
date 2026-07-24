@@ -103,7 +103,16 @@ def _assert_policy_pushdown(driver: SearchDriver) -> None:
         )
         for index in range(32)
     )
-    driver.upsert((allowed, *denied))
+    foreign_tenant = tuple(
+        _resource(
+            f"resource-foreign-{index}",
+            tenant_id="tenant-b",
+            acl=("group:allowed",),
+            text="energy " * 32,
+        )
+        for index in range(32)
+    )
+    driver.upsert((allowed, *denied, *foreign_tenant))
     hits = driver.search(_query(acl=("group:allowed",), limit=1))
     _check(
         tuple(hit.resource_id for hit in hits) == ("resource-allowed",),
@@ -130,6 +139,10 @@ def _assert_replacement_and_tombstone(driver: SearchDriver) -> None:
         "search driver did not replace the exact projection identity",
     )
     _check(
+        not driver.search(_query("initial")),
+        "search driver retained replaced projection text",
+    )
+    _check(
         driver.delete(
             tenant_id=first.tenant_id,
             source_id=first.source_id,
@@ -146,6 +159,40 @@ def _assert_replacement_and_tombstone(driver: SearchDriver) -> None:
         "search driver did not make tombstone deletion idempotent",
     )
     _check(not driver.search(_query("updated")), "search tombstone left a visible projection")
+
+
+def _assert_tenant_scoped_identity_and_delete(driver: SearchDriver) -> None:
+    first = _resource("resource-shared", tenant_id="tenant-a")
+    second = _resource("resource-shared", tenant_id="tenant-b")
+    driver.upsert((first, second))
+
+    first_hits = driver.search(_query(tenant_id="tenant-a"))
+    second_hits = driver.search(_query(tenant_id="tenant-b"))
+    _check(
+        len(first_hits) == 1 and first_hits[0].tenant_id == "tenant-a",
+        "search driver collapsed the first tenant identity",
+    )
+    _check(
+        len(second_hits) == 1 and second_hits[0].tenant_id == "tenant-b",
+        "search driver collapsed the second tenant identity",
+    )
+    _check(
+        driver.delete(
+            tenant_id=first.tenant_id,
+            source_id=first.source_id,
+            resource_id=first.resource_id,
+        ),
+        "search driver did not delete the tenant-scoped identity",
+    )
+    _check(
+        not driver.search(_query(tenant_id="tenant-a")),
+        "search driver left the deleted tenant identity visible",
+    )
+    surviving = driver.search(_query(tenant_id="tenant-b"))
+    _check(
+        len(surviving) == 1 and surviving[0].tenant_id == "tenant-b",
+        "search driver deleted a different tenant identity",
+    )
 
 
 def _assert_deterministic_order(driver: SearchDriver) -> None:
@@ -211,6 +258,7 @@ def search_driver_cases() -> tuple[ConformanceCase[SearchDriver], ...]:
         ConformanceCase("canonical-sources", _assert_canonical_sources),
         ConformanceCase("policy-pushdown", _assert_policy_pushdown),
         ConformanceCase("replacement-and-tombstone", _assert_replacement_and_tombstone),
+        ConformanceCase("tenant-scoped-identity", _assert_tenant_scoped_identity_and_delete),
         ConformanceCase("deterministic-order", _assert_deterministic_order),
         ConformanceCase("error-redaction", _assert_error_redaction),
         ConformanceCase("shutdown", _assert_shutdown),

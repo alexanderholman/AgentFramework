@@ -22,6 +22,7 @@ def test_embedded_driver_passes_shared_search_conformance() -> None:
         "canonical-sources",
         "policy-pushdown",
         "replacement-and-tombstone",
+        "tenant-scoped-identity",
         "deterministic-order",
         "error-redaction",
         "shutdown",

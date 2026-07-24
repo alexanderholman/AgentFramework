@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from threading import Event, Thread
 
 import pytest
 
 from af.framework.errors import PlatformReason
+from af.search import opensearch as opensearch_module
 from af.search.contracts import (
     ResourceEnvelope,
     ResourceKind,
@@ -77,6 +79,10 @@ class _Indices:
         return self.mapping
 
 
+def _complete_shards() -> dict[str, int]:
+    return {"total": 1, "successful": 1, "skipped": 0, "failed": 0}
+
+
 class RecordingClient:
     def __init__(self) -> None:
         self.indices = _Indices()
@@ -84,7 +90,7 @@ class RecordingClient:
         self.bulk_response: object | None = None
         self.search_response: object = {
             "timed_out": False,
-            "_shards": {"failed": 0},
+            "_shards": _complete_shards(),
             "hits": {"hits": []},
         }
         self.delete_response: object = {"_id": "unused", "result": "not_found"}
@@ -211,7 +217,7 @@ def test_opensearch_pushes_tenant_and_acl_filters_before_top_k() -> None:
     resource = _resource("resource-a")
     client.search_response = {
         "timed_out": False,
-        "_shards": {"failed": 0},
+        "_shards": _complete_shards(),
         "hits": {
             "hits": [
                 {
@@ -272,7 +278,7 @@ def test_opensearch_rejects_backend_policy_leaks_and_unknown_filters() -> None:
     leaked = _resource("resource-a", tenant_id="tenant-private", acl=("group:private",))
     client.search_response = {
         "timed_out": False,
-        "_shards": {"failed": 0},
+        "_shards": _complete_shards(),
         "hits": {
             "hits": [
                 {
@@ -420,7 +426,7 @@ def test_opensearch_timeouts_cancellation_and_shutdown_are_honest() -> None:
     client = RecordingClient()
     client.search_response = {
         "timed_out": True,
-        "_shards": {"failed": 0},
+        "_shards": _complete_shards(),
         "hits": {"hits": []},
     }
     driver = OpenSearchDriver(client, index="af-search")
@@ -495,6 +501,27 @@ class _TransportError(RuntimeError):
         super().__init__("private-transport-secret")
 
 
+class _UnverifiedStringStatusError(RuntimeError):
+    status_code = "N/A"
+
+
+_OpenSearchConnectionError = type(
+    "ConnectionError",
+    (RuntimeError,),
+    {"__module__": "opensearchpy.exceptions", "status_code": "N/A"},
+)
+_OpenSearchConnectionTimeout = type(
+    "ConnectionTimeout",
+    (_OpenSearchConnectionError,),
+    {"__module__": "opensearchpy.exceptions", "status_code": "TIMEOUT"},
+)
+_OpenSearchSSLError = type(
+    "SSLError",
+    (_OpenSearchConnectionError,),
+    {"__module__": "opensearchpy.exceptions", "status_code": "N/A"},
+)
+
+
 @pytest.mark.parametrize(
     ("status", "reason"),
     [
@@ -519,6 +546,73 @@ def test_opensearch_connection_failures_are_typed_and_sanitized(
     assert captured.value.reason is reason
     assert "private-transport-secret" not in str(captured.value)
     assert "private-transport-secret" not in repr(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (_OpenSearchConnectionError("private-network-secret"), PlatformReason.TRANSIENT_FAILURE),
+        (_OpenSearchConnectionTimeout("private-timeout-secret"), PlatformReason.TRANSIENT_FAILURE),
+        (_OpenSearchSSLError("private-tls-secret"), PlatformReason.PERMANENT_FAILURE),
+    ],
+)
+def test_opensearch_official_connection_failures_are_typed_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    reason: PlatformReason,
+) -> None:
+    monkeypatch.setattr(
+        opensearch_module,
+        "_transport_error_types",
+        lambda: (
+            (_OpenSearchSSLError,),
+            (_OpenSearchConnectionTimeout,),
+            (_OpenSearchConnectionError,),
+        ),
+    )
+    client = RecordingClient()
+    client.info_error = error
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        OpenSearchDriver(client, index="af-search")
+
+    assert captured.value.reason is reason
+    assert "private" not in str(captured.value)
+    assert "private" not in repr(captured.value)
+
+
+def test_opensearch_unknown_string_status_fails_closed() -> None:
+    client = RecordingClient()
+    client.info_error = _UnverifiedStringStatusError("private-spoofed-secret")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        OpenSearchDriver(client, index="af-search")
+
+    assert captured.value.reason is PlatformReason.PERMANENT_FAILURE
+    assert "private-spoofed-secret" not in str(captured.value)
+
+
+def test_opensearch_query_transport_timeout_is_transient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        opensearch_module,
+        "_transport_error_types",
+        lambda: (
+            (_OpenSearchSSLError,),
+            (_OpenSearchConnectionTimeout,),
+            (_OpenSearchConnectionError,),
+        ),
+    )
+    client = RecordingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+    client.search_error = _OpenSearchConnectionTimeout("private-timeout-secret")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.search(_query())
+
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert "private-timeout-secret" not in str(captured.value)
 
 
 def test_opensearch_mapping_transport_failure_is_sanitized() -> None:
@@ -603,6 +697,13 @@ def test_opensearch_rejects_invalid_resource_operations_before_transport() -> No
             },
             PlatformReason.INTEGRITY_FAILURE,
         ),
+        (
+            {
+                "errors": True,
+                "items": [{"index": {"_id": "unused", "status": 700}}],
+            },
+            PlatformReason.INTEGRITY_FAILURE,
+        ),
     ],
 )
 def test_opensearch_rejects_corrupt_bulk_acknowledgements(
@@ -680,16 +781,134 @@ def test_opensearch_operation_transport_failures_are_sanitized() -> None:
     assert delete.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
 
 
+def test_opensearch_query_deadline_bounds_lock_queueing() -> None:
+    class BlockingClient(RecordingClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = Event()
+            self.release = Event()
+
+        def bulk(
+            self,
+            *,
+            body: object,
+            index: object = None,
+            params: object = None,
+            headers: object = None,
+        ) -> object:
+            self.entered.set()
+            self.release.wait()
+            return super().bulk(body=body, index=index, params=params, headers=headers)
+
+    client = BlockingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+    worker_errors: list[BaseException] = []
+
+    def write() -> None:
+        try:
+            driver.upsert((_resource("resource-blocking"),))
+        except BaseException as error:
+            worker_errors.append(error)
+
+    worker = Thread(target=write)
+    worker.start()
+    try:
+        assert client.entered.wait(timeout=1.0)
+        with pytest.raises(OpenSearchOperationError) as captured:
+            driver.search(_query(deadline_ms=10))
+        assert captured.value.reason is PlatformReason.CANCELLED
+        assert client.search_calls == []
+    finally:
+        client.release.set()
+        worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert worker_errors == []
+
+
+def test_opensearch_query_releases_lock_after_post_acquisition_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = RecordingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+    holder_ready = Event()
+    release_holder = Event()
+
+    def hold_lock() -> None:
+        with driver._lock:
+            holder_ready.set()
+            release_holder.wait()
+
+    holder = Thread(target=hold_lock)
+    holder.start()
+    assert holder_ready.wait(timeout=1.0)
+    clock_calls = 0
+
+    def interrupt_after_acquisition() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        if clock_calls == 2:
+            release_holder.set()
+            return 100.0
+        if clock_calls == 3:
+            raise KeyboardInterrupt
+        return 100.0
+
+    monkeypatch.setattr(opensearch_module, "monotonic", interrupt_after_acquisition)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            driver.search(_query(deadline_ms=1_000))
+    finally:
+        release_holder.set()
+        holder.join(timeout=2.0)
+
+    assert not holder.is_alive()
+    probe_acquired = Event()
+
+    def probe_lock() -> None:
+        with driver._lock:
+            probe_acquired.set()
+
+    probe = Thread(target=probe_lock, daemon=True)
+    probe.start()
+    probe.join(timeout=1.0)
+    stranded = probe.is_alive()
+    if stranded:
+        driver._lock.release()
+        probe.join(timeout=1.0)
+    assert not stranded
+    assert probe_acquired.is_set()
+
+
 @pytest.mark.parametrize(
     "response",
     [
         None,
         {},
-        {"timed_out": False, "_shards": {"failed": 1}, "hits": {"hits": []}},
-        {"timed_out": False, "_shards": {"failed": 0}, "hits": {"hits": {}}},
         {
             "timed_out": False,
-            "_shards": {"failed": 0},
+            "_shards": {"total": 1, "successful": 0, "skipped": 0, "failed": 1},
+            "hits": {"hits": []},
+        },
+        {"timed_out": False, "_shards": {"failed": 0}, "hits": {"hits": []}},
+        {
+            "timed_out": False,
+            "_shards": {"total": 2, "successful": 1, "skipped": 0, "failed": 0},
+            "hits": {"hits": []},
+        },
+        {
+            "timed_out": False,
+            "_shards": {"total": 1, "successful": 1, "skipped": 2, "failed": 0},
+            "hits": {"hits": []},
+        },
+        {
+            "timed_out": False,
+            "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
+            "hits": {"hits": {}},
+        },
+        {
+            "timed_out": False,
+            "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
             "hits": {"hits": [None] * 21},
         },
     ],
@@ -699,6 +918,36 @@ def test_opensearch_rejects_incomplete_or_partial_search_responses(
 ) -> None:
     client = RecordingClient()
     client.search_response = response
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.search(_query())
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+def test_opensearch_rejects_hits_outside_requested_deterministic_order() -> None:
+    client = RecordingClient()
+    first = _resource("resource-a")
+    second = _resource("resource-b")
+    client.search_response = {
+        "timed_out": False,
+        "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
+        "hits": {
+            "hits": [
+                {
+                    "_id": _document_id(first),
+                    "_score": 1.0,
+                    "_source": _hit_source(first),
+                },
+                {
+                    "_id": _document_id(second),
+                    "_score": 2.0,
+                    "_source": _hit_source(second),
+                },
+            ]
+        },
+    }
     driver = OpenSearchDriver(client, index="af-search")
 
     with pytest.raises(OpenSearchOperationError) as captured:
@@ -747,7 +996,7 @@ def test_opensearch_rejects_corrupt_hits(mutation: str) -> None:
         raw_hits.append(dict(hit))
     client.search_response = {
         "timed_out": False,
-        "_shards": {"failed": 0},
+        "_shards": _complete_shards(),
         "hits": {"hits": raw_hits},
     }
     driver = OpenSearchDriver(client, index="af-search")
