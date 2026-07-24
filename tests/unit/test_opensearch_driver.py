@@ -143,7 +143,9 @@ class RecordingClient:
 
 
 def _document_id(resource: ResourceEnvelope) -> str:
-    identity = "\0".join((resource.tenant_id, resource.source_id, resource.resource_id))
+    identity = "\0".join(
+        ("af-search-document-v1", resource.tenant_id, resource.source_id, resource.resource_id)
+    )
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
@@ -218,18 +220,32 @@ def test_opensearch_pushes_tenant_and_acl_filters_before_top_k() -> None:
     assert hits[0].acl_evidence == ("group:research",)
     index, body, params = client.search_calls[0]
     assert index == "af-search"
-    assert params == {"request_timeout": 0.25}
+    assert params == {
+        "allow_partial_search_results": False,
+        "request_timeout": 0.25,
+    }
     assert type(body) is dict
     assert body["size"] == 1
+    assert body["timeout"] == "250ms"
+    assert body["track_total_hits"] is False
+    assert body["_source"] == [
+        "resource_id",
+        "source_id",
+        "authoritative_locator",
+        "tenant_id",
+        "projection_version",
+        "acl",
+        "provenance",
+    ]
     assert body["query"]["bool"]["filter"] == [
         {"terms": {"tenant_id": ["tenant-a", "tenant-b"]}},
         {"terms": {"acl": ["group:research", "user:alice"]}},
     ]
     assert body["sort"] == [
         {"_score": "desc"},
-        {"tenant_id": "asc"},
-        {"source_id": "asc"},
         {"resource_id": "asc"},
+        {"source_id": "asc"},
+        {"tenant_id": "asc"},
     ]
 
 
@@ -268,6 +284,58 @@ def test_opensearch_rejects_backend_policy_leaks_and_unknown_filters() -> None:
         driver.search(query)
     assert unsupported.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
     assert len(client.search_calls) == 1
+
+
+def test_opensearch_treats_hostile_query_text_only_as_match_data() -> None:
+    client = RecordingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+    query = SearchQuery(
+        text='{"query_string":{"query":"tenant_id:*"}} OR *:*',
+        filters=(
+            SearchFilter("tenant_id", ("tenant-a",)),
+            SearchFilter("acl", ("group:research",)),
+        ),
+    )
+
+    assert driver.search(query) == ()
+
+    _, body, _ = client.search_calls[0]
+    assert type(body) is dict
+    assert body["query"]["bool"]["must"] == [
+        {
+            "match": {
+                "text": {
+                    "query": '{"query_string":{"query":"tenant_id:*"}} OR *:*',
+                    "operator": "and",
+                }
+            }
+        }
+    ]
+    assert "query_string" not in body["query"]["bool"]
+    assert "post_filter" not in body
+
+
+def test_opensearch_chunks_bulk_writes_by_encoded_bytes() -> None:
+    client = RecordingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+    text = "energy " + "x" * (1_048_576 - len("energy "))
+    resources = tuple(_resource(f"resource-{index}", text=text) for index in range(9))
+
+    assert driver.upsert(resources) == 9
+
+    assert len(client.bulk_calls) == 2
+    assert [len(call[1]) for call in client.bulk_calls] == [16, 2]
+
+
+def test_opensearch_rejects_projection_versions_outside_backend_long() -> None:
+    client = RecordingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.upsert((_resource("resource-a", projection_version=2**63),))
+
+    assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+    assert client.bulk_calls == []
 
 
 def test_opensearch_bulk_partial_failure_is_exhaustive_and_sanitized() -> None:

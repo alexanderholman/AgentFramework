@@ -10,10 +10,16 @@ from types import ModuleType
 from uuid import uuid4
 
 import pytest
-from af.search.opensearch import OpenSearchDriver, opensearch_index_body
+from af.search.opensearch import (
+    OpenSearchDriver,
+    OpenSearchOperationError,
+    opensearch_index_body,
+)
 from af.search.opensearch_manager import opensearch_registration
 
+from af.framework.errors import PlatformReason
 from af.framework.managers import CapabilityBinding, ConnectionRef, HealthStatus
+from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
 from af.search.manager import SearchDriver, SearchFeature
 from af.testing import ConformanceEvidence, RealServiceHook, SearchDriverConformanceSuite
 
@@ -72,6 +78,30 @@ def _drop(index: str) -> None:
         )
     finally:
         client.close()  # type: ignore[attr-defined]
+
+
+def _resource(resource_id: str) -> ResourceEnvelope:
+    return ResourceEnvelope(
+        resource_id=resource_id,
+        kind=ResourceKind.TEXT,
+        source_id="source-primary",
+        authoritative_locator=f"af://source-primary/{resource_id}",
+        tenant_id="tenant-a",
+        projection_version=1,
+        acl=("group:research",),
+        provenance=("sha256:" + "a" * 64,),
+        text="bounded searchable energy content",
+    )
+
+
+def _query() -> SearchQuery:
+    return SearchQuery(
+        text="energy",
+        filters=(
+            SearchFilter("tenant_id", ("tenant-a",)),
+            SearchFilter("acl", ("group:research",)),
+        ),
+    )
 
 
 def test_opensearch_passes_shared_real_service_suite() -> None:
@@ -142,3 +172,55 @@ def test_opensearch_3_7_registration_binds_client_and_service_identity() -> None
         else:
             driver.close()
         _drop(index)
+
+
+def test_opensearch_real_bulk_partial_failure_never_reports_full_success() -> None:
+    index = _index("partial")
+    pipeline = _index("reject")
+    admin = _client()
+    body = opensearch_index_body()
+    body["settings"] = {"index.default_pipeline": pipeline}
+    try:
+        admin.ingest.put_pipeline(  # type: ignore[attr-defined]
+            id=pipeline,
+            body={
+                "processors": [
+                    {
+                        "fail": {
+                            "if": "ctx.resource_id == 'resource-b'",
+                            "message": "private-opensearch-rejection",
+                        }
+                    }
+                ]
+            },
+        )
+        admin.indices.create(  # type: ignore[attr-defined]
+            index=index,
+            body=body,
+            params={"wait_for_active_shards": "1"},
+        )
+    finally:
+        admin.close()  # type: ignore[attr-defined]
+
+    driver = OpenSearchDriver(_client(), index=index)
+    try:
+        with pytest.raises(OpenSearchOperationError) as captured:
+            driver.upsert((_resource("resource-a"), _resource("resource-b")))
+
+        assert captured.value.reason is PlatformReason.PERMANENT_FAILURE
+        assert "private-opensearch-rejection" not in str(captured.value)
+        assert [hit.resource_id for hit in driver.search(_query())] == ["resource-a"]
+    finally:
+        driver.close()
+        cleanup = _client()
+        try:
+            cleanup.indices.delete(  # type: ignore[attr-defined]
+                index=index,
+                params={"ignore": 404},
+            )
+            cleanup.ingest.delete_pipeline(  # type: ignore[attr-defined]
+                id=pipeline,
+                params={"ignore": 404},
+            )
+        finally:
+            cleanup.close()  # type: ignore[attr-defined]
