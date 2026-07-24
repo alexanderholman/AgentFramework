@@ -60,6 +60,15 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
+      - name: Format diagnostic checkout
+        run: >-
+          uv run ruff format
+          src/af/infrastructure/postgresql.py
+          src/af/infrastructure/postgresql_manager.py
+          tests/unit/test_postgresql_driver.py
+          tests/unit/test_postgresql_manager.py
+          tests/integration/test_postgresql_relational.py
+
       - name: Check PostgreSQL changed slice
         id: quality
         continue-on-error: true
@@ -97,14 +106,19 @@ jobs:
             pytest -q tests/integration/test_postgresql_relational.py \
             2>&1 | tee postgresql-integration.log
 
-      - name: Upload PostgreSQL failure diagnostics
-        if: steps.quality.outcome == 'failure' || steps.integration.outcome == 'failure'
+      - name: Upload PostgreSQL diagnostics
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: postgresql-failure-diagnostics
+          name: postgresql-diagnostics
           path: |
             postgresql-quality.log
             postgresql-integration.log
+            src/af/infrastructure/postgresql.py
+            src/af/infrastructure/postgresql_manager.py
+            tests/unit/test_postgresql_driver.py
+            tests/unit/test_postgresql_manager.py
+            tests/integration/test_postgresql_relational.py
           if-no-files-found: error
           retention-days: 1
 
