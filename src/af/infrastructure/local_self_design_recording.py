@@ -7,17 +7,17 @@ import importlib
 import os
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from af.framework.self_design_recording import (
-    SELF_DESIGN_RECORD_MAX_BYTES,
     DesignPlanRecord,
     DesignPlanRecorder,
-    DesignRecordResult,
-    DesignRecordStatus,
     DesignRecordingError,
     DesignRecordingRequest,
+    DesignRecordResult,
+    DesignRecordStatus,
+    SELF_DESIGN_RECORD_MAX_BYTES,
 )
 from af.framework.version_control import MANIFEST_MAX_BYTES
 
@@ -141,10 +141,8 @@ class LocalDesignPlanRecorder(DesignPlanRecorder):
             if descriptor >= 0:
                 os.close(descriptor)
             if temporary_path is not None:
-                try:
+                with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
     @staticmethod
     @contextmanager
