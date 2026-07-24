@@ -42,7 +42,17 @@ Synchronous publication performs asynchronous-listener preflight before middlewa
 
 Pending reads return only due, unpublished, non-dead-lettered records ordered by availability time, occurrence time, then message ID. Stored metadata is checked against the decoded canonical envelope; divergence fails closed as an integrity error. Publication and terminal dead-letter transitions are state-idempotent. Retry transitions record one explicit failed attempt and a new availability time.
 
-The storage contract is not a relay, lease manager, broker acknowledgement, inbox, deduplication store, or projection checkpoint. It does not claim exactly-once execution or delivery. A durable relay must add explicit ownership/concurrency, retry, acknowledgement, and dead-letter policies while preserving the stored envelope and actual transport guarantees.
+The storage contract alone is not a relay, lease manager, broker acknowledgement, inbox, deduplication store, or projection checkpoint. It does not claim exactly-once execution or delivery.
+
+## Durable outbox relay
+
+`OutboxRelay` composes `TransactionalOutbox` with an explicit publisher, finite retry policy, and renewable database-backed ownership lease. A logical relay lane has at most one lease owner at a time. Another owner may reclaim the lane only after the recorded expiry, and a current owner must renew before publication and again before recording the publication result. A stale owner cannot acknowledge, retry, or dead-letter a record after its lease is lost.
+
+Each invocation selects one bounded due batch in the outbox's deterministic order. A successful publisher return is the transport's acknowledgement boundary and is followed by a durable published transition. A typed retryable `OutboxPublishError` records a stable error code and a bounded next-availability time. A non-retryable failure, or a failure reaching the configured maximum attempt count, records one terminal dead-letter transition. Unexpected publisher exceptions are reduced to the generic `publisher.failure` code, retain their protected cause only for trusted evidence, schedule the durable failure outcome, and surface a sanitized relay error.
+
+The relay deliberately provides **at-least-once publication**, not exactly-once delivery. A process or database failure after the transport accepts an envelope but before the outbox transition commits leaves that envelope pending and it may be published again. Consumers that require side-effect safety must use consumer-scoped inbox/deduplication and projection checkpoints in the same authoritative transaction as their state change. Transport adapters must document whether a normal return truly means accepted, durably accepted, or merely buffered; the relay does not strengthen the underlying transport guarantee.
+
+The initial implementation serializes one logical lane under a global renewable lease. It does not claim parallel per-record leasing, broker transactions, distributed consensus, or exactly-once transport. Those optimizations may be added only with equivalent ownership, stale-writer, crash-recovery, and real-service evidence.
 
 ## Transactional inbox and projection checkpoints
 
