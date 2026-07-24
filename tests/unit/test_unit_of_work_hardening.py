@@ -50,8 +50,7 @@ def test_unit_of_work_rejects_invalid_callback_limits(limit: object) -> None:
     driver.close()
 
 
-def test_unit_of_work_fails_closed_at_callback_limit_without_losing_registered_work(
-) -> None:
+def test_unit_of_work_fails_closed_at_callback_limit_without_losing_registered_work() -> None:
     driver = SQLiteDriver(":memory:")
     observed: list[str] = []
 
@@ -67,8 +66,7 @@ def test_unit_of_work_fails_closed_at_callback_limit_without_losing_registered_w
     driver.close()
 
 
-def test_database_manager_routes_unit_of_work_through_verified_read_and_write_drivers(
-) -> None:
+def test_database_manager_routes_unit_of_work_through_verified_read_and_write_drivers() -> None:
     manager = _manager()
 
     with manager.unit_of_work(requires=(DatabaseFeature.SAVEPOINTS,)) as write_unit:
@@ -81,9 +79,7 @@ def test_database_manager_routes_unit_of_work_through_verified_read_and_write_dr
         )
 
     with manager.unit_of_work(read_only=True) as read_unit:
-        row = read_unit.transaction.query(
-            DatabaseStatement("SELECT 1 AS value", read_only=True)
-        )[0]
+        row = read_unit.transaction.query(DatabaseStatement("SELECT 1 AS value", read_only=True))[0]
 
     assert row["value"] == 1
     assert write_unit.committed
