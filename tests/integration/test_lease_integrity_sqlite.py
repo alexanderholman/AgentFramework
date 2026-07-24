@@ -82,6 +82,28 @@ def test_released_intermediate_owner_does_not_reset_relay_generation(
     second_driver.close()
 
 
+def test_released_fast_clock_lease_is_immediately_reclaimable_by_slow_clock(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "outbox-relay-release-clock-skew.sqlite3"
+    fast_clock = MutableClock()
+    fast_clock.advance(timedelta(hours=1))
+    slow_clock = MutableClock()
+    first_driver = SQLiteDriver(database)
+    second_driver = SQLiteDriver(database)
+    fast_relay = _relay(first_driver, fast_clock, owner="fast-owner")
+    slow_relay = _relay(second_driver, slow_clock, owner="slow-owner")
+
+    with fast_relay.lock():
+        pass
+
+    with slow_relay.lock():
+        pass
+
+    first_driver.close()
+    second_driver.close()
+
+
 def test_migration_renewal_preserves_impossible_row_count_as_integrity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
