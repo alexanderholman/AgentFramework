@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from inspect import isasyncgen, isawaitable, iscoroutinefunction
 from math import isfinite
@@ -14,8 +15,12 @@ from typing import Protocol
 from af.observability.context import TelemetryContext
 
 __all__ = (
+    "CapabilityState",
+    "DegradationState",
     "HealthState",
+    "LivenessState",
     "PublisherEvidence",
+    "ReadinessState",
     "TelemetryKind",
     "TelemetryPublisher",
     "TelemetrySignal",
@@ -46,14 +51,84 @@ class TelemetryKind(StrEnum):
     LIFECYCLE = "lifecycle"
 
 
-class HealthState(StrEnum):
-    """Health dimensions that must not be collapsed into a single boolean."""
+class LivenessState(StrEnum):
+    """Whether the component process or object is responsive enough to observe."""
 
+    UNKNOWN = "unknown"
     LIVE = "live"
+    DEAD = "dead"
+
+
+class ReadinessState(StrEnum):
+    """Whether the component can currently accept its declared work."""
+
+    UNKNOWN = "unknown"
+    NOT_READY = "not-ready"
+    WARMING = "warming"
     READY = "ready"
+    BUSY = "busy"
+    DRAINING = "draining"
+    SATURATED = "saturated"
+
+
+class DegradationState(StrEnum):
+    """Whether dependencies or operation quality are impaired."""
+
+    HEALTHY = "healthy"
     DEGRADED = "degraded"
-    CAPABILITY_MISMATCH = "capability-mismatch"
-    STOPPED = "stopped"
+    UNAVAILABLE = "unavailable"
+    QUARANTINED = "quarantined"
+
+
+class CapabilityState(StrEnum):
+    """Whether the observed runtime matches the capabilities it claims."""
+
+    UNKNOWN = "unknown"
+    AVAILABLE = "available"
+    MISMATCH = "mismatch"
+
+
+def _aware_datetime(value: object, label: str) -> datetime:
+    if not isinstance(value, datetime) or value.utcoffset() is None:
+        raise ValueError(f"{label} must be a timezone-aware datetime")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class HealthState:
+    """Orthogonal health dimensions and a freshness deadline."""
+
+    liveness: LivenessState
+    readiness: ReadinessState
+    degradation: DegradationState
+    capability: CapabilityState
+    reason_code: str
+    fresh_until: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.liveness, LivenessState):
+            raise TypeError("health liveness state is invalid")
+        if not isinstance(self.readiness, ReadinessState):
+            raise TypeError("health readiness state is invalid")
+        if not isinstance(self.degradation, DegradationState):
+            raise TypeError("health degradation state is invalid")
+        if not isinstance(self.capability, CapabilityState):
+            raise TypeError("health capability state is invalid")
+        if type(self.reason_code) is not str or _IDENTIFIER.fullmatch(self.reason_code) is None:
+            raise ValueError("health reason code must be a canonical identifier")
+        _aware_datetime(self.fresh_until, "health freshness deadline")
+
+    @property
+    def ready(self) -> bool:
+        return (
+            self.liveness is LivenessState.LIVE
+            and self.readiness is ReadinessState.READY
+            and self.degradation is DegradationState.HEALTHY
+            and self.capability is CapabilityState.AVAILABLE
+        )
+
+    def is_stale(self, at: datetime) -> bool:
+        return _aware_datetime(at, "health comparison time") > self.fresh_until
 
 
 def _attribute_value(value: object) -> AttributeValue:
@@ -98,6 +173,7 @@ class TelemetrySignal:
 
     kind: TelemetryKind
     name: str
+    observed_at: datetime
     context: TelemetryContext | None
     attributes: tuple[tuple[str, AttributeValue], ...]
     health_state: HealthState | None = None
@@ -107,6 +183,7 @@ class TelemetrySignal:
             raise TypeError("telemetry signal kind is invalid")
         if type(self.name) is not str or _IDENTIFIER.fullmatch(self.name) is None:
             raise ValueError("telemetry signal name must be a canonical identifier")
+        _aware_datetime(self.observed_at, "telemetry observation time")
         if self.context is not None and not isinstance(self.context, TelemetryContext):
             raise TypeError("telemetry signal context is invalid")
         if type(self.attributes) is not tuple or any(
@@ -123,6 +200,8 @@ class TelemetrySignal:
         if self.kind is TelemetryKind.HEALTH:
             if not isinstance(self.health_state, HealthState):
                 raise ValueError("health telemetry requires a health state")
+            if self.health_state.fresh_until < self.observed_at:
+                raise ValueError("health freshness deadline cannot precede observation")
         elif self.health_state is not None:
             raise ValueError("health state is only valid for health telemetry")
 
@@ -132,6 +211,7 @@ class TelemetrySignal:
         *,
         kind: TelemetryKind,
         name: str,
+        observed_at: datetime,
         context: TelemetryContext | None = None,
         attributes: Mapping[str, object] | None = None,
         attribute_limit: int = 16,
@@ -141,6 +221,7 @@ class TelemetrySignal:
         return cls(
             kind=kind,
             name=name,
+            observed_at=observed_at,
             context=context,
             attributes=_snapshot_attributes(
                 {} if attributes is None else attributes,
@@ -153,16 +234,18 @@ class TelemetrySignal:
         cls,
         *,
         name: str,
+        observed_at: datetime,
         state: HealthState,
         context: TelemetryContext | None = None,
         attributes: Mapping[str, object] | None = None,
         attribute_limit: int = 16,
     ) -> TelemetrySignal:
-        """Create a health signal with an explicit health dimension."""
+        """Create a health signal without collapsing independent dimensions."""
 
         return cls(
             kind=TelemetryKind.HEALTH,
             name=name,
+            observed_at=observed_at,
             context=context,
             attributes=_snapshot_attributes(
                 {} if attributes is None else attributes,
@@ -174,8 +257,9 @@ class TelemetrySignal:
     def __repr__(self) -> str:
         return (
             f"TelemetrySignal(kind={self.kind.value!r}, name={self.name!r}, "
+            f"observed_at={self.observed_at.isoformat()!r}, "
             "context='[REDACTED]', attributes='[REDACTED]', "
-            f"health_state={None if self.health_state is None else self.health_state.value!r})"
+            f"health_state={self.health_state!r})"
         )
 
 
