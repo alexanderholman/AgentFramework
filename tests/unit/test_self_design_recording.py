@@ -241,9 +241,7 @@ class RecordingRecorder:
 def test_controller_separates_read_only_prepare_from_explicit_record(tmp_path: Path) -> None:
     provider = RecordingEvidenceProvider()
     recorder = RecordingRecorder()
-    controller = SelfDesignRecordingController(
-        _operation(provider), recorder, lambda: _OBSERVED_AT
-    )
+    controller = SelfDesignRecordingController(_operation(provider), recorder, lambda: _OBSERVED_AT)
     coordination = _coordination(tmp_path)
 
     prepared = controller.prepare()
