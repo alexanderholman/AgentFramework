@@ -65,7 +65,7 @@ class _PostgreSQLCursor(DatabaseCursor):
         self._transaction = transaction
         self._result = result
         self._closed = False
-        self._columns = tuple(str(column) for column in result.keys())
+        self._columns = tuple(str(column) for column in result)
 
     def __iter__(self) -> _PostgreSQLCursor:
         return self
