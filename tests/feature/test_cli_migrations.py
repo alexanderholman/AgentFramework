@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from types import ModuleType
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from typer.testing import CliRunner
