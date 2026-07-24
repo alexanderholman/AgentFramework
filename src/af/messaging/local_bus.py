@@ -59,12 +59,12 @@ class LocalEventMiddleware(Protocol):
         /,
     ) -> LocalEventDispatchReport: ...
 
-    async def dispatch_async(
+    def dispatch_async(
         self,
         envelope: MessageEnvelope,
         call_next: AsyncLocalEventCallNext,
         /,
-    ) -> LocalEventDispatchReport: ...
+    ) -> object: ...
 
 
 class LocalEventTelemetryMiddleware:
@@ -177,11 +177,15 @@ class LocalEventBus:
                 raise InvalidMessageSchema(
                     "local event middleware must define sync and async dispatch"
                 )
-            if inspect.iscoroutinefunction(extension.dispatch) or inspect.isasyncgenfunction(
+            if inspect.iscoroutinefunction(
                 extension.dispatch
-            ):
+            ) or inspect.isasyncgenfunction(extension.dispatch):
                 raise InvalidMessageSchema(
                     "local event synchronous middleware dispatch cannot be asynchronous"
+                )
+            if inspect.isasyncgenfunction(extension.dispatch_async):
+                raise InvalidMessageSchema(
+                    "local event asynchronous middleware cannot be an asynchronous generator"
                 )
         self._registry = registry
         self._max_listeners_per_event = max_listeners_per_event
@@ -278,8 +282,7 @@ class LocalEventBus:
 
         if not called:
             raise InvalidMessageSchema("local event middleware must call next exactly once")
-        self._validate_report(report, envelope, len(listeners))
-        return report
+        return self._validate_report(report, envelope, len(listeners))
 
     async def _invoke_async_middleware(
         self,
@@ -317,10 +320,11 @@ class LocalEventBus:
                     "local event asynchronous middleware returned an asynchronous generator"
                 )
             if not inspect.isawaitable(result):
+                self._close_pending(pending)
                 raise InvalidMessageSchema(
                     "local event asynchronous middleware must return awaitable work"
                 )
-            report = await cast(Awaitable[LocalEventDispatchReport], result)
+            report = await result
         except asyncio.CancelledError:
             raise
         except (
@@ -329,25 +333,28 @@ class LocalEventBus:
             LocalEventListenerError,
             LocalEventMiddlewareError,
         ):
+            self._close_pending(pending)
             raise
         except Exception as error:
+            self._close_pending(pending)
             raise LocalEventMiddlewareError("local event middleware failed") from error
 
         if not called or not completed:
-            if inspect.iscoroutine(pending):
-                pending.close()
-            raise InvalidMessageSchema(
-                "local event middleware must await next exactly once"
-            )
-        self._validate_report(report, envelope, len(listeners))
-        return report
+            self._close_pending(pending)
+            raise InvalidMessageSchema("local event middleware must await next exactly once")
+        return self._validate_report(report, envelope, len(listeners))
+
+    @staticmethod
+    def _close_pending(pending: Awaitable[LocalEventDispatchReport] | None) -> None:
+        if inspect.iscoroutine(pending):
+            pending.close()
 
     @staticmethod
     def _validate_report(
         report: object,
         envelope: MessageEnvelope,
         listener_count: int,
-    ) -> None:
+    ) -> LocalEventDispatchReport:
         if type(report) is not LocalEventDispatchReport:
             raise InvalidMessageSchema("local event middleware returned invalid dispatch evidence")
         if (
@@ -356,6 +363,7 @@ class LocalEventBus:
             or report.listener_count != listener_count
         ):
             raise InvalidMessageSchema("local event middleware altered dispatch evidence")
+        return report
 
     @staticmethod
     def _dispatch_sync(
