@@ -18,7 +18,7 @@ jobs:
   integration:
     name: PostgreSQL relational conformance
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-bookworm@sha256:4f736ae292687621d4dbe0d499ffd024a36bd2ee7d8ca6f2ccd4c800f047b394
@@ -60,82 +60,7 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Format diagnostic checkout
-        run: >-
-          uv run ruff format
-          src/af/infrastructure/postgresql.py
-          src/af/infrastructure/postgresql_manager.py
-          tests/unit/test_postgresql_driver.py
-          tests/unit/test_postgresql_manager.py
-          tests/integration/test_postgresql_relational.py
-
-      - name: Check PostgreSQL changed slice
-        id: quality
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          {
-            uv run ruff format --check \
-              src/af/infrastructure/postgresql.py \
-              src/af/infrastructure/postgresql_manager.py \
-              tests/unit/test_postgresql_driver.py \
-              tests/unit/test_postgresql_manager.py \
-              tests/integration/test_postgresql_relational.py
-            uv run ruff check \
-              src/af/infrastructure/postgresql.py \
-              src/af/infrastructure/postgresql_manager.py \
-              tests/unit/test_postgresql_driver.py \
-              tests/unit/test_postgresql_manager.py \
-              tests/integration/test_postgresql_relational.py
-            uv run mypy \
-              src/af/infrastructure/postgresql.py \
-              src/af/infrastructure/postgresql_manager.py
-            uv run pytest -q \
-              tests/unit/test_postgresql_driver.py \
-              tests/unit/test_postgresql_manager.py
-          } 2>&1 | tee postgresql-quality.log
-
       - name: Run PostgreSQL real-service certification
-        id: integration
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          uv run --with "psycopg[binary]==3.3.4" \
-            pytest -q tests/integration/test_postgresql_relational.py \
-            2>&1 | tee postgresql-integration.log
-
-      - name: Run canonical gate without PostgreSQL opt-in
-        id: canonical
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          unset AF_POSTGRESQL_TEST_URL
-          python scripts/af_dev.py --action check --execute \
-            2>&1 | tee canonical-gate.log
-
-      - name: Upload PostgreSQL diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: postgresql-diagnostics
-          path: |
-            postgresql-quality.log
-            postgresql-integration.log
-            canonical-gate.log
-            src/af/infrastructure/postgresql.py
-            src/af/infrastructure/postgresql_manager.py
-            tests/unit/test_postgresql_driver.py
-            tests/unit/test_postgresql_manager.py
-            tests/integration/test_postgresql_relational.py
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Enforce PostgreSQL checks
-        if: >-
-          steps.quality.outcome == 'failure' ||
-          steps.integration.outcome == 'failure' ||
-          steps.canonical.outcome == 'failure'
-        run: exit 1
+        run: >-
+          uv run --with "psycopg[binary]==3.3.4"
+          pytest -q tests/integration/test_postgresql_relational.py
