@@ -77,7 +77,7 @@ class _MySQLCursor(DatabaseCursor):
                 reason=PlatformReason.SHUTDOWN_FAILED,
                 stage="database.cursor",
             )
-        if self._transaction.cancelled:
+        if self._transaction.cancellation_requested():
             self.close()
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
@@ -87,7 +87,7 @@ class _MySQLCursor(DatabaseCursor):
             raw = self._result.fetchone()
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.cursor") from None
-        if self._transaction.cancelled:
+        if self._transaction.cancellation_requested():
             self.close()
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
@@ -158,8 +158,7 @@ class _MySQLTransaction:
     def active(self) -> bool:
         return self._active
 
-    @property
-    def cancelled(self) -> bool:
+    def cancellation_requested(self) -> bool:
         return self._cancellation.is_set()
 
     def _assert_active(self) -> None:
@@ -179,7 +178,7 @@ class _MySQLTransaction:
 
     def execute(self, statement: DatabaseStatement, /) -> int:
         self._assert_active()
-        if self.cancelled:
+        if self.cancellation_requested():
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
                 stage="database.execute",
@@ -196,7 +195,7 @@ class _MySQLTransaction:
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.execute") from None
         try:
-            if self.cancelled:
+            if self.cancellation_requested():
                 raise DatabaseOperationError(
                     reason=PlatformReason.CANCELLED,
                     stage="database.execute",
@@ -207,7 +206,7 @@ class _MySQLTransaction:
 
     def stream(self, statement: DatabaseStatement, /) -> DatabaseCursor:
         self._assert_active()
-        if self.cancelled:
+        if self.cancellation_requested():
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
                 stage="database.query",
@@ -226,7 +225,7 @@ class _MySQLTransaction:
             )
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.query") from None
-        if self.cancelled:
+        if self.cancellation_requested():
             result.close()
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
@@ -317,7 +316,7 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
         del error, traceback
         transaction = self._transaction
         root = self._root
-        cancelled = transaction is not None and transaction.cancelled
+        cancelled = transaction is not None and transaction.cancellation_requested()
         try:
             if root is None:
                 raise DatabaseOperationError(
