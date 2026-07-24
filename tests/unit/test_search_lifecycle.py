@@ -115,7 +115,11 @@ def test_empty_authoritative_rebuild_cuts_over_and_rolls_back_atomically() -> No
     manager = IndexLifecycleManager(backend, clock=lambda: _NOW)
     build = manager.begin("catalog", projection_version=2)
 
-    ready = manager.mark_ready(build, checkpoint="event-empty-snapshot")
+    ready = manager.mark_ready(
+        build,
+        checkpoint="event-empty-snapshot",
+        empty_snapshot=True,
+    )
 
     assert ready.phase is IndexPhase.READY
     assert ready.indexed_resources == 0
@@ -125,6 +129,41 @@ def test_empty_authoritative_rebuild_cuts_over_and_rolls_back_atomically() -> No
     assert manager.rollback("catalog") == "catalog-g00000001"
     assert backend.aliases["catalog"] == "catalog-g00000001"
     assert manager.status(build).phase is IndexPhase.RETIRED
+
+
+def test_zero_resource_build_requires_explicit_empty_snapshot_intent() -> None:
+    backend = RecordingBackend()
+    manager = IndexLifecycleManager(backend, clock=lambda: _NOW)
+    build = manager.begin("catalog", projection_version=2)
+
+    with pytest.raises(IndexLifecycleError):
+        manager.mark_ready(build, checkpoint="event-not-projected")
+    with pytest.raises(ValueError):
+        manager.mark_ready(
+            build,
+            checkpoint="event-not-projected",
+            empty_snapshot=1,  # type: ignore[arg-type]
+        )
+
+    assert manager.status(build).phase is IndexPhase.BUILDING
+    assert backend.aliases["catalog"] == "catalog-g00000001"
+
+
+def test_empty_snapshot_intent_rejects_populated_build() -> None:
+    backend = RecordingBackend()
+    manager = IndexLifecycleManager(backend, clock=lambda: _NOW)
+    build = manager.begin("catalog", projection_version=2)
+    manager.apply(build, (_resource("resource-a"),))
+
+    with pytest.raises(IndexLifecycleError):
+        manager.mark_ready(
+            build,
+            checkpoint="event-0001",
+            empty_snapshot=True,
+        )
+
+    assert manager.status(build).phase is IndexPhase.BUILDING
+    assert manager.mark_ready(build, checkpoint="event-0001").phase is IndexPhase.READY
 
 
 def test_partial_bulk_failure_blocks_cutover_and_preserves_current_alias() -> None:
