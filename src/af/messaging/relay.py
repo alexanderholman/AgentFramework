@@ -57,9 +57,7 @@ class OutboxPublishError(DatabaseOperationError):
         self.retryable = retryable
         super().__init__(
             reason=(
-                PlatformReason.TRANSIENT_FAILURE
-                if retryable
-                else PlatformReason.TRANSPORT_FAILED
+                PlatformReason.TRANSIENT_FAILURE if retryable else PlatformReason.TRANSPORT_FAILED
             ),
             stage="outbox.publisher",
             protected_cause=protected_cause,
