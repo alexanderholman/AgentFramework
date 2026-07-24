@@ -98,9 +98,7 @@ class SearchManager(Manager[SearchDriver]):
 
         if type(registration) is not DriverRegistration or registration.manager_id != "search":
             raise ManagerConfigurationError(
-                protected_cause=ValueError(
-                    "driver registration does not target the search manager"
-                )
+                protected_cause=ValueError("driver registration does not target the search manager")
             )
         self.extend(
             registration.driver_name,
@@ -172,8 +170,7 @@ def bind_search_manager(
     if (
         not snapshot
         or any(
-            type(registration) is not DriverRegistration
-            or registration.manager_id != "search"
+            type(registration) is not DriverRegistration or registration.manager_id != "search"
             for registration in snapshot
         )
         or len({registration.driver_name for registration in snapshot}) != len(snapshot)
