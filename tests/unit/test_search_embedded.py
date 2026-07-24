@@ -97,6 +97,20 @@ def test_policy_filters_are_enforced_before_top_k(tmp_path: Path) -> None:
     assert tuple(hit.resource_id for hit in hits) == ("resource-a",)
 
 
+def test_multiline_document_returns_contract_safe_highlight(tmp_path: Path) -> None:
+    resource = _resource(
+        "resource-a",
+        text="stored\nenergy\tfor\r\nfuture demand",
+    )
+
+    with EmbeddedSearchDriver(tmp_path / "multiline-highlight.sqlite3") as driver:
+        driver.upsert((resource,))
+        hits = driver.search(_query())
+
+    assert len(hits) == 1
+    assert hits[0].highlights == ("stored <em>energy</em> for future demand",)
+
+
 def test_tenant_is_part_of_hit_identity_for_colliding_resources(tmp_path: Path) -> None:
     tenant_a = _resource("resource-a", tenant_id="tenant-a")
     tenant_b = _resource("resource-a", tenant_id="tenant-b")
