@@ -18,11 +18,11 @@ from af.framework.self_design_operation import PreparedDesignPlan, SelfDesignOpe
 from af.framework.self_design_recording import (
     DesignPlanRecord,
     DesignRecordAuthority,
-    DesignRecordResult,
-    DesignRecordStatus,
     DesignRecordingEffect,
     DesignRecordingError,
     DesignRecordingRequest,
+    DesignRecordResult,
+    DesignRecordStatus,
 )
 from af.framework.version_control import (
     CoordinationObservation,
