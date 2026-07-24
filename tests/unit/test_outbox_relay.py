@@ -256,6 +256,39 @@ def test_relay_lease_excludes_competitors_and_renewal_extends_ownership(tmp_path
     second_driver.close()
 
 
+def test_reused_owner_id_cannot_bypass_lease_generation_fencing(tmp_path: Path) -> None:
+    database = tmp_path / "outbox-relay-fencing.sqlite3"
+    clock = MutableClock()
+    first_driver = SQLiteDriver(database)
+    second_driver = SQLiteDriver(database)
+    first, _ = _relay(
+        first_driver,
+        RecordingPublisher(),
+        clock,
+        owner="shared-owner",
+        lease=timedelta(minutes=1),
+    )
+    reincarnated, _ = _relay(
+        second_driver,
+        RecordingPublisher(),
+        clock,
+        owner="shared-owner",
+        lease=timedelta(minutes=1),
+    )
+
+    with first.lock() as stale:
+        clock.advance(timedelta(minutes=2))
+        with reincarnated.lock() as current:
+            with pytest.raises(OutboxRelayLeaseUnavailable):
+                stale.renew()
+            current.renew()
+
+    with reincarnated.lock():
+        pass
+    first_driver.close()
+    second_driver.close()
+
+
 def test_expired_stolen_lease_prevents_stale_publication_acknowledgement(tmp_path: Path) -> None:
     database = tmp_path / "outbox-relay-stolen.sqlite3"
     clock = MutableClock()
