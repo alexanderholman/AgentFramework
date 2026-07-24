@@ -41,6 +41,12 @@ class MigrationProvider(ServiceProvider):
             raise ValueError("migration owner must be non-empty")
         if not callable(clock):
             raise TypeError("migration clock must be callable")
+        if (
+            not isinstance(lock_lease, timedelta)
+            or lock_lease <= timedelta(0)
+            or lock_lease > timedelta(hours=24)
+        ):
+            raise ValueError("migration lock lease is invalid")
         self._migrations = snapshot
         self._connection = connection
         self._owner_id = owner_id
