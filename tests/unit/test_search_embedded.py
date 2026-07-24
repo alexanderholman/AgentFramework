@@ -410,6 +410,49 @@ def test_rollback_failure_quarantines_partial_upsert_and_preserves_interrupt(
         assert recovered.search(_query()) == ()
 
 
+def test_rollback_interruption_quarantines_partial_upsert(tmp_path: Path) -> None:
+    database = tmp_path / "upsert-rollback-interruption.sqlite3"
+
+    class RollbackInterruptedConnection(sqlite3.Connection):
+        interrupt_next_insert = True
+
+        def execute(  # type: ignore[override]
+            self,
+            sql: str,
+            parameters: tuple[object, ...] = (),
+            /,
+        ) -> sqlite3.Cursor:
+            cursor = super().execute(sql, parameters)
+            if self.interrupt_next_insert and "INSERT INTO af_search_fts" in sql:
+                self.interrupt_next_insert = False
+                raise sqlite3.OperationalError("sensitive write failure")
+            return cursor
+
+        def rollback(self) -> None:
+            raise KeyboardInterrupt
+
+    driver = EmbeddedSearchDriver(database)
+    driver._connection.close()
+    driver._connection = sqlite3.connect(
+        database,
+        isolation_level=None,
+        check_same_thread=False,
+        factory=RollbackInterruptedConnection,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        driver.upsert((_resource("resource-a"),))
+
+    with pytest.raises(SearchDriverIneligible) as unavailable:
+        driver.search(_query())
+
+    assert unavailable.value.reason is PlatformReason.SHUTDOWN_FAILED
+    driver.close()
+
+    with EmbeddedSearchDriver(database) as recovered:
+        assert recovered.search(_query()) == ()
+
+
 def test_interrupted_delete_preserves_resource_and_reports_cancellation(
     tmp_path: Path,
 ) -> None:
