@@ -359,7 +359,7 @@ class CyclePlan:
             raise ValueError("self-development gap plan cannot name a procedure")
         if self.route is not CycleRoute.STOP and self.selected_item_id is None:
             raise ValueError("self-development active plan requires selected work")
-        if self.allowed_writes:
+        if type(self.allowed_writes) is not tuple or self.allowed_writes:
             raise ValueError("self-development planning slice cannot grant writes")
 
     @property
@@ -398,6 +398,20 @@ class SelfDevelopmentPlanner:
         "unsafe",
     )
 
+    def __init__(self, *, installed_procedure_ids: tuple[str, ...] = ()) -> None:
+        if (
+            type(installed_procedure_ids) is not tuple
+            or len(installed_procedure_ids) > _MAX_CANDIDATES
+            or any(
+                type(procedure_id) is not str
+                or _PROCEDURE_ID.fullmatch(procedure_id) is None
+                for procedure_id in installed_procedure_ids
+            )
+            or len(set(installed_procedure_ids)) != len(installed_procedure_ids)
+        ):
+            raise ValueError("self-development installed procedure identities are invalid")
+        self._installed_procedure_ids = frozenset(installed_procedure_ids)
+
     def plan(
         self,
         snapshot: DevelopmentSnapshot,
@@ -425,7 +439,10 @@ class SelfDevelopmentPlanner:
         if selected is None:
             route = CycleRoute.STOP
             procedure_id = None
-        elif selected.procedure_id is not None:
+        elif (
+            selected.procedure_id is not None
+            and selected.procedure_id in self._installed_procedure_ids
+        ):
             route = CycleRoute.REUSE
             procedure_id = selected.procedure_id
         else:
