@@ -169,6 +169,7 @@ def _assert_read_only(driver: DatabaseDriver) -> None:
         else:
             _fail("read-only transaction accepted a write statement")
 
+    with driver.transaction(read_only=True) as transaction:
         try:
             transaction.query(
                 DatabaseStatement(
