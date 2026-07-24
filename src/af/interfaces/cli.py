@@ -104,7 +104,14 @@ def create_cli(
             if external_factory:
                 if not isinstance(resolved, AFApplication):
                     if iscoroutine(resolved):
-                        resolved.close()
+                        try:
+                            resolved.close()
+                        except Exception as error:
+                            raise PlatformError(
+                                PlatformReason.CONFIGURATION_INVALID,
+                                stage="cli.application-factory",
+                                protected_cause=error,
+                            ) from None
                     raise PlatformError(
                         PlatformReason.CONFIGURATION_INVALID,
                         stage="cli.application-factory",
