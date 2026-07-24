@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from af.framework.relational import DatabaseDriver
 from af.infrastructure.sqlite import SQLiteDriver
 from af.testing import (
     ConformanceEvidence,
@@ -14,13 +15,12 @@ from af.testing import (
 
 def test_sqlite_passes_shared_relational_real_service_suite() -> None:
     @contextmanager
-    def fixture() -> Iterator[SQLiteDriver]:
+    def fixture() -> Iterator[DatabaseDriver]:
         with SQLiteDriver(":memory:") as driver:
             yield driver
 
-    report = RelationalDriverConformanceSuite().run_real(
-        RealServiceHook("sqlite", fixture, enabled=True)
-    )
+    hook: RealServiceHook[DatabaseDriver] = RealServiceHook("sqlite", fixture, enabled=True)
+    report = RelationalDriverConformanceSuite().run_real(hook)
 
     assert report.evidence is ConformanceEvidence.REAL_SERVICE
     assert report.integration == "sqlite"
