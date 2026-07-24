@@ -20,6 +20,7 @@ __all__ = ("EmbeddedSearchDriver", "SearchDriverIneligible")
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,254}[A-Za-z0-9])?$")
 _TOKEN = re.compile(r"\w+", re.UNICODE)
+_HIGHLIGHT_WHITESPACE = re.compile(r"[\t\r\n]+")
 _SUPPORTED_FILTERS = frozenset({"tenant_id", "acl"})
 
 
@@ -40,6 +41,17 @@ def _operation_reason(error: sqlite3.Error) -> PlatformReason:
     if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
         return PlatformReason.CANCELLED
     return PlatformReason.PERMANENT_FAILURE
+
+
+def _control_flow_rank(error: BaseException) -> int:
+    if not isinstance(error, Exception):
+        return 3
+    if isinstance(error, PlatformError):
+        if error.reason is PlatformReason.CANCELLED:
+            return 2
+        if error.reason is PlatformReason.SHUTDOWN_FAILED:
+            return 1
+    return 0
 
 
 def _identity(value: object) -> str:
@@ -99,9 +111,10 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
         self._lock = RLock()
         self._closed = False
         self._closing = False
+        self._poisoned = False
 
     def _shutdown_started(self) -> bool:
-        return self._closed or self._closing
+        return self._closed or self._closing or self._poisoned
 
     def _assert_open(self) -> None:
         if self._shutdown_started():
@@ -159,13 +172,27 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                         ),
                     )
                 self._connection.commit()
-            except sqlite3.Error as error:
-                self._connection.rollback()
-                raise _failure(
-                    _operation_reason(error),
-                    stage="search.embedded.upsert",
-                    protected_cause=error,
-                ) from None
+            except BaseException as error:
+                try:
+                    self._connection.rollback()
+                except BaseException as rollback_error:
+                    self._poisoned = True
+                    if _control_flow_rank(rollback_error) > _control_flow_rank(error):
+                        raise rollback_error from None
+                    if _control_flow_rank(error):
+                        raise error from None
+                    raise _failure(
+                        PlatformReason.PERMANENT_FAILURE,
+                        stage="search.embedded.upsert.rollback",
+                        protected_cause=rollback_error,
+                    ) from None
+                if isinstance(error, sqlite3.Error):
+                    raise _failure(
+                        _operation_reason(error),
+                        stage="search.embedded.upsert",
+                        protected_cause=error,
+                    ) from None
+                raise
         return len(resources)
 
     def delete(self, *, tenant_id: str, source_id: str, resource_id: str) -> bool:
@@ -259,7 +286,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             evidence = tuple(value for value in stored_acl if value in allowed)
             provenance = tuple(json.loads(str(row[6])))
             score = max(0.0, -float(cast(float, row[7])))
-            highlight = str(row[8])
+            highlight = _HIGHLIGHT_WHITESPACE.sub(" ", str(row[8]))
             yield SearchHit(
                 resource_id=str(row[0]),
                 source_id=str(row[1]),
@@ -295,14 +322,16 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             try:
                 self._connection.close()
             except sqlite3.Error as error:
-                self._closing = False
                 raise _failure(
                     PlatformReason.SHUTDOWN_FAILED,
                     stage="search.embedded.shutdown",
                     protected_cause=error,
                 ) from None
-            self._closed = True
-            self._closing = False
+            else:
+                self._closed = True
+                self._poisoned = False
+            finally:
+                self._closing = False
 
     def __enter__(self) -> EmbeddedSearchDriver:
         self._assert_open()

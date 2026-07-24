@@ -97,6 +97,20 @@ def test_policy_filters_are_enforced_before_top_k(tmp_path: Path) -> None:
     assert tuple(hit.resource_id for hit in hits) == ("resource-a",)
 
 
+def test_multiline_document_returns_contract_safe_highlight(tmp_path: Path) -> None:
+    resource = _resource(
+        "resource-a",
+        text="stored\nenergy\tfor\r\nfuture demand",
+    )
+
+    with EmbeddedSearchDriver(tmp_path / "multiline-highlight.sqlite3") as driver:
+        driver.upsert((resource,))
+        hits = driver.search(_query())
+
+    assert len(hits) == 1
+    assert hits[0].highlights == ("stored <em>energy</em> for future demand",)
+
+
 def test_tenant_is_part_of_hit_identity_for_colliding_resources(tmp_path: Path) -> None:
     tenant_a = _resource("resource-a", tenant_id="tenant-a")
     tenant_b = _resource("resource-a", tenant_id="tenant-b")
@@ -327,6 +341,132 @@ def test_interrupted_upsert_rolls_back_and_recovers(tmp_path: Path) -> None:
     assert tuple(hit.resource_id for hit in recovered) == ("resource-f",)
 
 
+def test_base_exception_during_upsert_rolls_back_and_recovers(tmp_path: Path) -> None:
+    database = tmp_path / "upsert-base-exception.sqlite3"
+
+    class InterruptingConnection(sqlite3.Connection):
+        interrupt_next_insert = True
+
+        def execute(  # type: ignore[override]
+            self,
+            sql: str,
+            parameters: tuple[object, ...] = (),
+            /,
+        ) -> sqlite3.Cursor:
+            cursor = super().execute(sql, parameters)
+            if self.interrupt_next_insert and "INSERT INTO af_search_fts" in sql:
+                self.interrupt_next_insert = False
+                raise KeyboardInterrupt
+            return cursor
+
+    driver = EmbeddedSearchDriver(database)
+    driver._connection.close()
+    driver._connection = sqlite3.connect(
+        database,
+        isolation_level=None,
+        check_same_thread=False,
+        factory=InterruptingConnection,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        driver.upsert((_resource("resource-a"),))
+
+    assert driver._connection.in_transaction is False
+    assert driver.search(_query()) == ()
+    assert driver.upsert((_resource("resource-b"),)) == 1
+    assert tuple(hit.resource_id for hit in driver.search(_query())) == ("resource-b",)
+    driver.close()
+
+
+def test_rollback_failure_quarantines_partial_upsert_and_preserves_interrupt(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "upsert-rollback-failure.sqlite3"
+
+    class RollbackFailingConnection(sqlite3.Connection):
+        interrupt_next_insert = True
+
+        def execute(  # type: ignore[override]
+            self,
+            sql: str,
+            parameters: tuple[object, ...] = (),
+            /,
+        ) -> sqlite3.Cursor:
+            cursor = super().execute(sql, parameters)
+            if self.interrupt_next_insert and "INSERT INTO af_search_fts" in sql:
+                self.interrupt_next_insert = False
+                raise KeyboardInterrupt
+            return cursor
+
+        def rollback(self) -> None:
+            raise sqlite3.OperationalError("sensitive rollback failure")
+
+    driver = EmbeddedSearchDriver(database)
+    driver._connection.close()
+    driver._connection = sqlite3.connect(
+        database,
+        isolation_level=None,
+        check_same_thread=False,
+        factory=RollbackFailingConnection,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        driver.upsert((_resource("resource-a"),))
+
+    with pytest.raises(SearchDriverIneligible) as unavailable:
+        driver.search(_query())
+
+    assert unavailable.value.reason is PlatformReason.SHUTDOWN_FAILED
+    assert "rollback" not in str(unavailable.value).lower()
+    driver.close()
+
+    with EmbeddedSearchDriver(database) as recovered:
+        assert recovered.search(_query()) == ()
+
+
+def test_rollback_interruption_quarantines_partial_upsert(tmp_path: Path) -> None:
+    database = tmp_path / "upsert-rollback-interruption.sqlite3"
+
+    class RollbackInterruptedConnection(sqlite3.Connection):
+        interrupt_next_insert = True
+
+        def execute(  # type: ignore[override]
+            self,
+            sql: str,
+            parameters: tuple[object, ...] = (),
+            /,
+        ) -> sqlite3.Cursor:
+            cursor = super().execute(sql, parameters)
+            if self.interrupt_next_insert and "INSERT INTO af_search_fts" in sql:
+                self.interrupt_next_insert = False
+                raise sqlite3.OperationalError("sensitive write failure")
+            return cursor
+
+        def rollback(self) -> None:
+            raise KeyboardInterrupt
+
+    driver = EmbeddedSearchDriver(database)
+    driver._connection.close()
+    driver._connection = sqlite3.connect(
+        database,
+        isolation_level=None,
+        check_same_thread=False,
+        factory=RollbackInterruptedConnection,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        driver.upsert((_resource("resource-a"),))
+
+    with pytest.raises(SearchDriverIneligible) as unavailable:
+        driver.search(_query())
+
+    assert unavailable.value.reason is PlatformReason.SHUTDOWN_FAILED
+    driver.close()
+
+    with EmbeddedSearchDriver(database) as recovered:
+        assert recovered.search(_query()) == ()
+
+
 def test_interrupted_delete_preserves_resource_and_reports_cancellation(
     tmp_path: Path,
 ) -> None:
@@ -394,6 +534,33 @@ def test_cancel_is_idempotent_once_concurrent_shutdown_begins() -> None:
 
     driver.cancel()
     driver.close()
+
+
+def test_base_exception_during_close_allows_cleanup_retry() -> None:
+    class InterruptingCloseConnection(sqlite3.Connection):
+        close_attempts = 0
+
+        def close(self) -> None:
+            self.close_attempts += 1
+            if self.close_attempts == 1:
+                raise KeyboardInterrupt
+            super().close()
+
+    driver = EmbeddedSearchDriver(":memory:")
+    driver._connection.close()
+    driver._connection = sqlite3.connect(
+        ":memory:",
+        check_same_thread=False,
+        factory=InterruptingCloseConnection,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        driver.close()
+
+    assert driver._closing is False
+    assert driver._closed is False
+    driver.close()
+    assert driver._closed is True
 
 
 def test_active_cancel_failure_is_sanitized() -> None:
