@@ -257,7 +257,11 @@ def _assert_mysql_family_transactional_tables(driver: DatabaseDriver) -> None:
                 read_only=True,
             )
         )
-    assert {str(row["table_name"]): str(row["engine"]).lower() for row in rows} == {
+    actual: dict[str, str] = {}
+    for row in rows:
+        metadata = {column.casefold(): value for column, value in row.as_mapping().items()}
+        actual[str(metadata["table_name"])] = str(metadata["engine"]).lower()
+    assert actual == {
         _TABLE: "innodb",
         "af_migrations": "innodb",
         "af_migration_locks": "innodb",
