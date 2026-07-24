@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from contextlib import AbstractContextManager
-from threading import RLock
+from threading import Event, RLock
 from types import TracebackType
 from typing import Literal, cast
 
@@ -81,6 +81,12 @@ class _MySQLCursor(DatabaseCursor):
             raw = self._result.fetchone()
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.cursor") from None
+        if self._transaction.cancelled:
+            self.close()
+            raise DatabaseOperationError(
+                reason=PlatformReason.CANCELLED,
+                stage="database.cursor",
+            )
         if raw is None:
             self.close()
             raise StopIteration
@@ -129,8 +135,15 @@ class _MySQLSavepoint(AbstractContextManager[None]):
 
 
 class _MySQLTransaction:
-    def __init__(self, connection: Connection, *, read_only: bool) -> None:
+    def __init__(
+        self,
+        connection: Connection,
+        cancellation: Event,
+        *,
+        read_only: bool,
+    ) -> None:
         self._connection = connection
+        self._cancellation = cancellation
         self._read_only = read_only
         self._active = True
         self._cursors: list[_MySQLCursor] = []
@@ -138,6 +151,10 @@ class _MySQLTransaction:
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancellation.is_set()
 
     def _assert_active(self) -> None:
         if not self._active:
@@ -168,6 +185,11 @@ class _MySQLTransaction:
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.execute") from None
         try:
+            if self.cancelled:
+                raise DatabaseOperationError(
+                    reason=PlatformReason.CANCELLED,
+                    stage="database.execute",
+                )
             return result.rowcount
         finally:
             result.close()
@@ -188,6 +210,12 @@ class _MySQLTransaction:
             )
         except SQLAlchemyError as error:
             raise _failure(error, stage="database.query") from None
+        if self.cancelled:
+            result.close()
+            raise DatabaseOperationError(
+                reason=PlatformReason.CANCELLED,
+                stage="database.query",
+            )
         cursor = _MySQLCursor(
             self,
             cast(CursorResult[tuple[object, ...]], result),
@@ -231,6 +259,7 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
                     reason=PlatformReason.TRANSIENT_FAILURE,
                     stage="database.transaction",
                 )
+            self._driver._cancellation.clear()
             try:
                 if self._read_only:
                     result = self._driver._connection.exec_driver_sql(_READ_ONLY_SQL)
@@ -252,6 +281,7 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
             self._root = root
             self._transaction = _MySQLTransaction(
                 self._driver._connection,
+                self._driver._cancellation,
                 read_only=self._read_only,
             )
             return self._transaction
@@ -317,6 +347,7 @@ class MySQLDriver(AbstractContextManager["MySQLDriver"]):
         self._engine: Engine = engine
         self._connection = connection
         self._lock = RLock()
+        self._cancellation = Event()
         self._transaction_active = False
         self._closed = False
         self._url = url
@@ -364,11 +395,12 @@ class MySQLDriver(AbstractContextManager["MySQLDriver"]):
         return _MySQLTransactionContext(self, read_only=read_only)
 
     def cancel(self) -> None:
-        if self._closed:
+        if self._closed or not self._transaction_active:
             return
         thread_id = self._thread_id
         if thread_id is None:
             raise UnsupportedDatabaseFeature(DatabaseFeature.CANCELLATION)
+        self._cancellation.set()
         try:
             killer_engine = create_engine(self._url, poolclass=StaticPool)
         except (ImportError, SQLAlchemyError) as error:
