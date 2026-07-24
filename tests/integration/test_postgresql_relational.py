@@ -102,12 +102,13 @@ def test_postgresql_pool_drains_and_exposes_verified_capabilities() -> None:
 
 
 def test_postgresql_registration_binds_runtime_identity_and_evidence() -> None:
+    url = _url()
     observed_at = datetime(2026, 7, 24, 4, 0, tzinfo=UTC)
     registration = postgresql_registration(clock=lambda: observed_at)
     ref = ConnectionRef("database", "primary", "postgresql")
     driver = registration.factory(
         ref,
-        {"driver": "postgresql", "url": _url()},
+        {"driver": "postgresql", "url": url},
     )
     binding = CapabilityBinding(
         driver_version=registration.manifest.version,
