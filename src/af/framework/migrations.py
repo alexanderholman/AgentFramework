@@ -238,6 +238,8 @@ class MigrationLock(AbstractContextManager["MigrationLock"]):
         self._lease = lease
         self._held = False
         self._finished = False
+        self._last_observed_at: datetime | None = None
+        self._expires_at: str | None = None
 
     def __enter__(self) -> MigrationLock:
         if self._held or self._finished:
@@ -265,7 +267,7 @@ class MigrationLock(AbstractContextManager["MigrationLock"]):
                     )
                 )
                 if _one_or_zero(changed, stage="migration.lock") == 0:
-                    transaction.execute(
+                    inserted = transaction.execute(
                         DatabaseStatement(
                             f"""INSERT INTO {_LOCKS} (
                                 lock_name,
@@ -286,10 +288,79 @@ class MigrationLock(AbstractContextManager["MigrationLock"]):
                             },
                         )
                     )
+                    if _one_or_zero(inserted, stage="migration.lock") != 1:
+                        raise MigrationIntegrityError()
+                rows = transaction.query(
+                    DatabaseStatement(
+                        f"""SELECT owner_id, expires_at
+                        FROM {_LOCKS}
+                        WHERE lock_name = :lock_name""",
+                        {"lock_name": _LOCK_NAME},
+                        read_only=True,
+                    )
+                )
+                expires_token = _timestamp(expires_at)
+                if (
+                    len(rows) != 1
+                    or rows[0]["owner_id"] != self._owner_id
+                    or rows[0]["expires_at"] != expires_token
+                ):
+                    raise MigrationIntegrityError()
+        except MigrationIntegrityError:
+            raise
         except DatabaseOperationError as error:
             raise MigrationLockUnavailable(protected_cause=error) from None
         self._held = True
+        self._last_observed_at = now
+        self._expires_at = expires_token
         return self
+
+    def renew(self) -> None:
+        """Extend ownership only while this exact lease token remains authoritative."""
+
+        current_token = self._expires_at
+        if not self._held or current_token is None:
+            raise MigrationLockUnavailable()
+        now = _aware_utc(self._clock(), "migration lock clock")
+        last = self._last_observed_at
+        if last is not None and now < last:
+            raise MigrationIntegrityError(
+                protected_cause=ValueError("migration lock clock moved backwards")
+            )
+        current_expiry = _parse_timestamp(current_token)
+        next_expiry = max(now + self._lease, current_expiry + timedelta(microseconds=1))
+        next_token = _timestamp(next_expiry)
+        try:
+            with self._driver.transaction() as transaction:
+                changed = transaction.execute(
+                    DatabaseStatement(
+                        f"""UPDATE {_LOCKS}
+                        SET expires_at = :next_expires_at
+                        WHERE lock_name = :lock_name
+                          AND owner_id = :owner_id
+                          AND expires_at = :current_expires_at
+                          AND expires_at > :now""",
+                        {
+                            "next_expires_at": next_token,
+                            "lock_name": _LOCK_NAME,
+                            "owner_id": self._owner_id,
+                            "current_expires_at": current_token,
+                            "now": _timestamp(now),
+                        },
+                    )
+                )
+                if _one_or_zero(changed, stage="migration.lock") != 1:
+                    self._held = False
+                    self._expires_at = None
+                    raise MigrationLockUnavailable()
+        except MigrationLockUnavailable:
+            raise
+        except DatabaseOperationError as error:
+            self._held = False
+            self._expires_at = None
+            raise MigrationLockUnavailable(protected_cause=error) from None
+        self._last_observed_at = now
+        self._expires_at = next_token
 
     def __exit__(
         self,
@@ -298,7 +369,8 @@ class MigrationLock(AbstractContextManager["MigrationLock"]):
         traceback: TracebackType | None,
     ) -> Literal[False]:
         del error_type, error, traceback
-        if not self._held:
+        expires_token = self._expires_at
+        if not self._held or expires_token is None:
             return False
         try:
             with self._driver.transaction() as transaction:
@@ -306,14 +378,20 @@ class MigrationLock(AbstractContextManager["MigrationLock"]):
                     DatabaseStatement(
                         f"""DELETE FROM {_LOCKS}
                         WHERE lock_name = :lock_name
-                          AND owner_id = :owner_id""",
-                        {"lock_name": _LOCK_NAME, "owner_id": self._owner_id},
+                          AND owner_id = :owner_id
+                          AND expires_at = :expires_at""",
+                        {
+                            "lock_name": _LOCK_NAME,
+                            "owner_id": self._owner_id,
+                            "expires_at": expires_token,
+                        },
                     )
                 )
                 if _one_or_zero(changed, stage="migration.lock") != 1:
                     raise MigrationIntegrityError()
         finally:
             self._held = False
+            self._expires_at = None
         return False
 
 
@@ -425,7 +503,7 @@ class MigrationRunner:
             raise ValueError("migration dry-run flag must be boolean")
         if dry_run:
             return self.plan_up(limit=limit)
-        with self.lock():
+        with self.lock() as lease:
             plan = self.plan_up(limit=limit)
             applied = self._read_applied()
             batch = 1 + max((item.batch for item in applied), default=0)
@@ -433,6 +511,7 @@ class MigrationRunner:
             for migration_id in plan.migration_ids:
                 migration = self._by_id[migration_id]
                 applied_order += 1
+                lease.renew()
                 with self._driver.transaction() as transaction:
                     for statement in migration.up:
                         transaction.execute(statement)
@@ -463,6 +542,7 @@ class MigrationRunner:
                             },
                         )
                     )
+                lease.renew()
             return plan
 
     def apply_down(
@@ -475,7 +555,7 @@ class MigrationRunner:
             raise ValueError("migration dry-run flag must be boolean")
         if dry_run:
             return self.plan_down(steps=steps)
-        with self.lock():
+        with self.lock() as lease:
             plan = self.plan_down(steps=steps)
             selected = tuple(self._by_id[migration_id] for migration_id in plan.migration_ids)
             for migration in selected:
@@ -483,6 +563,7 @@ class MigrationRunner:
                     raise MigrationIrreversibleError(migration.migration_id)
             for migration in selected:
                 migration_id = migration.migration_id
+                lease.renew()
                 with self._driver.transaction() as transaction:
                     for statement in migration.down:
                         transaction.execute(statement)
@@ -494,6 +575,7 @@ class MigrationRunner:
                     )
                     if _one_or_zero(changed, stage="migration.down") != 1:
                         raise MigrationIntegrityError()
+                lease.renew()
             return plan
 
     def verify(self) -> tuple[str, ...]:
