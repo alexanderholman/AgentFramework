@@ -17,6 +17,8 @@ __all__ = ("AfterCommitCallbackError", "UnitOfWork")
 
 type AfterCommitCallback = Callable[[], object]
 
+_MAX_AFTER_COMMIT_CALLBACKS = 4_096
+
 
 class AfterCommitCallbackError(DatabaseOperationError):
     """Raised after commit when one or more deferred callbacks fail."""
@@ -33,13 +35,25 @@ class AfterCommitCallbackError(DatabaseOperationError):
 
 
 class UnitOfWork(AbstractContextManager["UnitOfWork"]):
-    """One single-use database transaction plus ordered after-commit callbacks."""
+    """One single-use database transaction plus bounded ordered post-commit callbacks."""
 
-    def __init__(self, driver: DatabaseDriver, *, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        driver: DatabaseDriver,
+        *,
+        read_only: bool = False,
+        max_after_commit_callbacks: int = 1_024,
+    ) -> None:
         if type(read_only) is not bool:
             raise ValueError("unit of work read-only flag must be boolean")
+        if (
+            type(max_after_commit_callbacks) is not int
+            or not 1 <= max_after_commit_callbacks <= _MAX_AFTER_COMMIT_CALLBACKS
+        ):
+            raise ValueError("unit of work callback limit is invalid")
         self._driver = driver
         self._read_only = read_only
+        self._max_after_commit_callbacks = max_after_commit_callbacks
         self._context: AbstractContextManager[DatabaseTransaction] | None = None
         self._transaction: DatabaseTransaction | None = None
         self._callbacks: list[AfterCommitCallback] = []
@@ -66,7 +80,7 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         return self._committed
 
     def after_commit(self, callback: AfterCommitCallback, /) -> None:
-        """Defer a callback until the transaction has committed successfully."""
+        """Defer one callback until the transaction has committed successfully."""
 
         if not self._active:
             raise DatabaseOperationError(
@@ -75,6 +89,11 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
             )
         if not callable(callback):
             raise TypeError("after-commit callback must be callable")
+        if len(self._callbacks) >= self._max_after_commit_callbacks:
+            raise DatabaseOperationError(
+                reason=PlatformReason.VALIDATION_FAILED,
+                stage="database.after-commit.limit",
+            )
         self._callbacks.append(callback)
 
     def __enter__(self) -> UnitOfWork:
