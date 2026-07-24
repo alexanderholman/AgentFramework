@@ -29,6 +29,10 @@ class _ExpectedRollback(RuntimeError):
     pass
 
 
+def _trigger_rollback(label: str) -> None:
+    raise _ExpectedRollback(label)
+
+
 def _check(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
@@ -52,8 +56,7 @@ def _insert(driver: DatabaseDriver, *, record_id: int, value: str) -> None:
     with driver.transaction() as transaction:
         transaction.execute(
             DatabaseStatement(
-                f"INSERT INTO {_TABLE} (id, tenant, value) "
-                "VALUES (:id, :tenant, :value)",
+                f"INSERT INTO {_TABLE} (id, tenant, value) VALUES (:id, :tenant, :value)",
                 {"id": record_id, "tenant": "tenant-a", "value": value},
             )
         )
@@ -86,12 +89,11 @@ def _assert_rollback(driver: DatabaseDriver) -> None:
         with driver.transaction() as transaction:
             transaction.execute(
                 DatabaseStatement(
-                    f"INSERT INTO {_TABLE} (id, tenant, value) "
-                    "VALUES (:id, :tenant, :value)",
+                    f"INSERT INTO {_TABLE} (id, tenant, value) VALUES (:id, :tenant, :value)",
                     {"id": 1, "tenant": "tenant-a", "value": "discarded"},
                 )
             )
-            raise _ExpectedRollback("rollback")
+            _trigger_rollback("rollback")
     except _ExpectedRollback:
         rolled_back = True
     _check(rolled_back, "relational transaction suppressed the caller failure")
@@ -105,8 +107,7 @@ def _assert_savepoint(driver: DatabaseDriver) -> None:
     with driver.transaction() as transaction:
         transaction.execute(
             DatabaseStatement(
-                f"INSERT INTO {_TABLE} (id, tenant, value) "
-                "VALUES (:id, :tenant, :value)",
+                f"INSERT INTO {_TABLE} (id, tenant, value) VALUES (:id, :tenant, :value)",
                 {"id": 1, "tenant": "tenant-a", "value": "kept"},
             )
         )
@@ -114,12 +115,11 @@ def _assert_savepoint(driver: DatabaseDriver) -> None:
             with transaction.savepoint("af_nested"):
                 transaction.execute(
                     DatabaseStatement(
-                        f"INSERT INTO {_TABLE} (id, tenant, value) "
-                        "VALUES (:id, :tenant, :value)",
+                        f"INSERT INTO {_TABLE} (id, tenant, value) VALUES (:id, :tenant, :value)",
                         {"id": 2, "tenant": "tenant-a", "value": "discarded"},
                     )
                 )
-                raise _ExpectedRollback("savepoint")
+                _trigger_rollback("savepoint")
         except _ExpectedRollback:
             rolled_back = True
     _check(rolled_back, "relational savepoint suppressed the caller failure")
@@ -156,8 +156,7 @@ def _assert_read_only(driver: DatabaseDriver) -> None:
         try:
             transaction.execute(
                 DatabaseStatement(
-                    f"INSERT INTO {_TABLE} (id, tenant, value) "
-                    "VALUES (1, 'tenant-a', 'denied')"
+                    f"INSERT INTO {_TABLE} (id, tenant, value) VALUES (1, 'tenant-a', 'denied')"
                 )
             )
         except DatabaseOperationError as error:
