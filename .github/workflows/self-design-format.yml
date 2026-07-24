@@ -1,27 +1,26 @@
-name: AF Self Design Format Capture
+name: AF Self Design Format Apply
 
 on:
   pull_request:
     branches: [master]
     paths:
       - .github/workflows/self-design-format.yml
-      - src/af/framework/self_design.py
-      - tests/unit/test_self_design.py
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  capture:
-    name: Capture canonical self-design slice
+  apply:
+    name: Apply verified canonical self-design slice
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Check out exact event head
+      - name: Check out bounded implementation branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
+          ref: agent/self-design-plan-124
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -38,7 +37,7 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Apply canonical formatter and safe lint fixes
+      - name: Format and verify bounded slice
         run: |
           uv run ruff format \
             src/af/framework/self_design.py \
@@ -46,35 +45,34 @@ jobs:
           uv run ruff check --fix \
             src/af/framework/self_design.py \
             tests/unit/test_self_design.py
-          git diff -- \
+          uv run ruff format --check \
             src/af/framework/self_design.py \
-            tests/unit/test_self_design.py \
-            > self-design-format.patch
+            tests/unit/test_self_design.py
+          uv run ruff check \
+            src/af/framework/self_design.py \
+            tests/unit/test_self_design.py
+          uv run mypy src/af/framework/self_design.py
+          uv run pytest -q tests/unit/test_self_design.py
 
-      - name: Verify bounded slice
-        continue-on-error: true
+      - name: Commit only the verified bounded result
         shell: bash
         run: |
-          set -o pipefail
-          {
-            uv run ruff format --check \
-              src/af/framework/self_design.py \
-              tests/unit/test_self_design.py
-            uv run ruff check \
-              src/af/framework/self_design.py \
-              tests/unit/test_self_design.py
-            uv run mypy src/af/framework/self_design.py
-            uv run pytest -q tests/unit/test_self_design.py
-          } 2>&1 | tee self-design-verify.log
-
-      - name: Upload canonical bounded slice
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: self-design-format
-          path: |
-            self-design-format.patch
-            self-design-verify.log
+          set -euo pipefail
+          git add \
+            src/af/framework/self_design.py \
+            tests/unit/test_self_design.py
+          git rm .github/workflows/self-design-format.yml
+          mapfile -t changed < <(git diff --cached --name-only | sort)
+          expected=(
+            .github/workflows/self-design-format.yml
             src/af/framework/self_design.py
             tests/unit/test_self_design.py
-          if-no-files-found: error
-          retention-days: 1
+          )
+          if [[ "${changed[*]}" != "${expected[*]}" ]]; then
+            printf 'unexpected changed paths: %s\n' "${changed[*]}" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Apply canonical self-design formatting"
+          git push origin HEAD:agent/self-design-plan-124
