@@ -107,9 +107,7 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
             fail(error)
 
     def migration_runner() -> MigrationRunner:
-        runner = current().container.resolve(MigrationRunner)
-        runner.bootstrap()
-        return runner
+        return current().container.resolve(MigrationRunner)
 
     def emit_plan(plan: MigrationPlan, *, dry_run: bool) -> None:
         typer.echo(
@@ -122,6 +120,15 @@ def create_cli(application: AFApplication | None = None) -> typer.Typer:
                 }
             )
         )
+
+    @migration_commands.command("bootstrap")
+    def bootstrap_migrations() -> None:
+        """Provision the fixed migration metadata tables explicitly."""
+        try:
+            migration_runner().bootstrap()
+            typer.echo(json.dumps({"bootstrapped": True}))
+        except (AFError, TypeError, ValueError) as error:
+            fail(error)
 
     @migration_commands.command("plan")
     def plan_migrations(
