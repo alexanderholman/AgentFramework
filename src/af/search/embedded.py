@@ -201,6 +201,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                 resource_id,
                 source_id,
                 authoritative_locator,
+                tenant_id,
                 projection_version,
                 acl_json,
                 provenance_json,
@@ -231,7 +232,8 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             except sqlite3.Error as error:
                 reason = (
                     PlatformReason.CANCELLED
-                    if monotonic() >= deadline
+                    if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT
+                    or monotonic() >= deadline
                     else PlatformReason.PERMANENT_FAILURE
                 )
                 raise _failure(
@@ -249,16 +251,17 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
     ) -> Iterator[SearchHit]:
         allowed = frozenset(requested_acl)
         for rank, row in enumerate(rows, start=1):
-            stored_acl = tuple(json.loads(str(row[4])))
+            stored_acl = tuple(json.loads(str(row[5])))
             evidence = tuple(value for value in stored_acl if value in allowed)
-            provenance = tuple(json.loads(str(row[5])))
-            score = max(0.0, -float(cast(float, row[6])))
-            highlight = str(row[7])
+            provenance = tuple(json.loads(str(row[6])))
+            score = max(0.0, -float(cast(float, row[7])))
+            highlight = str(row[8])
             yield SearchHit(
                 resource_id=str(row[0]),
                 source_id=str(row[1]),
                 authoritative_locator=str(row[2]),
-                projection_version=cast(int, row[3]),
+                tenant_id=str(row[3]),
+                projection_version=cast(int, row[4]),
                 acl_evidence=evidence,
                 provenance=provenance,
                 score=score,
