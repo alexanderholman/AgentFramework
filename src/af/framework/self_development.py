@@ -403,8 +403,7 @@ class SelfDevelopmentPlanner:
             type(installed_procedure_ids) is not tuple
             or len(installed_procedure_ids) > _MAX_CANDIDATES
             or any(
-                type(procedure_id) is not str
-                or _PROCEDURE_ID.fullmatch(procedure_id) is None
+                type(procedure_id) is not str or _PROCEDURE_ID.fullmatch(procedure_id) is None
                 for procedure_id in installed_procedure_ids
             )
             or len(set(installed_procedure_ids)) != len(installed_procedure_ids)
