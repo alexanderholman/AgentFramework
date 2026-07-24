@@ -6,11 +6,15 @@ import asyncio
 
 from af.messaging._local_bus_core import (
     AsyncLocalEventCallNext,
-    LocalEventBus as _LocalEventBus,
     LocalEventCallNext,
     LocalEventDispatchReport,
     LocalEventListener,
     LocalEventMiddleware,
+)
+from af.messaging._local_bus_core import (
+    LocalEventBus as _LocalEventBus,
+)
+from af.messaging._local_bus_core import (
     LocalEventTelemetryMiddleware as _LocalEventTelemetryMiddleware,
 )
 from af.messaging.envelopes import MessageEnvelope
