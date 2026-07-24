@@ -124,3 +124,76 @@ def test_mysql_close_is_idempotent_and_rejects_active_or_later_work(
     with pytest.raises(DatabaseOperationError) as closed:
         driver.transaction()
     assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_mysql_cancellation_marker_discards_results_and_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _driver(monkeypatch) as driver:
+        with pytest.raises(DatabaseOperationError) as executed:
+            with driver.transaction() as transaction:
+                driver._cancellation.set()
+                transaction.execute(DatabaseStatement("SELECT 1"))
+        assert executed.value.reason is PlatformReason.CANCELLED
+
+        with pytest.raises(DatabaseOperationError) as streamed:
+            with driver.transaction(read_only=True) as transaction:
+                cursor = transaction.stream(
+                    DatabaseStatement("SELECT 1 AS value", read_only=True)
+                )
+                driver._cancellation.set()
+                next(cursor)
+        assert streamed.value.reason is PlatformReason.CANCELLED
+
+        with driver.transaction(read_only=True) as transaction:
+            rows = transaction.query(
+                DatabaseStatement("SELECT 1 AS value", read_only=True)
+            )
+        assert rows[0]["value"] == 1
+
+
+def test_mysql_cancel_uses_separate_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    class KillerResult:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class KillerConnection:
+        def __init__(self, result: KillerResult) -> None:
+            self.result = result
+
+        def __enter__(self) -> KillerConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def exec_driver_sql(self, sql: str) -> KillerResult:
+            assert sql == "KILL QUERY 123"
+            return self.result
+
+    class KillerEngine:
+        def __init__(self) -> None:
+            self.result = KillerResult()
+            self.disposed = False
+
+        def connect(self) -> KillerConnection:
+            return KillerConnection(self.result)
+
+        def dispose(self) -> None:
+            self.disposed = True
+
+    driver = _driver(monkeypatch)
+    killer = KillerEngine()
+    driver._thread_id = 123
+    driver._transaction_active = True
+    monkeypatch.setattr(mysql_module, "create_engine", lambda *_args, **_kwargs: killer)
+
+    driver.cancel()
+
+    assert driver._cancellation.is_set()
+    assert killer.result.closed
+    assert killer.disposed
+    driver._transaction_active = False
+    driver.close()
