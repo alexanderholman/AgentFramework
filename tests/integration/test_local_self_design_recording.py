@@ -15,10 +15,10 @@ from af.framework.self_design import (
 from af.framework.self_design_operation import SelfDesignOperation
 from af.framework.self_design_recording import (
     DesignRecordAuthority,
-    DesignRecordStatus,
     DesignRecordingEffect,
     DesignRecordingError,
     DesignRecordingRequest,
+    DesignRecordStatus,
 )
 from af.framework.version_control import (
     CoordinationObservation,
