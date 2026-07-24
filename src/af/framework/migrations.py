@@ -10,6 +10,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from itertools import islice
 from types import TracebackType
 from typing import Literal
 
@@ -44,6 +45,7 @@ _LOCK_NAME = "schema"
 _MAX_MIGRATIONS = 10_000
 _MAX_STATEMENTS = 1_000
 _MAX_PROBES = 256
+_MAX_EXPECTED_ROWS = 1_000
 _MAX_PLAN_LIMIT = 10_000
 _MAX_DOWN_STEPS = 1_000
 _MAX_LEASE = timedelta(hours=24)
@@ -113,10 +115,12 @@ class MigrationProbe:
             raise ValueError("migration probes require read-only DatabaseStatement values")
         if self.statement.parameters:
             raise ValueError("migration probe statements cannot contain parameters")
-        if type(self.expected_rows) is not tuple or any(
-            not isinstance(row, DatabaseRow) for row in self.expected_rows
+        if (
+            type(self.expected_rows) is not tuple
+            or len(self.expected_rows) > _MAX_EXPECTED_ROWS
+            or any(not isinstance(row, DatabaseRow) for row in self.expected_rows)
         ):
-            raise ValueError("migration probe expected rows must be an exact tuple")
+            raise ValueError("migration probe expected rows must be a bounded exact tuple")
 
     def __repr__(self) -> str:
         return f"MigrationProbe(expected_row_count={len(self.expected_rows)!r})"
@@ -335,7 +339,7 @@ class MigrationRunner:
             or lock_lease > _MAX_LEASE
         ):
             raise ValueError("migration runner lock lease is invalid")
-        snapshot = tuple(migrations)
+        snapshot = tuple(islice(iter(migrations), _MAX_MIGRATIONS + 1))
         if len(snapshot) > _MAX_MIGRATIONS or any(
             not isinstance(migration, Migration) for migration in snapshot
         ):
@@ -473,10 +477,12 @@ class MigrationRunner:
             return self.plan_down(steps=steps)
         with self.lock():
             plan = self.plan_down(steps=steps)
-            for migration_id in plan.migration_ids:
-                migration = self._by_id[migration_id]
+            selected = tuple(self._by_id[migration_id] for migration_id in plan.migration_ids)
+            for migration in selected:
                 if not migration.down:
-                    raise MigrationIrreversibleError(migration_id)
+                    raise MigrationIrreversibleError(migration.migration_id)
+            for migration in selected:
+                migration_id = migration.migration_id
                 with self._driver.transaction() as transaction:
                     for statement in migration.down:
                         transaction.execute(statement)

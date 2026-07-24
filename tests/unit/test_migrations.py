@@ -341,6 +341,50 @@ def test_expired_database_lease_is_reclaimed(tmp_path: Path) -> None:
     second_driver.close()
 
 
+def test_down_preflights_all_selected_migrations_before_mutation() -> None:
+    driver = SQLiteDriver(":memory:")
+    irreversible = Migration(
+        "20260724080000_irreversible_base",
+        (_statement("CREATE TABLE irreversible_base (id INTEGER)"),),
+    )
+    reversible = Migration(
+        "20260724080100_reversible_latest",
+        (_statement("CREATE TABLE reversible_latest (id INTEGER)"),),
+        (_statement("DROP TABLE reversible_latest"),),
+    )
+    runner = _runner(driver, (irreversible, reversible))
+    runner.bootstrap()
+    runner.apply_up()
+
+    with pytest.raises(MigrationIrreversibleError):
+        runner.apply_down(steps=2)
+
+    assert _table_exists(driver, "irreversible_base")
+    assert _table_exists(driver, "reversible_latest")
+    assert len(_ledger_rows(driver)) == 2
+    driver.close()
+
+
+def test_migration_catalogue_snapshot_and_probe_rows_are_bounded() -> None:
+    driver = SQLiteDriver(":memory:")
+
+    def endless_catalogue():
+        while True:
+            yield _migration_one()
+
+    with pytest.raises(ValueError, match="catalogue"):
+        MigrationRunner(
+            driver,
+            endless_catalogue(),
+            owner_id="bounded-runner",
+            clock=lambda: _NOW,
+        )
+    rows = tuple(DatabaseRow(("value",), (index,)) for index in range(1_001))
+    with pytest.raises(ValueError, match="bounded exact tuple"):
+        MigrationProbe(DatabaseStatement("SELECT 1", read_only=True), rows)
+    driver.close()
+
+
 def test_migration_contracts_reject_ambiguous_or_unbounded_inputs() -> None:
     write = _statement("CREATE TABLE valid_table (id INTEGER)")
     with pytest.raises(ValueError, match="canonical timestamped"):
