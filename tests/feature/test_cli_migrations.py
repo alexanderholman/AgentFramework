@@ -88,9 +88,7 @@ def test_migration_cli_plans_applies_reports_verifies_and_reverses() -> None:
 
     applied = runner.invoke(cli, ["migrations", "up"])
     assert applied.exit_code == 0
-    assert json.loads(applied.stdout)["migration_ids"] == [
-        "20260724100000_create_operator_records"
-    ]
+    assert json.loads(applied.stdout)["migration_ids"] == ["20260724100000_create_operator_records"]
 
     status = runner.invoke(cli, ["migrations", "status"])
     assert status.exit_code == 0
@@ -101,9 +99,7 @@ def test_migration_cli_plans_applies_reports_verifies_and_reverses() -> None:
 
     verified = runner.invoke(cli, ["migrations", "verify"])
     assert verified.exit_code == 0
-    assert json.loads(verified.stdout) == {
-        "verified": ["20260724100000_create_operator_records"]
-    }
+    assert json.loads(verified.stdout) == {"verified": ["20260724100000_create_operator_records"]}
 
     reversed_result = runner.invoke(cli, ["migrations", "down", "--steps", "1"])
     assert reversed_result.exit_code == 0
