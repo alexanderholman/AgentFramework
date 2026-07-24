@@ -27,6 +27,7 @@ from af.framework.relational import (
 __all__ = ("PostgreSQLDriver",)
 
 _SAVEPOINT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_MAX_OPERATION_CLAIMS = 1_024
 _CORE_FEATURES = frozenset(
     {
         DatabaseFeature.TRANSACTIONS,
@@ -136,11 +137,17 @@ class _PostgreSQLTransaction:
         self._connection = connection
         self._read_only = read_only
         self._active = True
+        self._rollback_only = False
+        self._operation_claims: set[str] = set()
         self._cursors: list[_PostgreSQLCursor] = []
 
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def rollback_only(self) -> bool:
+        return self._rollback_only
 
     def _assert_active(self) -> None:
         if not self._active:
@@ -211,10 +218,29 @@ class _PostgreSQLTransaction:
             raise ValueError("database savepoint name must be canonical")
         return _PostgreSQLSavepoint(self, name)
 
+    def mark_rollback_only(self) -> None:
+        self._assert_active()
+        self._rollback_only = True
+
+    def claim_operation(self, name: str, /) -> bool:
+        self._assert_active()
+        if type(name) is not str or _SAVEPOINT.fullmatch(name) is None:
+            raise ValueError("database operation claim must be canonical")
+        if name in self._operation_claims:
+            return False
+        if len(self._operation_claims) >= _MAX_OPERATION_CLAIMS:
+            raise DatabaseOperationError(
+                reason=PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="database.transaction.claim",
+            )
+        self._operation_claims.add(name)
+        return True
+
     def finish(self) -> None:
         for cursor in self._cursors:
             cursor.close()
         self._cursors.clear()
+        self._operation_claims.clear()
         self._active = False
 
 
@@ -265,6 +291,7 @@ class _PostgreSQLTransactionContext(AbstractContextManager[_PostgreSQLTransactio
         del error, traceback
         transaction = self._transaction
         root = self._root
+        rollback_only = transaction is not None and transaction.rollback_only
         try:
             if root is None:
                 raise DatabaseOperationError(
@@ -272,7 +299,7 @@ class _PostgreSQLTransactionContext(AbstractContextManager[_PostgreSQLTransactio
                     stage="database.transaction",
                 )
             try:
-                if error_type is None:
+                if error_type is None and not rollback_only:
                     root.commit()
                 else:
                     root.rollback()
@@ -284,6 +311,11 @@ class _PostgreSQLTransactionContext(AbstractContextManager[_PostgreSQLTransactio
                 self._driver._transaction_active = False
         finally:
             self._driver._lock.release()
+        if rollback_only and error_type is None:
+            raise DatabaseOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="database.transaction.rollback-only",
+            )
         return False
 
 

@@ -500,6 +500,41 @@ def test_service_workflow_checks_out_exact_event_head(workflow_name: str) -> Non
     assert head_step["with"]["persist-credentials"] is False
 
 
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["postgresql.yml", "mysql.yml", "mariadb.yml"],
+)
+def test_relational_workflow_certifies_transactional_search_projector(
+    workflow_name: str,
+) -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / workflow_name
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["integration"]["steps"]
+    quality = next(step for step in steps if step.get("id") == "quality")
+    integration = next(step for step in steps if step.get("id") == "integration")
+    diagnostics = next(step for step in steps if step["name"].startswith("Upload "))
+
+    for required_path in (
+        "src/af/infrastructure/sqlite.py",
+        "src/af/messaging/__init__.py",
+        "src/af/messaging/projections.py",
+        "src/af/search/embedded.py",
+        "src/af/search/lifecycle.py",
+        "src/af/search/projectors.py",
+        "tests/unit/test_projection_guard.py",
+        "tests/unit/test_relational_sqlite.py",
+        "tests/unit/test_search_embedded.py",
+        "tests/unit/test_search_projectors.py",
+        "tests/integration/test_search_projector_relational.py",
+    ):
+        assert required_path in quality["run"]
+        assert required_path in diagnostics["with"]["path"]
+    if workflow_name == "mariadb.yml":
+        assert "src/af/infrastructure/mysql.py" in quality["run"]
+        assert "src/af/infrastructure/mysql.py" in diagnostics["with"]["path"]
+    assert "tests/integration/test_search_projector_relational.py" in integration["run"]
+
+
 def test_opensearch_workflow_pins_real_service_and_client() -> None:
     workflow_path = REPO_ROOT / ".github" / "workflows" / "opensearch.yml"
     workflow_text = workflow_path.read_text(encoding="utf-8")

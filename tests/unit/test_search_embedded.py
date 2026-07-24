@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from shutil import copyfile
 from threading import Event
 
 import pytest
@@ -12,6 +13,12 @@ import af.search.embedded as embedded_module
 from af.framework.errors import PlatformReason
 from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
 from af.search.embedded import EmbeddedSearchDriver, SearchDriverIneligible
+from af.search.lifecycle import ResourceIdentity
+from af.search.projectors import (
+    SearchProjectionDelivery,
+    SearchProjectionTargetCheckpoint,
+    SearchTombstone,
+)
 
 
 def _resource(
@@ -248,6 +255,205 @@ def test_embedded_search_rejects_invalid_operations_and_is_idempotent() -> None:
     driver.cancel()
     driver.close()
     driver.close()
+
+
+def test_embedded_projection_generation_must_be_explicit_and_is_immutable(
+    tmp_path: Path,
+) -> None:
+    without_generation = EmbeddedSearchDriver(":memory:")
+    with pytest.raises(SearchDriverIneligible) as captured:
+        _ = without_generation.generation
+    assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+    without_generation.close()
+
+    database = tmp_path / "generation.sqlite3"
+    with EmbeddedSearchDriver(
+        database,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ) as driver:
+        generation = driver.generation
+        assert driver.physical_name == "catalog-g00000002"
+        assert driver.projection_version == 2
+    with EmbeddedSearchDriver(
+        database,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ) as reopened:
+        assert reopened.generation == generation
+    with EmbeddedSearchDriver(
+        tmp_path / "different-generation.sqlite3",
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ) as different:
+        assert different.generation != generation
+    copied_database = tmp_path / "copied-generation.sqlite3"
+    copyfile(database, copied_database)
+    with EmbeddedSearchDriver(
+        copied_database,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ) as copied:
+        assert copied.generation != generation
+    with pytest.raises(SearchDriverIneligible) as mismatch:
+        EmbeddedSearchDriver(
+            database,
+            physical_name="catalog-g00000003",
+            projection_version=2,
+        )
+    assert mismatch.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert mismatch.value.stage == "search.embedded.generation"
+    with pytest.raises(SearchDriverIneligible):
+        EmbeddedSearchDriver(
+            database,
+            physical_name="catalog-g00000002",
+            projection_version=3,
+        )
+
+    with pytest.raises(ValueError, match="generation"):
+        EmbeddedSearchDriver(
+            ":memory:",
+            physical_name="INVALID GENERATION",
+            projection_version=2,
+        )
+    with pytest.raises(ValueError, match="complete"):
+        EmbeddedSearchDriver(":memory:", physical_name="catalog-g00000002")
+
+    legacy_database = tmp_path / "legacy-content.sqlite3"
+    with EmbeddedSearchDriver(legacy_database) as legacy:
+        legacy.upsert((_resource("resource-a"),))
+    with pytest.raises(SearchDriverIneligible) as retrofit:
+        EmbeddedSearchDriver(
+            legacy_database,
+            physical_name="catalog-g00000002",
+            projection_version=2,
+        )
+    assert retrofit.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+def test_embedded_projection_generation_follows_the_physical_file_identity(
+    tmp_path: Path,
+) -> None:
+    original = tmp_path / "original.sqlite3"
+    renamed = tmp_path / "renamed.sqlite3"
+    hardlink = tmp_path / "hardlink.sqlite3"
+    with EmbeddedSearchDriver(
+        original,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ) as driver:
+        generation = driver.generation
+
+    original.rename(renamed)
+    with EmbeddedSearchDriver(
+        renamed,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ) as moved:
+        assert moved.generation == generation
+
+    hardlink.hardlink_to(renamed)
+    with EmbeddedSearchDriver(
+        hardlink,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ) as aliased:
+        assert aliased.generation == generation
+
+
+def test_open_embedded_driver_rejects_live_file_replacement(tmp_path: Path) -> None:
+    database = tmp_path / "active.sqlite3"
+    replacement = tmp_path / "replacement.sqlite3"
+    driver = EmbeddedSearchDriver(
+        database,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    )
+    with EmbeddedSearchDriver(
+        replacement,
+        physical_name="catalog-g00000002",
+        projection_version=2,
+    ):
+        pass
+    replacement.replace(database)
+
+    with pytest.raises(SearchDriverIneligible) as captured:
+        driver.upsert((_resource("resource-a"),))
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert captured.value.stage == "search.embedded.connection.identity"
+    driver.close()
+
+
+def test_embedded_projection_atomically_advances_upsert_and_tombstone_receipts() -> None:
+    projection_name = "search.v1.unit"
+    source_name = "records.v1.partition-0"
+    resource = _resource("resource-a")
+    first = SearchProjectionDelivery(
+        source_name=source_name,
+        message_id="event-1",
+        position=1,
+        mutation=resource,
+    )
+    first_receipt = SearchProjectionTargetCheckpoint("event-1", 1)
+    tombstone = SearchProjectionDelivery(
+        source_name=source_name,
+        message_id="event-2",
+        position=2,
+        mutation=SearchTombstone(ResourceIdentity.from_resource(resource), 1),
+    )
+
+    with EmbeddedSearchDriver(
+        ":memory:",
+        physical_name="catalog-g00000001",
+        projection_version=1,
+    ) as driver:
+        assert (
+            driver.projection_checkpoint(
+                projection_name=projection_name,
+                source_name=source_name,
+            )
+            is None
+        )
+        assert driver.apply_projection(
+            first,
+            projection_name=projection_name,
+            expected=None,
+        )
+        assert (
+            driver.projection_checkpoint(
+                projection_name=projection_name,
+                source_name=source_name,
+            )
+            == first_receipt
+        )
+        assert driver.apply_projection(
+            tombstone,
+            projection_name=projection_name,
+            expected=first_receipt,
+        )
+        assert (
+            driver.apply_projection(
+                tombstone,
+                projection_name=projection_name,
+                expected=first_receipt,
+            )
+            is False
+        )
+        assert not driver.search(_query())
+        with pytest.raises(SearchDriverIneligible) as conflict:
+            driver.apply_projection(
+                SearchProjectionDelivery(
+                    source_name=source_name,
+                    message_id="conflicting-event-2",
+                    position=2,
+                    mutation=resource,
+                ),
+                projection_name=projection_name,
+                expected=first_receipt,
+            )
+        assert conflict.value.reason is PlatformReason.INTEGRITY_FAILURE
+        assert conflict.value.stage == "search.embedded.projection.checkpoint"
 
 
 def test_manual_interrupt_is_reported_as_cancellation(

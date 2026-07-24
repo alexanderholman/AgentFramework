@@ -72,40 +72,75 @@ jobs:
               src/af/framework/relational.py \
               src/af/infrastructure/postgresql.py \
               src/af/infrastructure/postgresql_manager.py \
+              src/af/infrastructure/sqlite.py \
+              src/af/messaging/__init__.py \
               src/af/messaging/outbox.py \
+              src/af/messaging/projections.py \
               src/af/messaging/relay.py \
+              src/af/search/embedded.py \
+              src/af/search/lifecycle.py \
+              src/af/search/projectors.py \
               tests/unit/test_postgresql_driver.py \
               tests/unit/test_postgresql_manager.py \
+              tests/unit/test_governance_scripts.py \
               tests/unit/test_outbox_relay.py \
+              tests/unit/test_projection_guard.py \
+              tests/unit/test_search_embedded.py \
+              tests/unit/test_search_projectors.py \
+              tests/unit/test_relational_sqlite.py \
               tests/integration/test_postgresql_relational.py \
               tests/integration/test_migrations_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
-              tests/integration/test_outbox_relay_relational.py
+              tests/integration/test_outbox_relay_relational.py \
+              tests/integration/test_search_projector_relational.py
             uv run ruff check \
               src/af/framework/migrations.py \
               src/af/framework/relational.py \
               src/af/infrastructure/postgresql.py \
               src/af/infrastructure/postgresql_manager.py \
+              src/af/infrastructure/sqlite.py \
+              src/af/messaging/__init__.py \
               src/af/messaging/outbox.py \
+              src/af/messaging/projections.py \
               src/af/messaging/relay.py \
+              src/af/search/embedded.py \
+              src/af/search/lifecycle.py \
+              src/af/search/projectors.py \
               tests/unit/test_postgresql_driver.py \
               tests/unit/test_postgresql_manager.py \
+              tests/unit/test_governance_scripts.py \
               tests/unit/test_outbox_relay.py \
+              tests/unit/test_projection_guard.py \
+              tests/unit/test_search_embedded.py \
+              tests/unit/test_search_projectors.py \
+              tests/unit/test_relational_sqlite.py \
               tests/integration/test_postgresql_relational.py \
               tests/integration/test_migrations_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
-              tests/integration/test_outbox_relay_relational.py
+              tests/integration/test_outbox_relay_relational.py \
+              tests/integration/test_search_projector_relational.py
             uv run mypy \
               src/af/framework/migrations.py \
               src/af/framework/relational.py \
               src/af/infrastructure/postgresql.py \
               src/af/infrastructure/postgresql_manager.py \
+              src/af/infrastructure/sqlite.py \
+              src/af/messaging/__init__.py \
               src/af/messaging/outbox.py \
-              src/af/messaging/relay.py
+              src/af/messaging/projections.py \
+              src/af/messaging/relay.py \
+              src/af/search/embedded.py \
+              src/af/search/lifecycle.py \
+              src/af/search/projectors.py
             uv run pytest -q \
               tests/unit/test_postgresql_driver.py \
               tests/unit/test_postgresql_manager.py \
-              tests/unit/test_outbox_relay.py
+              tests/unit/test_governance_scripts.py \
+              tests/unit/test_outbox_relay.py \
+              tests/unit/test_projection_guard.py \
+              tests/unit/test_search_embedded.py \
+              tests/unit/test_search_projectors.py \
+              tests/unit/test_relational_sqlite.py
           } 2>&1 | tee postgresql-quality.log
 
       - name: Run PostgreSQL real-service certification
@@ -120,6 +155,7 @@ jobs:
               tests/integration/test_migrations_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
               tests/integration/test_outbox_relay_relational.py \
+              tests/integration/test_search_projector_relational.py \
             2>&1 | tee postgresql-integration.log
 
       - name: Run canonical gate without PostgreSQL opt-in
@@ -145,15 +181,27 @@ jobs:
             src/af/framework/relational.py
             src/af/infrastructure/postgresql.py
             src/af/infrastructure/postgresql_manager.py
+            src/af/infrastructure/sqlite.py
+            src/af/messaging/__init__.py
             src/af/messaging/outbox.py
+            src/af/messaging/projections.py
             src/af/messaging/relay.py
+            src/af/search/embedded.py
+            src/af/search/lifecycle.py
+            src/af/search/projectors.py
             tests/unit/test_postgresql_driver.py
             tests/unit/test_postgresql_manager.py
+            tests/unit/test_governance_scripts.py
             tests/unit/test_outbox_relay.py
+            tests/unit/test_projection_guard.py
+            tests/unit/test_search_embedded.py
+            tests/unit/test_search_projectors.py
+            tests/unit/test_relational_sqlite.py
             tests/integration/test_postgresql_relational.py
             tests/integration/test_migrations_relational.py
             tests/integration/test_transactional_outbox_relational.py
             tests/integration/test_outbox_relay_relational.py
+            tests/integration/test_search_projector_relational.py
           if-no-files-found: error
           retention-days: 1
 

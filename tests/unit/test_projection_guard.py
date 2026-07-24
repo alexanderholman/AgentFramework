@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import sqlite3
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 from af.framework.errors import PlatformReason
 from af.framework.relational import (
+    DatabaseCursor,
     DatabaseOperationError,
+    DatabaseRow,
     DatabaseStatement,
     DatabaseTransaction,
 )
@@ -15,6 +19,7 @@ from af.messaging import (
     InboxRecord,
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
+    ProjectionConflictError,
     ProjectionDecision,
     ProjectionGapError,
     ProjectionIntegrityError,
@@ -53,6 +58,55 @@ def _prepare(
         position=position,
         processed_at=processed_at,
     )
+
+
+class _ConstraintFailureTransaction:
+    def __init__(self, inner: DatabaseTransaction) -> None:
+        self._inner = inner
+
+    def execute(self, statement: DatabaseStatement, /) -> int:
+        if "INSERT INTO af_projection_checkpoints" in statement.sql:
+            raise DatabaseOperationError(
+                reason=PlatformReason.PERMANENT_FAILURE,
+                stage="database.execute",
+                protected_cause=sqlite3.IntegrityError("private unique evidence"),
+            )
+        return self._inner.execute(statement)
+
+    def query(self, statement: DatabaseStatement, /) -> tuple[DatabaseRow, ...]:
+        return self._inner.query(statement)
+
+    def stream(self, statement: DatabaseStatement, /) -> DatabaseCursor:
+        return self._inner.stream(statement)
+
+    def savepoint(self, name: str, /) -> AbstractContextManager[None]:
+        return self._inner.savepoint(name)
+
+    def mark_rollback_only(self) -> None:
+        self._inner.mark_rollback_only()
+
+    def claim_operation(self, name: str, /) -> bool:
+        return self._inner.claim_operation(name)
+
+
+def test_projection_guard_classifies_unique_insert_race_as_transient() -> None:
+    driver, guard = _setup()
+    with (
+        pytest.raises(ProjectionConflictError) as captured,
+        driver.transaction() as transaction,
+    ):
+        _prepare(
+            guard,
+            _ConstraintFailureTransaction(transaction),
+            message_id="event-1",
+            position=1,
+        )
+
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert captured.value.stage == "projection.conflict"
+    assert "private" not in str(captured.value)
+    assert "private" not in repr(captured.value)
+    driver.close()
 
 
 def test_projection_guard_commits_contiguous_state_and_detects_duplicate() -> None:
@@ -179,6 +233,49 @@ def test_stale_unseen_delivery_is_recorded_without_regressing_checkpoint() -> No
     assert checkpoint.position == 5
     assert seen is not None
     assert seen.position == 3
+    driver.close()
+
+
+def test_projection_guard_can_skip_unbounded_stale_inbox_evidence() -> None:
+    driver, guard = _setup()
+    with driver.transaction() as transaction:
+        assert (
+            _prepare(guard, transaction, message_id="event-5", position=5)
+            is ProjectionDecision.APPLY
+        )
+    with driver.transaction() as transaction:
+        assert (
+            guard.prepare(
+                transaction,
+                projection_name="search.records",
+                source_name="records.v1.partition-0",
+                message_id="event-3",
+                position=3,
+                processed_at=_NOW,
+                record_stale=False,
+            )
+            is ProjectionDecision.STALE
+        )
+    with driver.transaction(read_only=True) as transaction:
+        assert (
+            TransactionalInbox().find(
+                transaction,
+                consumer_name="search.records",
+                source_name="records.v1.partition-0",
+                message_id="event-3",
+            )
+            is None
+        )
+    with pytest.raises(ValueError, match="boolean"), driver.transaction() as transaction:
+        guard.prepare(
+            transaction,
+            projection_name="search.records",
+            source_name="records.v1.partition-0",
+            message_id="event-3",
+            position=3,
+            processed_at=_NOW,
+            record_stale=1,  # type: ignore[arg-type]
+        )
     driver.close()
 
 
@@ -446,9 +543,10 @@ def test_direct_checkpoint_advance_detects_stale_optimistic_state() -> None:
     with driver.transaction() as transaction:
         checkpoints.advance(transaction, first, second)
 
-    with pytest.raises(ProjectionIntegrityError), driver.transaction() as transaction:
+    with pytest.raises(ProjectionConflictError) as captured, driver.transaction() as transaction:
         checkpoints.advance(transaction, first, second)
 
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
     del guard
     driver.close()
 

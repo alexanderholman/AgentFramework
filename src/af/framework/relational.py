@@ -187,6 +187,18 @@ class DatabaseTransaction(Protocol):
 
     def savepoint(self, name: str, /) -> AbstractContextManager[None]: ...
 
+    def mark_rollback_only(self) -> None:
+        """Irreversibly prevent commit; this must not fail while the transaction is active."""
+        ...
+
+    def claim_operation(self, name: str, /) -> bool:
+        """Irreversibly claim a bounded canonical name on the underlying outer transaction.
+
+        Transaction wrappers must delegate this method to the wrapped transaction so separate
+        wrappers cannot obtain independent claims.
+        """
+        ...
+
 
 class DatabaseDriver(Protocol):
     """Named-driver boundary consumed by DatabaseManager."""
