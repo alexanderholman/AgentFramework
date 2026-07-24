@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
+from types import ModuleType
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -154,6 +156,92 @@ def test_migration_cli_inspection_does_not_bootstrap_metadata(
             ORDER BY name"""
         ).fetchall()
     assert metadata == []
+    application.shutdown()
+
+
+def test_installed_cli_loads_explicit_application_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "operator-profile.sqlite3"
+    module = ModuleType("test_migration_operator_profile")
+
+    def build_application():  # type: ignore[no-untyped-def]
+        return _application(str(database))
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_migration_operator_profile:build_application",
+            "migrations",
+            "bootstrap",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"bootstrapped": True}
+    with sqlite3.connect(database) as connection:
+        metadata = connection.execute(
+            """SELECT name FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN ('af_migrations', 'af_migration_locks')
+            ORDER BY name"""
+        ).fetchall()
+    assert metadata == [("af_migration_locks",), ("af_migrations",)]
+
+
+@pytest.mark.parametrize(
+    "factory_path",
+    [
+        "not a factory",
+        "private_missing_module:create_application",
+        "private.missing:create_application",
+    ],
+)
+def test_installed_cli_sanitizes_invalid_application_factory(
+    factory_path: str,
+) -> None:
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            factory_path,
+            "migrations",
+            "status",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert factory_path not in result.stderr
+    assert "configuration is invalid" in result.stderr
+
+
+def test_explicit_factory_cannot_override_injected_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = _application()
+    module = ModuleType("test_conflicting_operator_profile")
+    module.build_application = _application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(application),
+        [
+            "--application-factory",
+            "test_conflicting_operator_profile:build_application",
+            "migrations",
+            "status",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
     application.shutdown()
 
 
