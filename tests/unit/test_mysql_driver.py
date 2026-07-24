@@ -130,25 +130,27 @@ def test_mysql_cancellation_marker_discards_results_and_recovers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with _driver(monkeypatch) as driver:
-        with pytest.raises(DatabaseOperationError) as executed:
-            with driver.transaction() as transaction:
-                driver._cancellation.set()
-                transaction.execute(DatabaseStatement("SELECT 1"))
+        with (
+            pytest.raises(DatabaseOperationError) as executed,
+            driver.transaction() as transaction,
+        ):
+            driver._cancellation.set()
+            transaction.execute(DatabaseStatement("SELECT 1"))
         assert executed.value.reason is PlatformReason.CANCELLED
 
-        with pytest.raises(DatabaseOperationError) as streamed:
-            with driver.transaction(read_only=True) as transaction:
-                cursor = transaction.stream(
-                    DatabaseStatement("SELECT 1 AS value", read_only=True)
-                )
-                driver._cancellation.set()
-                next(cursor)
+        with (
+            pytest.raises(DatabaseOperationError) as streamed,
+            driver.transaction(read_only=True) as transaction,
+        ):
+            cursor = transaction.stream(
+                DatabaseStatement("SELECT 1 AS value", read_only=True)
+            )
+            driver._cancellation.set()
+            next(cursor)
         assert streamed.value.reason is PlatformReason.CANCELLED
 
         with driver.transaction(read_only=True) as transaction:
-            rows = transaction.query(
-                DatabaseStatement("SELECT 1 AS value", read_only=True)
-            )
+            rows = transaction.query(DatabaseStatement("SELECT 1 AS value", read_only=True))
         assert rows[0]["value"] == 1
 
 
