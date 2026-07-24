@@ -1,0 +1,47 @@
+name: AF message diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "src/af/messaging/**"
+      - "tests/unit/test_message_envelopes.py"
+      - ".github/workflows/message-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact event head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+      - name: Capture diagnostics
+        run: |
+          mkdir diagnostics
+          set +e
+          uv run ruff check src/af/messaging tests/unit/test_message_envelopes.py > diagnostics/ruff.txt 2>&1
+          echo $? > diagnostics/ruff.exit
+          uv run mypy src > diagnostics/mypy.txt 2>&1
+          echo $? > diagnostics/mypy.exit
+          uv run pytest -q tests/unit/test_message_envelopes.py > diagnostics/pytest.txt 2>&1
+          echo $? > diagnostics/pytest.exit
+          exit 0
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: message-diagnostics
+          path: diagnostics
+          if-no-files-found: error
+          retention-days: 1
