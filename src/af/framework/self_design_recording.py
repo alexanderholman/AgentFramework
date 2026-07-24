@@ -80,7 +80,10 @@ class DesignRecordAuthority:
     allowed_effects: tuple[DesignRecordingEffect, ...]
 
     def __post_init__(self) -> None:
-        if type(self.authority_id) is not str or _AUTHORITY_ID.fullmatch(self.authority_id) is None:
+        if (
+            type(self.authority_id) is not str
+            or _AUTHORITY_ID.fullmatch(self.authority_id) is None
+        ):
             raise ValueError("self-design recording authority identity is invalid")
         if type(self.repository) is not str or _REPOSITORY.fullmatch(self.repository) is None:
             raise ValueError("self-design recording repository identity is invalid")
@@ -156,7 +159,9 @@ class DesignRecordingRequest:
         snapshot = self.prepared.snapshot
         plan = self.prepared.plan
         manifest = self.coordination.manifest
-        expected_manifest_path = Path(manifest.repository.git_common_dir) / "af" / "version-control.json"
+        expected_manifest_path = (
+            Path(manifest.repository.git_common_dir) / "af" / "version-control.json"
+        )
         bindings_match = (
             snapshot.repository == self.authority.repository
             and snapshot.base_ref == self.authority.base_ref
@@ -243,7 +248,10 @@ class DesignRecordResult:
             raise TypeError("self-design record status is invalid")
         if not isinstance(self.record, DesignPlanRecord):
             raise TypeError("self-design record is invalid")
-        if type(self.record_path) is not str or not Path(self.record_path).is_absolute():
+        if (
+            type(self.record_path) is not str
+            or not Path(self.record_path).is_absolute()
+        ):
             raise ValueError("self-design record path must be absolute")
 
     def to_dict(self) -> dict[str, object]:
