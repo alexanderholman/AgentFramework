@@ -31,6 +31,7 @@ __all__ = (
     "MigrationIrreversibleError",
     "MigrationLock",
     "MigrationLockUnavailable",
+    "MigrationMode",
     "MigrationPlan",
     "MigrationProbe",
     "MigrationRunner",
@@ -56,6 +57,13 @@ class MigrationDirection(StrEnum):
 
     UP = "up"
     DOWN = "down"
+
+
+class MigrationMode(StrEnum):
+    """The database guarantee required to apply or reverse a migration."""
+
+    SCHEMA = "schema"
+    DATA = "data"
 
 
 class MigrationIntegrityError(DatabaseOperationError):
@@ -128,12 +136,14 @@ class MigrationProbe:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class Migration:
-    """One immutable ordered schema transition and its exact checksum identity."""
+    """One immutable ordered transition and its exact checksum identity."""
 
     migration_id: str
     up: tuple[DatabaseStatement, ...]
     down: tuple[DatabaseStatement, ...] = ()
     verify: tuple[MigrationProbe, ...] = ()
+    mode: MigrationMode = MigrationMode.SCHEMA
+    accept_pre_mode_checksum: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -150,9 +160,18 @@ class Migration:
             or any(not isinstance(probe, MigrationProbe) for probe in self.verify)
         ):
             raise ValueError("migration verification probes are invalid or too numerous")
+        if type(self.mode) is not MigrationMode:
+            raise ValueError("migration mode is invalid")
+        if type(self.accept_pre_mode_checksum) is not bool or (
+            self.accept_pre_mode_checksum and self.mode is not MigrationMode.DATA
+        ):
+            raise ValueError("migration pre-mode checksum policy is invalid")
 
     @property
     def checksum(self) -> str:
+        return self._calculate_checksum(include_mode=True)
+
+    def _calculate_checksum(self, *, include_mode: bool) -> str:
         payload = {
             "down": [statement.sql for statement in self.down],
             "migration_id": self.migration_id,
@@ -171,6 +190,8 @@ class Migration:
                 for probe in self.verify
             ],
         }
+        if include_mode and self.mode is MigrationMode.DATA:
+            payload["mode"] = self.mode.value
         canonical = json.dumps(
             payload,
             ensure_ascii=False,
@@ -179,11 +200,19 @@ class Migration:
         ).encode("utf-8")
         return hashlib.sha256(canonical).hexdigest()
 
+    def _accepts_applied_checksum(self, checksum: str) -> bool:
+        return checksum == self.checksum or (
+            self.accept_pre_mode_checksum
+            and checksum == self._calculate_checksum(include_mode=False)
+        )
+
     def __repr__(self) -> str:
         return (
             f"Migration(migration_id={self.migration_id!r}, "
             f"up_count={len(self.up)!r}, down_count={len(self.down)!r}, "
-            f"verify_count={len(self.verify)!r}, checksum={self.checksum!r})"
+            f"verify_count={len(self.verify)!r}, mode={self.mode.value!r}, "
+            f"accept_pre_mode_checksum={self.accept_pre_mode_checksum!r}, "
+            f"checksum={self.checksum!r})"
         )
 
 
@@ -503,9 +532,12 @@ class MigrationRunner:
         if type(dry_run) is not bool:
             raise ValueError("migration dry-run flag must be boolean")
         if dry_run:
-            return self.plan_up(limit=limit)
+            plan = self.plan_up(limit=limit)
+            self._preflight_capabilities(plan)
+            return plan
         with self.lock() as lease:
             plan = self.plan_up(limit=limit)
+            self._preflight_capabilities(plan)
             applied = self._read_applied()
             batch = 1 + max((item.batch for item in applied), default=0)
             applied_order = len(applied)
@@ -555,13 +587,14 @@ class MigrationRunner:
         if type(dry_run) is not bool:
             raise ValueError("migration dry-run flag must be boolean")
         if dry_run:
-            return self.plan_down(steps=steps)
+            plan = self.plan_down(steps=steps)
+            selected = tuple(self._by_id[migration_id] for migration_id in plan.migration_ids)
+            self._preflight_down(selected)
+            return plan
         with self.lock() as lease:
             plan = self.plan_down(steps=steps)
             selected = tuple(self._by_id[migration_id] for migration_id in plan.migration_ids)
-            for migration in selected:
-                if not migration.down:
-                    raise MigrationIrreversibleError(migration.migration_id)
+            self._preflight_down(selected)
             for migration in selected:
                 migration_id = migration.migration_id
                 lease.renew()
@@ -621,12 +654,26 @@ class MigrationRunner:
                 if (
                     item.applied_order != expected_order
                     or item.batch < 1
-                    or item.checksum != migration.checksum
+                    or not migration._accepts_applied_checksum(item.checksum)
                 ):
                     raise ValueError("migration ledger metadata diverges")
         except (KeyError, TypeError, ValueError) as error:
             raise MigrationIntegrityError(protected_cause=error) from None
         return applied
+
+    def _preflight_capabilities(self, plan: MigrationPlan) -> None:
+        if any(
+            self._by_id[migration_id].mode is MigrationMode.SCHEMA
+            for migration_id in plan.migration_ids
+        ):
+            self._driver.require(DatabaseFeature.TRANSACTIONAL_DDL)
+
+    def _preflight_down(self, selected: tuple[Migration, ...]) -> None:
+        for migration in selected:
+            if not migration.down:
+                raise MigrationIrreversibleError(migration.migration_id)
+        if any(migration.mode is MigrationMode.SCHEMA for migration in selected):
+            self._driver.require(DatabaseFeature.TRANSACTIONAL_DDL)
 
     @staticmethod
     def _verify_migration(transaction: DatabaseTransaction, migration: Migration) -> None:

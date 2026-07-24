@@ -9,8 +9,10 @@ reference SQLite adapter while preserving PostgreSQL's actual transaction semant
 - The adapter opens one physical connection and serializes transactions on that connection.
   Application-level concurrency uses the existing bounded `DatabasePool`, whose members are
   independent driver instances.
-- Transactions, savepoints, streaming cursors, and cancellation are advertised only when the
-  runtime exposes and passes the corresponding checks.
+- Transactions, transactional DDL, savepoints, streaming cursors, and cancellation are
+  advertised only when the runtime exposes and passes the corresponding checks. DDL accepted
+  by PostgreSQL inside the driver transaction rolls back with that transaction; statements
+  PostgreSQL forbids inside a transaction fail without a migration ledger commit.
 - A read-only transaction is enforced by PostgreSQL with `SET TRANSACTION READ ONLY`; caller
   statement metadata cannot turn a write into an authorized read.
 - SQLAlchemy and psycopg details remain behind the driver boundary. Public failures contain
@@ -34,4 +36,5 @@ applications must install and govern their chosen psycopg runtime explicitly.
 Unit tests use a non-certifying SQLAlchemy fixture to exercise lifecycle and failure boundaries.
 Production evidence comes only from the real PostgreSQL workflow, which covers the shared
 commit, rollback, savepoint, stream-lifetime, read-only, error-redaction, and shutdown suite,
-plus cancellation recovery, pooling, runtime registration, and connection failure.
+plus cancellation recovery, pooling, runtime registration, connection failure, and migration
+schema create, dry-run, verification, reversal, and interrupted-DDL rollback.

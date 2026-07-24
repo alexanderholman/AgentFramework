@@ -37,6 +37,7 @@ def test_postgresql_driver_executes_and_rolls_back_with_sanitized_contract(
         assert driver.features == frozenset(
             {
                 DatabaseFeature.TRANSACTIONS,
+                DatabaseFeature.TRANSACTIONAL_DDL,
                 DatabaseFeature.SAVEPOINTS,
                 DatabaseFeature.STREAMING,
             }

@@ -42,7 +42,7 @@ jobs:
       - name: Check out exact event head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.event_name == 'push' && github.event.after || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'push' && github.event.after || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -70,6 +70,7 @@ jobs:
           {
             uv run ruff format --check \
               src/af/framework/migrations.py \
+              src/af/framework/relational.py \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
@@ -83,6 +84,7 @@ jobs:
               tests/integration/test_outbox_relay_relational.py
             uv run ruff check \
               src/af/framework/migrations.py \
+              src/af/framework/relational.py \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
@@ -96,6 +98,7 @@ jobs:
               tests/integration/test_outbox_relay_relational.py
             uv run mypy \
               src/af/framework/migrations.py \
+              src/af/framework/relational.py \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
@@ -140,6 +143,7 @@ jobs:
             mysql-integration.log
             canonical-gate.log
             src/af/framework/migrations.py
+            src/af/framework/relational.py
             src/af/infrastructure/mysql.py
             src/af/infrastructure/mysql_manager.py
             src/af/messaging/outbox.py

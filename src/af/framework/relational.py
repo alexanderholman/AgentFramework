@@ -38,6 +38,7 @@ class DatabaseFeature(StrEnum):
     """Capabilities that must be verified before use."""
 
     TRANSACTIONS = "transactions"
+    TRANSACTIONAL_DDL = "transactional-ddl"
     SAVEPOINTS = "savepoints"
     STREAMING = "streaming"
     ADVISORY_LOCKS = "advisory-locks"

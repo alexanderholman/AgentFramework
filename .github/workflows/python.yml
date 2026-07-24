@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 20
     env:
       AF_APPEND_ONLY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
-      AF_APPEND_ONLY_HEAD_REF: ${{ github.event_name == 'push' && github.event.after || github.sha }}
+      AF_APPEND_ONLY_HEAD_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'push' && github.event.after || github.sha }}
       AF_APPEND_ONLY_BASE_STRATEGY: ${{ github.event_name == 'push' && 'exact' || 'merge-base' }}
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
@@ -37,7 +37,7 @@ jobs:
       - name: Check out exact event head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.event_name == 'push' && github.event.after || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'push' && github.event.after || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 

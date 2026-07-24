@@ -442,7 +442,8 @@ def test_python_workflow_uses_exact_push_before_and_event_head_checkout() -> Non
         "github.event_name == 'push' && github.event.before || '' }}"
     )
     assert job["env"]["AF_APPEND_ONLY_HEAD_REF"] == (
-        "${{ github.event_name == 'push' && github.event.after || github.sha }}"
+        "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || "
+        "github.event_name == 'push' && github.event.after || github.sha }}"
     )
     assert job["env"]["AF_APPEND_ONLY_BASE_STRATEGY"] == (
         "${{ github.event_name == 'push' && 'exact' || 'merge-base' }}"
@@ -464,10 +465,27 @@ def test_python_workflow_uses_exact_push_before_and_event_head_checkout() -> Non
     assert head_step["uses"] == "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
     assert (
         head_step["with"]["ref"]
-        == "${{ github.event_name == 'push' && github.event.after || github.sha }}"
+        == "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || "
+        "github.event_name == 'push' && github.event.after || github.sha }}"
     )
     assert head_step["with"]["fetch-depth"] == 0
     assert head_step["with"]["persist-credentials"] is False
 
     assert "python3 - <<'PY'" not in workflow_text
     assert "http.https://github.com/.extraheader" not in workflow_text
+
+
+@pytest.mark.parametrize("workflow_name", ["postgresql.yml", "mysql.yml", "mariadb.yml"])
+def test_relational_workflow_checks_out_exact_event_head(workflow_name: str) -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / workflow_name
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["integration"]
+    head_step = next(step for step in job["steps"] if step["name"] == "Check out exact event head")
+
+    assert (
+        head_step["with"]["ref"]
+        == "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || "
+        "github.event_name == 'push' && github.event.after || github.sha }}"
+    )
+    assert head_step["with"]["fetch-depth"] == 0
+    assert head_step["with"]["persist-credentials"] is False

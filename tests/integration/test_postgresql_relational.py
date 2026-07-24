@@ -87,6 +87,7 @@ def test_postgresql_pool_drains_and_exposes_verified_capabilities() -> None:
         assert pool.features == frozenset(
             {
                 DatabaseFeature.TRANSACTIONS,
+                DatabaseFeature.TRANSACTIONAL_DDL,
                 DatabaseFeature.SAVEPOINTS,
                 DatabaseFeature.STREAMING,
                 DatabaseFeature.CANCELLATION,
@@ -126,6 +127,7 @@ def test_postgresql_registration_binds_runtime_identity_and_evidence() -> None:
     assert evidence.capabilities.supports(
         {
             DatabaseFeature.TRANSACTIONS.value,
+            DatabaseFeature.TRANSACTIONAL_DDL.value,
             DatabaseFeature.SAVEPOINTS.value,
             DatabaseFeature.STREAMING.value,
             DatabaseFeature.CANCELLATION.value,

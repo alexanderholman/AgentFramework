@@ -161,9 +161,13 @@ def test_mariadb_registration_is_inert_and_verifies_exact_runtime(
     assert registration.manifest.capabilities.supports(
         {DatabaseFeature.CANCELLATION.value, DatabaseFeature.POOLING.value}
     )
+    assert not registration.manifest.capabilities.supports(
+        (DatabaseFeature.TRANSACTIONAL_DDL.value,)
+    )
     assert evidence.binding == _binding()
     assert evidence.health is HealthStatus.HEALTHY
     assert evidence.capabilities.supports(feature.value for feature in _FEATURES)
+    assert not evidence.capabilities.supports((DatabaseFeature.TRANSACTIONAL_DDL.value,))
     assert evidence.expires_at > evidence.observed_at
     disposer = registration.disposer
     assert disposer is not None

@@ -106,9 +106,13 @@ def test_mysql_registration_is_inert_and_verifies_exact_runtime(
     assert registration.manifest.capabilities.supports(
         {DatabaseFeature.CANCELLATION.value, DatabaseFeature.POOLING.value}
     )
+    assert not registration.manifest.capabilities.supports(
+        (DatabaseFeature.TRANSACTIONAL_DDL.value,)
+    )
     assert evidence.binding == binding
     assert evidence.health is HealthStatus.HEALTHY
     assert evidence.capabilities.supports(feature.value for feature in _FEATURES)
+    assert not evidence.capabilities.supports((DatabaseFeature.TRANSACTIONAL_DDL.value,))
 
 
 def test_mysql_registration_builds_bounded_pool_and_rejects_invalid_config(
