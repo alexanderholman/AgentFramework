@@ -145,6 +145,9 @@ class LocalEventTelemetryMiddleware:
                 attributes=attributes,
             )
             self._publisher.publish(signal)
+        except asyncio.CancelledError:
+            # Optional telemetry cannot own dispatch cancellation.
+            return
         except Exception:
             # Telemetry is optional evidence and cannot change dispatch semantics.
             return
@@ -258,13 +261,16 @@ class LocalEventBus:
 
         extension = self._middleware[index]
         called = False
+        completed = False
 
         def call_next() -> LocalEventDispatchReport:
-            nonlocal called
+            nonlocal called, completed
             if called:
                 raise InvalidMessageSchema("local event middleware called next more than once")
             called = True
-            return self._invoke_sync_middleware(envelope, listeners, index + 1)
+            report = self._invoke_sync_middleware(envelope, listeners, index + 1)
+            completed = True
+            return report
 
         try:
             report = extension.dispatch(envelope, call_next)
@@ -280,8 +286,8 @@ class LocalEventBus:
         except Exception as error:
             raise LocalEventMiddlewareError("local event middleware failed") from error
 
-        if not called:
-            raise InvalidMessageSchema("local event middleware must call next exactly once")
+        if not called or not completed:
+            raise InvalidMessageSchema("local event middleware must complete next exactly once")
         return self._validate_report(report, envelope, len(listeners))
 
     async def _invoke_async_middleware(
