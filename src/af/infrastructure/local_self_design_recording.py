@@ -19,6 +19,7 @@ from af.framework.self_design_recording import (
     DesignRecordingError,
     DesignRecordingRequest,
 )
+from af.framework.version_control import MANIFEST_MAX_BYTES
 
 
 class LocalDesignPlanRecorder(DesignPlanRecorder):
@@ -72,6 +73,8 @@ class LocalDesignPlanRecorder(DesignPlanRecorder):
         if manifest_path.is_symlink() or not manifest_path.is_file():
             raise DesignRecordingError("self-design coordination manifest is invalid")
         try:
+            if manifest_path.stat().st_size > MANIFEST_MAX_BYTES:
+                raise OSError
             content = manifest_path.read_bytes()
         except OSError:
             raise DesignRecordingError("self-design coordination manifest is unavailable") from None
@@ -124,11 +127,12 @@ class LocalDesignPlanRecorder(DesignPlanRecorder):
                 stream.flush()
                 os.fsync(stream.fileno())
             os.link(temporary_path, record_path)
-            directory_descriptor = os.open(record_root, os.O_RDONLY)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
+            if os.name != "nt":
+                directory_descriptor = os.open(record_root, os.O_RDONLY)
+                try:
+                    os.fsync(directory_descriptor)
+                finally:
+                    os.close(directory_descriptor)
         except FileExistsError:
             raise DesignRecordingError("self-design record state changed concurrently") from None
         except OSError:
