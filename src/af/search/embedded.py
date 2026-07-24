@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import RLock
 from time import monotonic
 from types import TracebackType
-from typing import Literal
+from typing import Literal, cast
 
 from af.framework.errors import PlatformError, PlatformReason
 from af.search.contracts import ResourceEnvelope, SearchHit, SearchQuery
@@ -252,13 +252,13 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             stored_acl = tuple(json.loads(str(row[4])))
             evidence = tuple(value for value in stored_acl if value in allowed)
             provenance = tuple(json.loads(str(row[5])))
-            score = max(0.0, -float(row[6]))
+            score = max(0.0, -float(cast(float, row[6])))
             highlight = str(row[7])
             yield SearchHit(
                 resource_id=str(row[0]),
                 source_id=str(row[1]),
                 authoritative_locator=str(row[2]),
-                projection_version=int(row[3]),
+                projection_version=cast(int, row[3]),
                 acl_evidence=evidence,
                 provenance=provenance,
                 score=score,
