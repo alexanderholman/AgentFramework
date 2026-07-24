@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import CoroutineType, ModuleType
@@ -394,6 +395,45 @@ def test_installed_cli_closes_rejected_async_factory_result(
     was_closed = created[0].cr_frame is None
     created[0].close()
     assert was_closed
+
+
+def test_installed_cli_sanitizes_rejected_async_factory_close_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_async_close_failure_operator_profile")
+    secret = "postgresql://user:SECRET@host/database"
+
+    class Suspend:
+        def __await__(self) -> Generator[None, None, None]:
+            yield
+
+    async def async_application():  # type: ignore[no-untyped-def]
+        try:
+            await Suspend()
+        finally:
+            raise RuntimeError(secret)
+
+    def build_application():  # type: ignore[no-untyped-def]
+        result = async_application()
+        result.send(None)
+        return result
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_async_close_failure_operator_profile:build_application",
+            "hello",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "configuration is invalid" in result.stderr
+    assert secret not in result.stderr
 
 
 def test_programmatic_falsey_factory_does_not_fall_back() -> None:
