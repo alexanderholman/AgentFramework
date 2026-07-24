@@ -137,6 +137,7 @@ PACKAGE_SMOKE = """
 from importlib.metadata import distributions
 from importlib.resources import files
 from pathlib import Path
+import json
 import sys
 
 target = Path(sys.argv[1]).resolve()
@@ -168,6 +169,7 @@ entry_points = {
 }
 if set(entry_points) != {"af", "af-mcp"}:
     raise SystemExit("installed wheel console entry points do not match the release contract")
+loaded_entry_points = {}
 for name, entry_point in entry_points.items():
     try:
         loaded = entry_point.load()
@@ -175,6 +177,7 @@ for name, entry_point in entry_points.items():
         raise SystemExit(f"installed wheel entry-point target failed to load: {name}") from exc
     if not callable(loaded):
         raise SystemExit(f"installed wheel entry-point target is not callable: {name}")
+    loaded_entry_points[name] = loaded
 
 application = create_application(settings=Settings(database_url="sqlite:///:memory:"))
 runner = CliRunner()
@@ -184,6 +187,126 @@ if hello.exit_code != 0 or hello.stdout.strip() != "Hello, world!":
     raise SystemExit("installed wheel failed the hello smoke")
 if counted.exit_code != 0 or counted.stdout.strip() != "3":
     raise SystemExit("installed wheel failed the character-count smoke")
+application.shutdown()
+
+profile_path = target / "af_release_operator_profile.py"
+profile_path.write_text(
+    '''
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+from af.bootstrap import create_application
+from af.config import Settings
+from af.framework.container import ProviderRegistrar, ServiceProvider
+from af.framework.database_manager import bind_database_manager
+from af.framework.migration_provider import MigrationProvider
+from af.framework.migrations import Migration, MigrationProbe
+from af.framework.relational import DatabaseRow, DatabaseStatement
+from af.infrastructure.repositories import InMemoryTaskRepository
+from af.infrastructure.sqlite_manager import sqlite_registration
+from af.infrastructure.tracing import InMemoryTraceRepository
+
+NOW = datetime(2026, 7, 24, 12, tzinfo=UTC)
+DATABASE = Path(__file__).with_name("release-operator.sqlite3")
+MIGRATION_ID = "20260724120000_create_release_operator_records"
+MIGRATION = Migration(
+    MIGRATION_ID,
+    (DatabaseStatement("CREATE TABLE release_operator_records (id INTEGER PRIMARY KEY)"),),
+    (DatabaseStatement("DROP TABLE release_operator_records"),),
+    (
+        MigrationProbe(
+            DatabaseStatement(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'release_operator_records'",
+                read_only=True,
+            ),
+            (DatabaseRow(("name",), ("release_operator_records",)),),
+        ),
+    ),
+)
+
+
+class DatabaseProvider(ServiceProvider):
+    provider_id = "release.database"
+
+    def register(self, registrar: ProviderRegistrar) -> None:
+        bind_database_manager(
+            registrar,
+            connections={
+                "application": {"driver": "sqlite", "database": ":memory:"},
+                "migration": {"driver": "sqlite", "database": str(DATABASE)},
+            },
+            default="application",
+            read="application",
+            write="application",
+            deployment_profile="release-smoke",
+            policy_version="policy-v1",
+            registrations=(sqlite_registration(clock=lambda: NOW),),
+            clock=lambda: NOW,
+        )
+
+
+def build_application():
+    return create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(
+            DatabaseProvider(),
+            MigrationProvider(
+                migrations=(MIGRATION,),
+                connection="migration",
+                owner_id="release-smoke",
+                clock=lambda: NOW,
+            ),
+        ),
+    )
+'''.lstrip(),
+    encoding="utf-8",
+)
+
+operator_cli = loaded_entry_points["af"]
+profile = "af_release_operator_profile:build_application"
+migration_id = "20260724120000_create_release_operator_records"
+
+
+def invoke_migration(*arguments):
+    result = runner.invoke(
+        operator_cli,
+        ["--application-factory", profile, "migrations", *arguments],
+    )
+    if result.exit_code != 0:
+        raise SystemExit("installed wheel operator migration command failed")
+    return json.loads(result.stdout)
+
+
+if invoke_migration("bootstrap") != {"bootstrapped": True}:
+    raise SystemExit("installed wheel migration bootstrap smoke failed")
+if invoke_migration("plan")["migration_ids"] != [migration_id]:
+    raise SystemExit("installed wheel migration plan smoke failed")
+if invoke_migration("up", "--dry-run")["dry_run"] is not True:
+    raise SystemExit("installed wheel migration dry-run smoke failed")
+if invoke_migration("up")["migration_ids"] != [migration_id]:
+    raise SystemExit("installed wheel migration up smoke failed")
+if invoke_migration("status") != {"applied": [migration_id], "pending": []}:
+    raise SystemExit("installed wheel migration status smoke failed")
+if invoke_migration("verify") != {"verified": [migration_id]}:
+    raise SystemExit("installed wheel migration verify smoke failed")
+if invoke_migration("down")["migration_ids"] != [migration_id]:
+    raise SystemExit("installed wheel migration down smoke failed")
+if invoke_migration("status") != {"applied": [], "pending": [migration_id]}:
+    raise SystemExit("installed wheel migration reversal smoke failed")
+
+ambient_database = Path.cwd() / "storage" / "af.sqlite3"
+without_profile = runner.invoke(operator_cli, ["migrations", "status"])
+if (
+    without_profile.exit_code != 2
+    or "configuration is invalid" not in without_profile.stderr
+    or ambient_database.exists()
+):
+    raise SystemExit("installed wheel migration profile did not fail before ambient boot")
 """.strip()
 
 

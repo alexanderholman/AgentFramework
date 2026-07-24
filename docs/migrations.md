@@ -80,7 +80,19 @@ migration contains only transactional data operations. It is not valid for schem
 must not be used to relabel legacy DDL or mixed DDL/data migrations.
 
 The CLI exposes bootstrap, plan, status, up, down, and verification only when an application
-binds a `MigrationRunner`. Package migration discovery, an installed-console operator profile,
-and online schema-change orchestration remain separate deployment concerns. Those layers must
-use the same ledger, checksums, lock ownership, plans, and verification results rather than
-reimplementing migration truth.
+binds a `MigrationRunner`. An embedded host may inject that application or its factory.
+The installed `af` console instead requires an explicit
+`--application-factory module:callable` before any migration command can construct an
+application. The synchronous no-argument factory must return a fully composed `AFApplication`
+whose `MigrationProvider` owns the immutable catalogue and explicit named database connection.
+
+Selecting that option is authorization by a trusted local operator to import and execute a
+trusted project composition root in-process. It is not package discovery, package approval, or
+a sandbox, and it must not be populated from untrusted or implicitly discovered input. A
+project factory that consumes AF extension packages must still use the reviewed
+discover/plan/approve/load package boundary. Help, invalid command lines, and migration
+commands without the option do not import the factory or boot the ambient default application.
+
+Package migration discovery and online schema-change orchestration remain separate deployment
+concerns. Those layers must use the same ledger, checksums, lock ownership, plans, and
+verification results rather than reimplementing migration truth.

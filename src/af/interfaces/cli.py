@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Callable
 from importlib import import_module
+from inspect import iscoroutine
 from typing import Annotated, cast
 
 import typer
@@ -24,7 +25,7 @@ _APPLICATION_FACTORY = re.compile(
 _MAX_APPLICATION_FACTORY_LENGTH = 256
 
 
-def _load_application_factory(value: str) -> Callable[[], AFApplication]:
+def _validate_application_factory(value: str) -> None:
     if (
         type(value) is not str
         or len(value) > _MAX_APPLICATION_FACTORY_LENGTH
@@ -34,6 +35,10 @@ def _load_application_factory(value: str) -> Callable[[], AFApplication]:
             PlatformReason.CONFIGURATION_INVALID,
             stage="cli.application-factory",
         )
+
+
+def _load_application_factory(value: str) -> Callable[[], object]:
+    _validate_application_factory(value)
     module_name, attribute = value.split(":", maxsplit=1)
     try:
         candidate = getattr(import_module(module_name), attribute)
@@ -48,7 +53,7 @@ def _load_application_factory(value: str) -> Callable[[], AFApplication]:
             PlatformReason.CONFIGURATION_INVALID,
             stage="cli.application-factory",
         )
-    return cast(Callable[[], AFApplication], candidate)
+    return cast(Callable[[], object], candidate)
 
 
 def create_cli(
@@ -72,29 +77,41 @@ def create_cli(
         raise ValueError("provide application or application_factory, not both")
     owns_application = application is None
     cached_application = application
-    configured_factory = application_factory or create_application
-    requires_application_type = application_factory is not None
+    configured_factory: Callable[[], object] = (
+        create_application if application_factory is None else application_factory
+    )
+    selected_factory_path: str | None = None
     accepts_operator_factory = application is None and application_factory is None
 
     def current() -> AFApplication:
         nonlocal cached_application
         if cached_application is None:
+            factory = configured_factory
+            external_factory = application_factory is not None
+            if selected_factory_path is not None:
+                factory = _load_application_factory(selected_factory_path)
+                external_factory = True
             try:
-                resolved = configured_factory()
-            except AFError:
-                raise
+                resolved = factory()
             except Exception as error:
+                if not external_factory and isinstance(error, AFError):
+                    raise
                 raise PlatformError(
                     PlatformReason.CONFIGURATION_INVALID,
                     stage="cli.application-factory",
                     protected_cause=error,
                 ) from None
-            if requires_application_type and not isinstance(resolved, AFApplication):
-                raise PlatformError(
-                    PlatformReason.CONFIGURATION_INVALID,
-                    stage="cli.application-factory",
-                )
-            cached_application = resolved
+            if external_factory:
+                if not isinstance(resolved, AFApplication):
+                    if iscoroutine(resolved):
+                        resolved.close()
+                    raise PlatformError(
+                        PlatformReason.CONFIGURATION_INVALID,
+                        stage="cli.application-factory",
+                    )
+                cached_application = resolved
+            else:
+                cached_application = cast(AFApplication, resolved)
         return cached_application
 
     def fail(error: Exception) -> None:
@@ -112,7 +129,8 @@ def create_cli(
             ),
         ] = None,
     ) -> None:
-        nonlocal configured_factory, requires_application_type
+        nonlocal selected_factory_path
+        selected_factory_path = None
         if factory_path is not None:
             if not accepts_operator_factory:
                 fail(
@@ -122,16 +140,20 @@ def create_cli(
                     )
                 )
             try:
-                configured_factory = _load_application_factory(factory_path)
-                requires_application_type = True
+                _validate_application_factory(factory_path)
+                selected_factory_path = factory_path
             except (AFError, TypeError, ValueError) as error:
                 fail(error)
 
         def close_owned_application() -> None:
-            nonlocal cached_application
-            if owns_application and cached_application is not None:
-                cached_application.shutdown()
-                cached_application = None
+            nonlocal cached_application, selected_factory_path
+            try:
+                if owns_application and cached_application is not None:
+                    cached_application.shutdown()
+            finally:
+                if owns_application:
+                    cached_application = None
+                selected_factory_path = None
 
         context.call_on_close(close_owned_application)
 
@@ -191,6 +213,11 @@ def create_cli(
             fail(error)
 
     def migration_runner() -> MigrationRunner:
+        if accepts_operator_factory and selected_factory_path is None:
+            raise PlatformError(
+                PlatformReason.CONFIGURATION_INVALID,
+                stage="cli.application-factory",
+            )
         return current().container.resolve(MigrationRunner)
 
     def emit_plan(plan: MigrationPlan, *, dry_run: bool) -> None:
