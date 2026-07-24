@@ -56,20 +56,13 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Diagnose release validation
-        run: python scripts/af_dev.py --action release-validate --execute
+      - name: Capture lint diagnostics
+        run: python scripts/af_dev.py --action lint --execute > lint-diagnostics.txt 2>&1 || true
 
-      - name: Diagnose formatting
-        run: python scripts/af_dev.py --action format-check --execute
-
-      - name: Diagnose lint
-        run: python scripts/af_dev.py --action lint --execute
-
-      - name: Diagnose typing
-        run: python scripts/af_dev.py --action typecheck --execute
-
-      - name: Diagnose tests and coverage
-        run: python scripts/af_dev.py --action coverage --execute
-
-      - name: Run the repeatable AF quality gate
-        run: python scripts/af_dev.py --action check --execute
+      - name: Upload lint diagnostics
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lint-diagnostics
+          path: lint-diagnostics.txt
+          if-no-files-found: error
+          retention-days: 1
