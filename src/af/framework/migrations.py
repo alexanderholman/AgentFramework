@@ -14,7 +14,7 @@ from itertools import islice
 from types import TracebackType
 from typing import Literal
 
-from af.framework.errors import PlatformReason
+from af.framework.errors import PlatformError, PlatformReason
 from af.framework.relational import (
     DatabaseDriver,
     DatabaseFeature,
@@ -426,6 +426,7 @@ class MigrationRunner:
         if len({migration.migration_id for migration in ordered}) != len(ordered):
             raise MigrationIntegrityError(protected_cause=ValueError("duplicate migration id"))
         driver.require(DatabaseFeature.TRANSACTIONS)
+        driver.require(DatabaseFeature.STREAMING)
         self._driver = driver
         self._migrations = ordered
         self._by_id = {migration.migration_id: migration for migration in ordered}
@@ -588,7 +589,8 @@ class MigrationRunner:
     def _read_applied(self) -> tuple[_AppliedMigration, ...]:
         try:
             with self._driver.transaction(read_only=True) as transaction:
-                rows = transaction.query(
+                rows = _bounded_rows(
+                    transaction,
                     DatabaseStatement(
                         f"""SELECT
                             migration_id,
@@ -599,7 +601,8 @@ class MigrationRunner:
                         FROM {_LEDGER}
                         ORDER BY applied_order ASC""",
                         read_only=True,
-                    )
+                    ),
+                    maximum=len(self._migrations),
                 )
         except DatabaseOperationError:
             raise
@@ -629,17 +632,60 @@ class MigrationRunner:
     def _verify_migration(transaction: DatabaseTransaction, migration: Migration) -> None:
         for probe in migration.verify:
             try:
-                actual = transaction.query(probe.statement)
-            except DatabaseOperationError as error:
-                raise MigrationVerificationError(
-                    migration.migration_id,
-                    protected_cause=error,
-                ) from None
+                actual = _bounded_rows(
+                    transaction,
+                    probe.statement,
+                    maximum=len(probe.expected_rows),
+                )
+            except DatabaseOperationError:
+                raise
             if actual != probe.expected_rows:
                 raise MigrationVerificationError(
                     migration.migration_id,
                     protected_cause=ValueError("migration probe result mismatch"),
                 )
+
+
+def _bounded_rows(
+    transaction: DatabaseTransaction,
+    statement: DatabaseStatement,
+    *,
+    maximum: int,
+) -> tuple[DatabaseRow, ...]:
+    cursor = transaction.stream(statement)
+    primary_error: BaseException | None = None
+    try:
+        return tuple(islice(cursor, maximum + 1))
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        try:
+            cursor.close()
+        except BaseException as close_error:
+            if primary_error is not None:
+                if _control_flow_rank(close_error) > _control_flow_rank(primary_error):
+                    raise
+            elif isinstance(close_error, DatabaseOperationError):
+                raise
+            elif isinstance(close_error, Exception):
+                raise DatabaseOperationError(
+                    stage="database.cursor-close",
+                    protected_cause=close_error,
+                ) from None
+            else:
+                raise
+
+
+def _control_flow_rank(error: BaseException) -> int:
+    if not isinstance(error, Exception):
+        return 3
+    if isinstance(error, PlatformError):
+        if error.reason is PlatformReason.CANCELLED:
+            return 2
+        if error.reason is PlatformReason.SHUTDOWN_FAILED:
+            return 1
+    return 0
 
 
 def _write_statements(
