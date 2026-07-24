@@ -28,6 +28,14 @@ Listeners observe the same immutable normalized envelope and must return `None`.
 
 No-listener publication is a successful zero-listener local dispatch. It does not prove external publication, durable delivery, acknowledgement, or eventual handling.
 
+## Local event middleware
+
+Middleware is declared when the local bus is built and is immutable with the bus. Each middleware extension implements synchronous and asynchronous around-dispatch methods. Middleware observes the same normalized immutable envelope as listeners and must invoke the next stage exactly once. It cannot replace the envelope, skip registered listeners, invoke the chain twice, or alter count-only dispatch evidence.
+
+Synchronous publication performs asynchronous-listener preflight before middleware runs, so an invalid sync dispatch causes no middleware or listener side effects. Cancellation remains authoritative. Ordinary middleware failures are projected through `LocalEventMiddlewareError` without exposing payload or extension state.
+
+`LocalEventTelemetryMiddleware` emits bounded start/completion/failure/cancellation signals through `TelemetryPublisher`. It propagates only the envelope's validated `TelemetryContext` and low-cardinality message role, type, schema version, dispatch mode, stage, and listener count. It never emits payloads, message IDs, correlation values, tenant identities, or listener exceptions. Telemetry creation and sink failure are optional evidence failures and cannot change local dispatch results.
+
 ## Deliberate boundaries
 
 The local bus establishes deterministic in-process semantics needed by later outbox, queue, pub-sub, notification, and projection work. Those later systems must preserve their actual delivery guarantees. They must not relabel local dispatch as durable delivery or claim exactly-once transport semantics.

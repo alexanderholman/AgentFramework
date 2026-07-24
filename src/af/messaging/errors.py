@@ -19,3 +19,7 @@ class MessageUpcastError(RuntimeError):
 
 class LocalEventListenerError(RuntimeError):
     """A local event listener failed without exposing message content."""
+
+
+class LocalEventMiddlewareError(RuntimeError):
+    """A local event middleware extension failed without exposing message content."""
