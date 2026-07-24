@@ -3,6 +3,8 @@ name: Codex format artifact
 on:
   push:
     branches: [codex/inbox-projection-checkpoints]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
@@ -15,7 +17,7 @@ jobs:
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
     steps:
-      - name: Check out exact branch head
+      - name: Check out exact event head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.sha }}
