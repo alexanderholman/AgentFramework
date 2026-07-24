@@ -126,18 +126,16 @@ class LocalEventBus:
         for listener in listeners:
             try:
                 result = listener(normalized)
-                if inspect.isasyncgen(result):
-                    raise InvalidMessageSchema(
-                        "local event listeners cannot return asynchronous generators"
-                    )
                 if inspect.isawaitable(result):
                     result = await cast(Awaitable[object], result)
             except asyncio.CancelledError:
                 raise
-            except InvalidMessageSchema:
-                raise
             except Exception as error:
                 raise LocalEventListenerError("local event listener failed") from error
+            if inspect.isasyncgen(result):
+                raise InvalidMessageSchema(
+                    "local event listeners cannot return asynchronous generators"
+                )
             if result is not None:
                 raise InvalidMessageSchema("local event listeners must return None")
         return LocalEventDispatchReport(
