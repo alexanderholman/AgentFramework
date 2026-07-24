@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from types import TracebackType
-from typing import Literal
 
 from af.framework.errors import PlatformReason
 from af.framework.relational import (
