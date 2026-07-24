@@ -39,8 +39,8 @@ _READ_ONLY_SQL = "START TRANSACTION READ ONLY"
 
 def _cancelled(error: BaseException) -> bool:
     original = getattr(error, "orig", error)
-    arguments = getattr(original, "args", ())
-    return bool(arguments) and arguments[0] == 1317
+    arguments: tuple[object, ...] = tuple(getattr(original, "args", ()))
+    return len(arguments) > 0 and arguments[0] == 1317
 
 
 def _failure(error: BaseException, *, stage: str) -> DatabaseOperationError:
