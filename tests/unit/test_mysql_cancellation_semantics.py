@@ -55,13 +55,15 @@ def test_caught_mysql_cancellation_taints_transaction_and_rolls_back(
         "create_engine",
         lambda *_args, **_options: _KillerEngine(),
     )
-    with pytest.raises(DatabaseOperationError) as outer:
-        with driver.transaction() as transaction:
-            transaction.execute(DatabaseStatement("INSERT INTO records VALUES (1)"))
-            driver.cancel()
-            with pytest.raises(DatabaseOperationError) as inner:
-                transaction.execute(DatabaseStatement("SELECT 1", read_only=True))
-            assert inner.value.reason is PlatformReason.CANCELLED
+    with (
+        pytest.raises(DatabaseOperationError) as outer,
+        driver.transaction() as transaction,
+    ):
+        transaction.execute(DatabaseStatement("INSERT INTO records VALUES (1)"))
+        driver.cancel()
+        with pytest.raises(DatabaseOperationError) as inner:
+            transaction.execute(DatabaseStatement("SELECT 1", read_only=True))
+        assert inner.value.reason is PlatformReason.CANCELLED
     assert outer.value.reason is PlatformReason.CANCELLED
 
     with driver.transaction(read_only=True) as transaction:
