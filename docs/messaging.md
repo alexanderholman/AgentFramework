@@ -36,6 +36,14 @@ Synchronous publication performs asynchronous-listener preflight before middlewa
 
 `LocalEventTelemetryMiddleware` emits bounded start/completion/failure/cancellation signals through `TelemetryPublisher`. It propagates only the envelope's validated `TelemetryContext` and low-cardinality message role, type, schema version, dispatch mode, stage, and listener count. It never emits payloads, message IDs, correlation values, tenant identities, or listener exceptions. Telemetry creation and sink failure are optional evidence failures and cannot change local dispatch results.
 
+## Transactional outbox storage
+
+`TransactionalOutbox` persists the original canonical bytes of an integration-event envelope through a caller-owned relational transaction. The authoritative state write and outbox append therefore commit or roll back together. The fixed schema records deterministic availability order, bounded attempt state, publication state, and terminal dead-letter state without executing handlers or contacting a transport.
+
+Pending reads return only due, unpublished, non-dead-lettered records ordered by availability time, occurrence time, then message ID. Stored metadata is checked against the decoded canonical envelope; divergence fails closed as an integrity error. Publication and terminal dead-letter transitions are state-idempotent. Retry transitions record one explicit failed attempt and a new availability time.
+
+The storage contract is not a relay, lease manager, broker acknowledgement, inbox, deduplication store, or projection checkpoint. It does not claim exactly-once execution or delivery. A durable relay must add explicit ownership/concurrency, retry, acknowledgement, and dead-letter policies while preserving the stored envelope and actual transport guarantees.
+
 ## Deliberate boundaries
 
 The local bus establishes deterministic in-process semantics needed by later outbox, queue, pub-sub, notification, and projection work. Those later systems must preserve their actual delivery guarantees. They must not relabel local dispatch as durable delivery or claim exactly-once transport semantics.
