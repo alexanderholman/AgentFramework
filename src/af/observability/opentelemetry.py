@@ -225,7 +225,10 @@ class OpenTelemetrySink:
             raise ValueError("OpenTelemetry exporter is invalid") from error
         if not callable(export) or iscoroutinefunction(export):
             raise ValueError("OpenTelemetry exporter must expose synchronous export")
-        if type(instrumentation_scope) is not str or _IDENTIFIER.fullmatch(instrumentation_scope) is None:
+        if (
+            type(instrumentation_scope) is not str
+            or _IDENTIFIER.fullmatch(instrumentation_scope) is None
+        ):
             raise ValueError("OpenTelemetry instrumentation scope must be canonical")
         self._exporter = exporter
         self._instrumentation_scope = instrumentation_scope
