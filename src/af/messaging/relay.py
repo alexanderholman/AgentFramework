@@ -271,7 +271,7 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                     self._held = False
                     self._generation = None
                     raise OutboxRelayLeaseUnavailable()
-        except OutboxRelayLeaseUnavailable:
+        except (OutboxRelayIntegrityError, OutboxRelayLeaseUnavailable):
             raise
         except DatabaseOperationError as error:
             self._held = False
@@ -290,15 +290,21 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
         generation = self._generation
         if not self._held or generation is None:
             return False
+        released_at = self._last_observed_at
+        if released_at is None:
+            raise OutboxRelayIntegrityError()
         try:
             with self._driver.transaction() as transaction:
                 changed = transaction.execute(
                     DatabaseStatement(
-                        f"""DELETE FROM {_LOCK_TABLE}
+                        f"""UPDATE {_LOCK_TABLE}
+                        SET expires_at = :released_at,
+                            renewal = renewal + 1
                         WHERE relay_name = :relay_name
                           AND owner_id = :owner_id
                           AND renewal = :renewal""",
                         {
+                            "released_at": _timestamp(released_at),
                             "relay_name": self._relay_name,
                             "owner_id": self._owner_id,
                             "renewal": generation,

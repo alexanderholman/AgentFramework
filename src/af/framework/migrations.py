@@ -353,7 +353,7 @@ class MigrationLock(AbstractContextManager["MigrationLock"]):
                     self._held = False
                     self._expires_at = None
                     raise MigrationLockUnavailable()
-        except MigrationLockUnavailable:
+        except (MigrationIntegrityError, MigrationLockUnavailable):
             raise
         except DatabaseOperationError as error:
             self._held = False
