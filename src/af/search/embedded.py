@@ -159,13 +159,22 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                         ),
                     )
                 self._connection.commit()
-            except sqlite3.Error as error:
-                self._connection.rollback()
-                raise _failure(
-                    _operation_reason(error),
-                    stage="search.embedded.upsert",
-                    protected_cause=error,
-                ) from None
+            except BaseException as error:
+                try:
+                    self._connection.rollback()
+                except sqlite3.Error as rollback_error:
+                    raise _failure(
+                        PlatformReason.PERMANENT_FAILURE,
+                        stage="search.embedded.upsert.rollback",
+                        protected_cause=rollback_error,
+                    ) from None
+                if isinstance(error, sqlite3.Error):
+                    raise _failure(
+                        _operation_reason(error),
+                        stage="search.embedded.upsert",
+                        protected_cause=error,
+                    ) from None
+                raise
         return len(resources)
 
     def delete(self, *, tenant_id: str, source_id: str, resource_id: str) -> bool:
@@ -295,14 +304,15 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             try:
                 self._connection.close()
             except sqlite3.Error as error:
-                self._closing = False
                 raise _failure(
                     PlatformReason.SHUTDOWN_FAILED,
                     stage="search.embedded.shutdown",
                     protected_cause=error,
                 ) from None
-            self._closed = True
-            self._closing = False
+            else:
+                self._closed = True
+            finally:
+                self._closing = False
 
     def __enter__(self) -> EmbeddedSearchDriver:
         self._assert_open()
