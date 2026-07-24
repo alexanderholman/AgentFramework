@@ -140,8 +140,10 @@ class Migration:
             raise ValueError("migration id must be a canonical timestamped identifier")
         _write_statements(self.up, field="up", required=True)
         _write_statements(self.down, field="down", required=False)
-        if type(self.verify) is not tuple or len(self.verify) > _MAX_PROBES or any(
-            not isinstance(probe, MigrationProbe) for probe in self.verify
+        if (
+            type(self.verify) is not tuple
+            or len(self.verify) > _MAX_PROBES
+            or any(not isinstance(probe, MigrationProbe) for probe in self.verify)
         ):
             raise ValueError("migration verification probes are invalid or too numerous")
 
@@ -154,7 +156,10 @@ class Migration:
             "verify": [
                 {
                     "expected": [
-                        {"columns": list(row.columns), "values": [_json_value(value) for value in row.values]}
+                        {
+                            "columns": list(row.columns),
+                            "values": [_json_value(value) for value in row.values],
+                        }
                         for row in probe.expected_rows
                     ],
                     "sql": probe.statement.sql,
@@ -324,7 +329,11 @@ class MigrationRunner:
             raise ValueError("migration runner owner id is invalid")
         if not callable(clock):
             raise TypeError("migration runner clock must be callable")
-        if not isinstance(lock_lease, timedelta) or lock_lease <= timedelta(0) or lock_lease > _MAX_LEASE:
+        if (
+            not isinstance(lock_lease, timedelta)
+            or lock_lease <= timedelta(0)
+            or lock_lease > _MAX_LEASE
+        ):
             raise ValueError("migration runner lock lease is invalid")
         snapshot = tuple(migrations)
         if len(snapshot) > _MAX_MIGRATIONS or any(
@@ -510,7 +519,9 @@ class MigrationRunner:
             applied = tuple(_applied(row) for row in rows)
             if len(applied) > len(self._migrations):
                 raise ValueError("migration ledger is longer than catalogue")
-            expected_ids = tuple(migration.migration_id for migration in self._migrations[: len(applied)])
+            expected_ids = tuple(
+                migration.migration_id for migration in self._migrations[: len(applied)]
+            )
             actual_ids = tuple(item.migration_id for item in applied)
             if actual_ids != expected_ids:
                 raise ValueError("migration ledger is not a catalogue prefix")
@@ -624,7 +635,10 @@ def _stored_int(value: object) -> int:
 def _applied(row: DatabaseRow) -> _AppliedMigration:
     migration_id = _stored_text(row["migration_id"])
     checksum = _stored_text(row["checksum"])
-    if _MIGRATION_ID.fullmatch(migration_id) is None or re.fullmatch(r"[0-9a-f]{64}", checksum) is None:
+    if (
+        _MIGRATION_ID.fullmatch(migration_id) is None
+        or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+    ):
         raise ValueError("migration ledger identity is invalid")
     return _AppliedMigration(
         migration_id=migration_id,
