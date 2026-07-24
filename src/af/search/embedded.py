@@ -42,6 +42,15 @@ def _operation_reason(error: sqlite3.Error) -> PlatformReason:
     return PlatformReason.PERMANENT_FAILURE
 
 
+def _preserves_control_flow(error: BaseException) -> bool:
+    if not isinstance(error, Exception):
+        return True
+    return isinstance(error, PlatformError) and error.reason in {
+        PlatformReason.CANCELLED,
+        PlatformReason.SHUTDOWN_FAILED,
+    }
+
+
 def _identity(value: object) -> str:
     if type(value) is not str or _IDENTIFIER.fullmatch(value) is None:
         raise ValueError("search identity must be canonical")
@@ -99,9 +108,10 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
         self._lock = RLock()
         self._closed = False
         self._closing = False
+        self._poisoned = False
 
     def _shutdown_started(self) -> bool:
-        return self._closed or self._closing
+        return self._closed or self._closing or self._poisoned
 
     def _assert_open(self) -> None:
         if self._shutdown_started():
@@ -163,6 +173,9 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                 try:
                     self._connection.rollback()
                 except sqlite3.Error as rollback_error:
+                    self._poisoned = True
+                    if _preserves_control_flow(error):
+                        raise error from None
                     raise _failure(
                         PlatformReason.PERMANENT_FAILURE,
                         stage="search.embedded.upsert.rollback",
@@ -311,6 +324,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
                 ) from None
             else:
                 self._closed = True
+                self._poisoned = False
             finally:
                 self._closing = False
 
