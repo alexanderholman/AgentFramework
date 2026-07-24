@@ -9,8 +9,8 @@ from af.framework.self_design_operation import PreparedDesignPlan, SelfDesignOpe
 from af.framework.self_design_recording import (
     DesignPlanRecorder,
     DesignRecordAuthority,
-    DesignRecordResult,
     DesignRecordingRequest,
+    DesignRecordResult,
 )
 from af.framework.version_control import VersionControlInitialization
 
