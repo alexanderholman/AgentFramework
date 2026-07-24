@@ -50,9 +50,7 @@ _REQUIRED_METADATA_FIELDS = frozenset(
 _OPTIONAL_METADATA_FIELDS = frozenset(
     {"correlation_id", "causation_id", "deadline", "policy", "telemetry"}
 )
-_POLICY_FIELDS = frozenset(
-    {"policy_version", "decision_digest", "effective_scope", "tenant_ref"}
-)
+_POLICY_FIELDS = frozenset({"policy_version", "decision_digest", "effective_scope", "tenant_ref"})
 
 
 class EnvelopeKind(StrEnum):
@@ -98,9 +96,7 @@ def _opaque_id(
         or len(value) > _MAX_ID_LENGTH
         or _UNSAFE_TEXT.search(value)
     ):
-        raise InvalidMessageEnvelope(
-            f"{field} must be bounded non-empty single-line text"
-        )
+        raise InvalidMessageEnvelope(f"{field} must be bounded non-empty single-line text")
     return value
 
 
@@ -124,12 +120,9 @@ class PolicyContext:
         _digest(self.decision_digest, "policy decision digest")
         _identifier(self.effective_scope, "policy effective scope")
         if self.tenant_ref is not None and (
-            type(self.tenant_ref) is not str
-            or _TENANT_REF.fullmatch(self.tenant_ref) is None
+            type(self.tenant_ref) is not str or _TENANT_REF.fullmatch(self.tenant_ref) is None
         ):
-            raise InvalidMessageEnvelope(
-                "policy tenant reference must be an opaque sha256 digest"
-            )
+            raise InvalidMessageEnvelope("policy tenant reference must be an opaque sha256 digest")
 
     def __repr__(self) -> str:
         return (
@@ -163,9 +156,7 @@ class MessageMetadata:
             type(self.schema_version) is not int
             or not 1 <= self.schema_version <= _MAX_SCHEMA_VERSION
         ):
-            raise InvalidMessageEnvelope(
-                "message schema version must be a positive integer"
-            )
+            raise InvalidMessageEnvelope("message schema version must be a positive integer")
         if not isinstance(self.kind, EnvelopeKind):
             raise InvalidMessageEnvelope("message kind is invalid")
 
@@ -183,11 +174,7 @@ class MessageMetadata:
         if causation_id == message_id:
             raise InvalidMessageEnvelope("a message cannot cause itself")
 
-        deadline = (
-            None
-            if self.deadline is None
-            else _aware_utc(self.deadline, "message deadline")
-        )
+        deadline = None if self.deadline is None else _aware_utc(self.deadline, "message deadline")
         if deadline is not None and deadline <= occurred_at:
             raise InvalidMessageEnvelope("message deadline must follow occurrence time")
         if self.policy is not None and not isinstance(self.policy, PolicyContext):
@@ -219,9 +206,7 @@ class MessageMetadata:
                 and telemetry_value is not None
                 and metadata_value != telemetry_value
             ):
-                raise InvalidMessageEnvelope(
-                    f"message and telemetry {field} must not diverge"
-                )
+                raise InvalidMessageEnvelope(f"message and telemetry {field} must not diverge")
         if (
             self.policy is not None
             and self.policy.tenant_ref is not None
@@ -257,8 +242,7 @@ class MessageEnvelope:
             raise InvalidMessageEnvelope("message envelope metadata is invalid")
         if not _is_frozen_payload(self.payload):
             raise InvalidMessageEnvelope(
-                "message envelope payload must be created through "
-                "MessageEnvelope.create"
+                "message envelope payload must be created through MessageEnvelope.create"
             )
 
     @classmethod
@@ -289,11 +273,7 @@ class MessageEnvelope:
 
 
 def _format_datetime(value: datetime) -> str:
-    return (
-        value.astimezone(UTC)
-        .isoformat(timespec="microseconds")
-        .replace("+00:00", "Z")
-    )
+    return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _parse_datetime(value: object, field: str) -> datetime:
@@ -302,9 +282,7 @@ def _parse_datetime(value: object, field: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
     except ValueError as error:
-        raise InvalidMessageEnvelope(
-            f"{field} must be a canonical UTC timestamp"
-        ) from error
+        raise InvalidMessageEnvelope(f"{field} must be a canonical UTC timestamp") from error
     normalized = _aware_utc(parsed, field)
     if _format_datetime(normalized) != value:
         raise InvalidMessageEnvelope(f"{field} must be a canonical UTC timestamp")
@@ -315,9 +293,7 @@ def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
-            raise InvalidMessageEnvelope(
-                "message envelope JSON object contains duplicate keys"
-            )
+            raise InvalidMessageEnvelope("message envelope JSON object contains duplicate keys")
         result[key] = value
     return result
 
@@ -351,9 +327,7 @@ def _decode_policy(value: object) -> PolicyContext | None:
     raw = _object(value, "message policy context")
     _required_fields(
         raw,
-        required=frozenset(
-            {"policy_version", "decision_digest", "effective_scope"}
-        ),
+        required=frozenset({"policy_version", "decision_digest", "effective_scope"}),
         optional=frozenset({"tenant_ref"}),
         field="message policy context",
     )
@@ -400,17 +374,13 @@ class JsonEnvelopeCodec:
         ):
             raise ValueError("message envelope payload limits are invalid")
         self._max_bytes = max_bytes
-        self._payload_limits = (
-            PayloadLimits() if payload_limits is None else payload_limits
-        )
+        self._payload_limits = PayloadLimits() if payload_limits is None else payload_limits
 
     def encode(self, envelope: MessageEnvelope, /) -> bytes:
         """Encode one validated envelope to canonical UTF-8 JSON."""
 
         if not isinstance(envelope, MessageEnvelope):
-            raise InvalidMessageEnvelope(
-                "JSON envelope codec requires a MessageEnvelope"
-            )
+            raise InvalidMessageEnvelope("JSON envelope codec requires a MessageEnvelope")
         wire = {
             "version": _ENVELOPE_VERSION,
             "metadata": self._encode_metadata(envelope.metadata),
@@ -425,9 +395,7 @@ class JsonEnvelopeCodec:
                 separators=(",", ":"),
             ).encode("utf-8")
         except (TypeError, ValueError) as error:  # pragma: no cover
-            raise InvalidMessageEnvelope(
-                "message envelope could not be encoded"
-            ) from error
+            raise InvalidMessageEnvelope("message envelope could not be encoded") from error
         if len(encoded) > self._max_bytes:
             raise InvalidMessageEnvelope("message envelope exceeds its byte limit")
         return encoded
@@ -513,9 +481,7 @@ class JsonEnvelopeCodec:
 
         schema_version = raw.get("schema_version")
         if type(schema_version) is not int:
-            raise InvalidMessageEnvelope(
-                "message schema version must be a positive integer"
-            )
+            raise InvalidMessageEnvelope("message schema version must be a positive integer")
         correlation_id = _opaque_id(
             raw.get("correlation_id"),
             "message correlation id",

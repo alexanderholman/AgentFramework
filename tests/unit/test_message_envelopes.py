@@ -140,9 +140,7 @@ def test_codec_rejects_oversize_before_attempting_to_parse() -> None:
 
 def test_codec_rejects_noncanonical_timestamps_and_unknown_metadata_fields() -> None:
     codec = JsonEnvelopeCodec()
-    encoded = codec.encode(
-        MessageEnvelope.create(metadata=_metadata(), payload={"ok": True})
-    )
+    encoded = codec.encode(MessageEnvelope.create(metadata=_metadata(), payload={"ok": True}))
     raw = json.loads(encoded)
     raw["metadata"]["occurred_at"] = "2026-07-24T02:30:00+01:00"
 
@@ -157,9 +155,7 @@ def test_codec_rejects_noncanonical_timestamps_and_unknown_metadata_fields() -> 
 
 def test_codec_rejects_invalid_policy_and_telemetry_envelopes() -> None:
     codec = JsonEnvelopeCodec()
-    encoded = codec.encode(
-        MessageEnvelope.create(metadata=_metadata(), payload={"ok": True})
-    )
+    encoded = codec.encode(MessageEnvelope.create(metadata=_metadata(), payload={"ok": True}))
     raw = json.loads(encoded)
     raw["metadata"]["policy"]["raw_principal"] = "hidden"
     with pytest.raises(InvalidMessageEnvelope, match="policy context fields"):

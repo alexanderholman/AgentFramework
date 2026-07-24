@@ -35,10 +35,7 @@ class PayloadLimits:
     def __post_init__(self) -> None:
         if type(self.max_depth) is not int or not 1 <= self.max_depth <= _MAX_VALIDATION_DEPTH:
             raise ValueError("payload maximum depth must be between 1 and 64")
-        if (
-            type(self.max_nodes) is not int
-            or not 1 <= self.max_nodes <= _MAX_VALIDATION_NODES
-        ):
+        if type(self.max_nodes) is not int or not 1 <= self.max_nodes <= _MAX_VALIDATION_NODES:
             raise ValueError("payload maximum nodes must be between 1 and 1000000")
         if (
             type(self.max_string_bytes) is not int
@@ -111,9 +108,7 @@ def _freeze(
         return value
     if type(value) is int:
         if not _MIN_INTEGER <= value <= _MAX_INTEGER:
-            raise InvalidMessageEnvelope(
-                "message payload integers must be signed 64-bit values"
-            )
+            raise InvalidMessageEnvelope("message payload integers must be signed 64-bit values")
         return value
     if type(value) is float:
         if not isfinite(value):
