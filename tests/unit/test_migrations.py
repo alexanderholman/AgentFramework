@@ -506,3 +506,26 @@ def test_reused_migration_owner_cannot_renew_or_release_reclaimed_lease(
         pass
     first_driver.close()
     second_driver.close()
+
+
+def test_migration_lease_renewal_requires_ownership_and_monotonic_time() -> None:
+    driver = SQLiteDriver(":memory:")
+    clock = MutableClock()
+    runner = MigrationRunner(
+        driver,
+        (),
+        owner_id="monotonic-runner",
+        clock=clock,
+        lock_lease=timedelta(minutes=1),
+    )
+    runner.bootstrap()
+    lease = runner.lock()
+
+    with pytest.raises(MigrationLockUnavailable):
+        lease.renew()
+    with lease:
+        clock.advance(timedelta(microseconds=-1))
+        with pytest.raises(MigrationIntegrityError):
+            lease.renew()
+
+    driver.close()
