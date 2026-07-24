@@ -107,9 +107,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
             or any(not isinstance(item, ResourceEnvelope) for item in resources)
         ):
             raise ValueError("search resources must be a bounded non-empty tuple")
-        identities = tuple(
-            (item.tenant_id, item.source_id, item.resource_id) for item in resources
-        )
+        identities = tuple((item.tenant_id, item.source_id, item.resource_id) for item in resources)
         if len(set(identities)) != len(identities):
             raise ValueError("search resource identities must be unique")
         with self._lock:
@@ -246,7 +244,9 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
         return tuple(self._hits(rows, acl))
 
     @staticmethod
-    def _hits(rows: tuple[tuple[object, ...], ...], requested_acl: tuple[str, ...]) -> Iterator[SearchHit]:
+    def _hits(
+        rows: tuple[tuple[object, ...], ...], requested_acl: tuple[str, ...]
+    ) -> Iterator[SearchHit]:
         allowed = frozenset(requested_acl)
         for rank, row in enumerate(rows, start=1):
             stored_acl = tuple(json.loads(str(row[4])))
