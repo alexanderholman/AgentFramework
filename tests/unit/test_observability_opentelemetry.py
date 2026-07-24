@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -31,6 +31,15 @@ def _health() -> HealthState:
         reason_code="runtime.warming",
         fresh_until=_NOW + timedelta(seconds=30),
     )
+
+
+def _record() -> OpenTelemetryRecord:
+    signal = TelemetrySignal.create(
+        kind=TelemetryKind.LOG,
+        name="test.signal",
+        observed_at=_NOW,
+    )
+    return OpenTelemetryRecord.from_signal(signal)
 
 
 def test_record_preserves_safe_context_and_exact_event_time() -> None:
@@ -184,4 +193,36 @@ def test_projection_rejects_invalid_inputs() -> None:
         observed_at=_NOW,
     )
     with pytest.raises(ValueError, match="scope"):
-        OpenTelemetryRecord.from_signal(signal, instrumentation_scope="")
+        OpenTelemetryRecord.from_signal(signal, instrumentation_scope="not a scope")
+
+
+def test_direct_construction_cannot_bypass_record_validation() -> None:
+    record = _record()
+
+    with pytest.raises(ValueError, match="schema version"):
+        replace(record, schema_version="other")
+    with pytest.raises(ValueError, match="non-negative"):
+        replace(record, time_unix_nano=-1)
+    with pytest.raises(ValueError, match="sensitive"):
+        replace(record, attributes=(("af.attribute.password", "private"),))
+    with pytest.raises(ValueError, match="canonically sorted"):
+        replace(
+            record,
+            attributes=(
+                ("af.attribute.state", "ready"),
+                ("af.attribute.attempt", 1),
+            ),
+        )
+    with pytest.raises(ValueError, match="trace id"):
+        replace(record, span_id="span")
+
+
+def test_projection_rejects_pre_epoch_events() -> None:
+    signal = TelemetrySignal.create(
+        kind=TelemetryKind.LOG,
+        name="test.signal",
+        observed_at=datetime(1969, 12, 31, 23, 59, 59, tzinfo=UTC),
+    )
+
+    with pytest.raises(ValueError, match="Unix epoch"):
+        OpenTelemetryRecord.from_signal(signal)
