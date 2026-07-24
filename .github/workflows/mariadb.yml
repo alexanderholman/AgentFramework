@@ -1,0 +1,134 @@
+name: AF MariaDB
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: af-mariadb-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: MariaDB relational conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mariadb:
+        image: mariadb:11.8.8@sha256:be1ef4fe5f14589325c08a41c76334097ce66c86264b75e1d28342c742782a61
+        env:
+          MARIADB_DATABASE: af
+          MARIADB_USER: af
+          MARIADB_PASSWORD: af_test_password
+          MARIADB_ROOT_PASSWORD: af_root_test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      AF_MARIADB_TEST_URL: mariadb+pymysql://af:af_test_password@127.0.0.1:3306/af
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
+    steps:
+      - name: Check out exact event head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event_name == 'push' && github.event.after || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Check MariaDB changed slice
+        id: quality
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            uv run ruff format --check \
+              src/af/infrastructure/mariadb.py \
+              src/af/infrastructure/mariadb_manager.py \
+              tests/unit/test_mariadb_driver.py \
+              tests/unit/test_mariadb_manager.py \
+              tests/integration/test_mariadb_relational.py
+            uv run ruff check \
+              src/af/infrastructure/mariadb.py \
+              src/af/infrastructure/mariadb_manager.py \
+              tests/unit/test_mariadb_driver.py \
+              tests/unit/test_mariadb_manager.py \
+              tests/integration/test_mariadb_relational.py
+            uv run mypy \
+              src/af/infrastructure/mariadb.py \
+              src/af/infrastructure/mariadb_manager.py
+            uv run pytest -q \
+              tests/unit/test_mariadb_driver.py \
+              tests/unit/test_mariadb_manager.py
+          } 2>&1 | tee mariadb-quality.log
+
+      - name: Run MariaDB real-service certification
+        id: integration
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --with "pymysql==1.1.2" \
+            pytest -q tests/integration/test_mariadb_relational.py \
+            2>&1 | tee mariadb-integration.log
+
+      - name: Run canonical gate without MariaDB opt-in
+        id: canonical
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          unset AF_MARIADB_TEST_URL
+          python scripts/af_dev.py --action check --execute \
+            2>&1 | tee canonical-gate.log
+
+      - name: Upload MariaDB diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mariadb-diagnostics
+          path: |
+            mariadb-quality.log
+            mariadb-integration.log
+            canonical-gate.log
+            src/af/infrastructure/mariadb.py
+            src/af/infrastructure/mariadb_manager.py
+            src/af/infrastructure/mysql.py
+            tests/unit/test_mariadb_driver.py
+            tests/unit/test_mariadb_manager.py
+            tests/integration/test_mariadb_relational.py
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce MariaDB checks
+        if: >-
+          steps.quality.outcome == 'failure' ||
+          steps.integration.outcome == 'failure' ||
+          steps.canonical.outcome == 'failure'
+        run: exit 1
