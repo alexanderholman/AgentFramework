@@ -76,7 +76,9 @@ def policy(*, tie_break_by_id: bool = False) -> SelectionPolicy:
 
 class SelfDevelopmentPlannerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.planner = SelfDevelopmentPlanner(\n            installed_procedure_ids=("implement-self-development",)\n        )
+        self.planner = SelfDevelopmentPlanner(
+            installed_procedure_ids=("implement-self-development",)
+        )
 
     def test_same_snapshot_and_policy_produce_byte_identical_plan(self) -> None:
         observed = snapshot(candidate("issue:120", procedure_id="implement-self-development"))
