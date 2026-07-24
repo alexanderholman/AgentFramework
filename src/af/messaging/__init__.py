@@ -28,6 +28,16 @@ from af.messaging.local_bus import (
     LocalEventTelemetryMiddleware,
 )
 from af.messaging.outbox import OutboxIntegrityError, OutboxRecord, TransactionalOutbox
+from af.messaging.projections import (
+    InboxRecord,
+    ProjectionCheckpoint,
+    ProjectionCheckpointStore,
+    ProjectionDecision,
+    ProjectionGapError,
+    ProjectionIntegrityError,
+    TransactionalInbox,
+    TransactionalProjectionGuard,
+)
 from af.messaging.schema import MessageSchema, MessageSchemaRegistry, PayloadUpcaster
 
 __all__ = (
@@ -35,6 +45,7 @@ __all__ = (
     "EnvelopeKind",
     "FrozenJsonArray",
     "FrozenJsonObject",
+    "InboxRecord",
     "InvalidMessageEnvelope",
     "InvalidMessageSchema",
     "JsonEnvelopeCodec",
@@ -56,6 +67,13 @@ __all__ = (
     "PayloadLimits",
     "PayloadUpcaster",
     "PolicyContext",
+    "ProjectionCheckpoint",
+    "ProjectionCheckpointStore",
+    "ProjectionDecision",
+    "ProjectionGapError",
+    "ProjectionIntegrityError",
+    "TransactionalInbox",
     "TransactionalOutbox",
+    "TransactionalProjectionGuard",
     "UnsupportedMessageSchema",
 )

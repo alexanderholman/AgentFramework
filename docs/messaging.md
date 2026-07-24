@@ -44,6 +44,16 @@ Pending reads return only due, unpublished, non-dead-lettered records ordered by
 
 The storage contract is not a relay, lease manager, broker acknowledgement, inbox, deduplication store, or projection checkpoint. It does not claim exactly-once execution or delivery. A durable relay must add explicit ownership/concurrency, retry, acknowledgement, and dead-letter policies while preserving the stored envelope and actual transport guarantees.
 
+## Transactional inbox and projection checkpoints
+
+`TransactionalInbox` records consumer-, source-, and message-scoped delivery evidence inside a caller-owned relational transaction. `ProjectionCheckpointStore` retains the latest committed source position for each projection and source. Stored identifiers, positions, and canonical UTC timestamps are validated again when read; corruption or key divergence fails closed without exposing message identities.
+
+`TransactionalProjectionGuard.prepare()` combines both stores. The first accepted source position establishes a baseline. Later accepted positions must be contiguous. The guard returns `APPLY`, `DUPLICATE`, or `STALE`; gaps and conflicting reuse of a source position or message identity fail closed. A stale unseen delivery is recorded without regressing the checkpoint, while a duplicate performs no projection work.
+
+The caller must invoke the guard and apply projection mutations in the same transaction, and must mutate projection state only for `APPLY`. Commit then persists the inbox record, checkpoint, and projection state atomically; any handler or database failure rolls all three back. Concurrent duplicate attempts remain safe because the inbox key and optimistic checkpoint transition allow at most one transaction to commit. This is idempotent projection processing, not an exactly-once transport claim.
+
+Source positions are meaningful only within a stable versioned source or partition identity. A reset, repartition, or incompatible source epoch requires a new `source_name`; silently reusing an existing source identity would make ordering evidence ambiguous.
+
 ## Deliberate boundaries
 
 The local bus establishes deterministic in-process semantics needed by later outbox, queue, pub-sub, notification, and projection work. Those later systems must preserve their actual delivery guarantees. They must not relabel local dispatch as durable delivery or claim exactly-once transport semantics.
