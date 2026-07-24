@@ -477,7 +477,13 @@ def test_python_workflow_uses_exact_push_before_and_event_head_checkout() -> Non
 
 @pytest.mark.parametrize(
     "workflow_name",
-    ["postgresql.yml", "mysql.yml", "mariadb.yml", "opensearch.yml"],
+    [
+        "postgresql.yml",
+        "mysql.yml",
+        "mariadb.yml",
+        "opensearch.yml",
+        "elasticsearch.yml",
+    ],
 )
 def test_service_workflow_checks_out_exact_event_head(workflow_name: str) -> None:
     workflow_path = REPO_ROOT / ".github" / "workflows" / workflow_name
@@ -512,3 +518,24 @@ def test_opensearch_workflow_pins_real_service_and_client() -> None:
     )
     assert 'uv run --with "opensearch-py==3.2.0"' in integration["run"]
     assert "unset AF_OPENSEARCH_TEST_URL AF_OPENSEARCH_TEST_VERSION" in workflow_text
+
+
+def test_elasticsearch_workflow_pins_real_service_and_client() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "elasticsearch.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    job = workflow["jobs"]["integration"]
+
+    assert job["services"]["elasticsearch"]["image"] == (
+        "elasticsearch:9.4.4@"
+        "sha256:ff25869c2b9f02af7b7297f188ad583772134f01ec256fdc9234e2492358bebc"
+    )
+    assert job["services"]["elasticsearch"]["env"]["action.auto_create_index"] == "false"
+    assert job["env"]["AF_ELASTICSEARCH_TEST_VERSION"] == "9.4.4"
+    integration = next(
+        step
+        for step in job["steps"]
+        if step["name"] == "Run Elasticsearch 9.4 real-service certification"
+    )
+    assert 'uv run --with "elasticsearch==9.4.1"' in integration["run"]
+    assert "unset AF_ELASTICSEARCH_TEST_URL AF_ELASTICSEARCH_TEST_VERSION" in workflow_text
