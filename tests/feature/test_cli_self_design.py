@@ -105,7 +105,7 @@ def test_self_design_command_fails_closed_without_an_evidence_provider() -> None
 
     assert result.exit_code == 2
     assert result.stdout == ""
-    assert "cli.self-design.evidence-provider" in result.stderr
+    assert result.stderr == "configuration is invalid\n"
     assert "Traceback" not in result.stderr
 
 
