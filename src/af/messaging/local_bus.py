@@ -90,7 +90,5 @@ class LocalEventBus(_LocalEventBus):
             raise LocalEventMiddlewareError("local event middleware failed") from error
 
         if not called or not completed:
-            raise InvalidMessageSchema(
-                "local event middleware must complete next exactly once"
-            )
+            raise InvalidMessageSchema("local event middleware must complete next exactly once")
         return self._validate_report(report, envelope, len(listeners))

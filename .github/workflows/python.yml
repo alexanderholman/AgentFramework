@@ -56,15 +56,20 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Materialize Ruff formatting patch
-        run: |
-          python scripts/af_dev.py --action format --execute
-          git diff --binary -- src/af tests scripts > ruff-format.patch
+      - name: Diagnose release validation
+        run: python scripts/af_dev.py --action release-validate --execute
 
-      - name: Upload Ruff formatting patch
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ruff-format-patch
-          path: ruff-format.patch
-          if-no-files-found: error
-          retention-days: 1
+      - name: Diagnose formatting
+        run: python scripts/af_dev.py --action format-check --execute
+
+      - name: Diagnose lint
+        run: python scripts/af_dev.py --action lint --execute
+
+      - name: Diagnose typing
+        run: python scripts/af_dev.py --action typecheck --execute
+
+      - name: Diagnose tests and coverage
+        run: python scripts/af_dev.py --action coverage --execute
+
+      - name: Run the repeatable AF quality gate
+        run: python scripts/af_dev.py --action check --execute
