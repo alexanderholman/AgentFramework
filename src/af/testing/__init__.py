@@ -32,6 +32,7 @@ from af.testing.isolation import (
     assert_test_application_clean,
     inspect_test_application,
 )
+from af.testing.relational import RelationalDriverConformanceSuite, relational_driver_cases
 
 __all__ = (
     "ApplicationLeakReport",
@@ -58,8 +59,10 @@ __all__ = (
     "ProcessStateLeak",
     "ProviderConformanceSuite",
     "RealServiceHook",
+    "RelationalDriverConformanceSuite",
     "TestApplication",
     "TestApplicationBuilder",
     "assert_test_application_clean",
     "inspect_test_application",
+    "relational_driver_cases",
 )
