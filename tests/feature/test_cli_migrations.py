@@ -402,6 +402,7 @@ def test_installed_cli_sanitizes_rejected_async_factory_close_failure(
 ) -> None:
     module = ModuleType("test_async_close_failure_operator_profile")
     secret = "postgresql://user:SECRET@host/database"
+    created: list[CoroutineType] = []
 
     class Suspend:
         def __await__(self) -> Generator[None, None, None]:
@@ -416,6 +417,7 @@ def test_installed_cli_sanitizes_rejected_async_factory_close_failure(
     def build_application():  # type: ignore[no-untyped-def]
         result = async_application()
         result.send(None)
+        created.append(result)
         return result
 
     module.build_application = build_application  # type: ignore[attr-defined]
@@ -434,6 +436,8 @@ def test_installed_cli_sanitizes_rejected_async_factory_close_failure(
     assert result.stdout == ""
     assert "configuration is invalid" in result.stderr
     assert secret not in result.stderr
+    assert len(created) == 1
+    assert created[0].cr_frame is None
 
 
 def test_installed_cli_bounds_rejected_async_factory_close_recovery(
@@ -478,6 +482,51 @@ def test_installed_cli_bounds_rejected_async_factory_close_recovery(
     was_closed = created[0].cr_frame is None
     created[0].close()
     assert was_closed
+
+
+def test_installed_cli_preserves_control_flow_during_async_close_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_async_close_control_flow_operator_profile")
+    created: list[CoroutineType] = []
+
+    class StopRequested(BaseException):
+        pass
+
+    class Suspend:
+        def __await__(self) -> Generator[None, None, None]:
+            yield
+
+    async def async_application():  # type: ignore[no-untyped-def]
+        try:
+            await Suspend()
+        except GeneratorExit:
+            try:
+                await Suspend()
+            except GeneratorExit:
+                raise StopRequested from None
+
+    def build_application():  # type: ignore[no-untyped-def]
+        result = async_application()
+        result.send(None)
+        created.append(result)
+        return result
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    with pytest.raises(StopRequested):
+        runner.invoke(
+            create_cli(),
+            [
+                "--application-factory",
+                "test_async_close_control_flow_operator_profile:build_application",
+                "hello",
+            ],
+        )
+
+    assert len(created) == 1
+    assert created[0].cr_frame is None
 
 
 def test_programmatic_falsey_factory_does_not_fall_back() -> None:
