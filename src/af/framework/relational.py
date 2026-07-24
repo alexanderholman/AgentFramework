@@ -22,6 +22,7 @@ __all__ = (
     "DatabaseRow",
     "DatabaseStatement",
     "DatabaseTransaction",
+    "DatabaseValue",
     "UnsupportedDatabaseFeature",
 )
 
