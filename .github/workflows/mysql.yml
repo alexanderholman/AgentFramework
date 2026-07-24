@@ -72,25 +72,33 @@ jobs:
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
+              src/af/messaging/relay.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
+              tests/unit/test_outbox_relay.py \
               tests/integration/test_mysql_relational.py \
-              tests/integration/test_transactional_outbox_relational.py
+              tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_outbox_relay_relational.py
             uv run ruff check \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
+              src/af/messaging/relay.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
+              tests/unit/test_outbox_relay.py \
               tests/integration/test_mysql_relational.py \
-              tests/integration/test_transactional_outbox_relational.py
+              tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_outbox_relay_relational.py
             uv run mypy \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
-              src/af/messaging/outbox.py
+              src/af/messaging/outbox.py \
+              src/af/messaging/relay.py
             uv run pytest -q \
               tests/unit/test_mysql_driver.py \
-              tests/unit/test_mysql_manager.py
+              tests/unit/test_mysql_manager.py \
+              tests/unit/test_outbox_relay.py
           } 2>&1 | tee mysql-quality.log
 
       - name: Run MySQL real-service certification
@@ -103,6 +111,7 @@ jobs:
             pytest -q \
               tests/integration/test_mysql_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_outbox_relay_relational.py \
             2>&1 | tee mysql-integration.log
 
       - name: Run canonical gate without MySQL opt-in
@@ -127,10 +136,13 @@ jobs:
             src/af/infrastructure/mysql.py
             src/af/infrastructure/mysql_manager.py
             src/af/messaging/outbox.py
+            src/af/messaging/relay.py
             tests/unit/test_mysql_driver.py
             tests/unit/test_mysql_manager.py
+            tests/unit/test_outbox_relay.py
             tests/integration/test_mysql_relational.py
             tests/integration/test_transactional_outbox_relational.py
+            tests/integration/test_outbox_relay_relational.py
           if-no-files-found: error
           retention-days: 1
 
