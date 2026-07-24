@@ -151,9 +151,7 @@ def test_mariadb_registration_binds_runtime_identity_and_evidence() -> None:
 
 def test_mariadb_connection_failure_is_sanitized() -> None:
     parsed = make_url(_url())
-    bad = parsed.set(port=1, query={"connect_timeout": "1"}).render_as_string(
-        hide_password=False
-    )
+    bad = parsed.set(port=1, query={"connect_timeout": "1"}).render_as_string(hide_password=False)
     password = parsed.password
     with pytest.raises(DatabaseOperationError) as captured:
         MariaDBDriver(bad)
