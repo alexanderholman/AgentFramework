@@ -1,6 +1,11 @@
 """Bounded observability contracts for AF applications and extensions."""
 
 from af.observability.context import TelemetryContext
+from af.observability.opentelemetry import (
+    OpenTelemetryExporter,
+    OpenTelemetryRecord,
+    OpenTelemetrySink,
+)
 from af.observability.signals import (
     CapabilityState,
     DegradationState,
@@ -19,6 +24,9 @@ __all__ = (
     "DegradationState",
     "HealthState",
     "LivenessState",
+    "OpenTelemetryExporter",
+    "OpenTelemetryRecord",
+    "OpenTelemetrySink",
     "PublisherEvidence",
     "ReadinessState",
     "TelemetryContext",
