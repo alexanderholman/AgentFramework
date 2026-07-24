@@ -19,6 +19,7 @@ from af.framework.relational import (
     DatabaseFeature,
     DatabaseTransaction,
 )
+from af.framework.unit_of_work import UnitOfWork
 from af.observability.signals import TelemetryPublisher
 
 __all__ = ("DatabaseManager", "bind_database_manager")
@@ -103,15 +104,13 @@ class DatabaseManager(Manager[DatabaseDriver]):
             requires=_capabilities(requires),
         )
 
-    def transaction(
+    def _transaction_driver(
         self,
-        name: str | None = None,
+        name: str | None,
         *,
-        read_only: bool = False,
-        requires: Iterable[DatabaseFeature] = (),
-    ) -> AbstractContextManager[DatabaseTransaction]:
-        """Open a routed transaction only after capability verification."""
-
+        read_only: bool,
+        requires: Iterable[DatabaseFeature],
+    ) -> DatabaseDriver:
         if type(read_only) is not bool:
             raise ValueError("database transaction read-only flag must be boolean")
         target = name
@@ -121,8 +120,39 @@ class DatabaseManager(Manager[DatabaseDriver]):
             DatabaseFeature.TRANSACTIONS,
             *tuple(requires),
         }
-        driver = self.connection(target, requires=required)
+        return self.connection(target, requires=required)
+
+    def transaction(
+        self,
+        name: str | None = None,
+        *,
+        read_only: bool = False,
+        requires: Iterable[DatabaseFeature] = (),
+    ) -> AbstractContextManager[DatabaseTransaction]:
+        """Open a routed transaction only after capability verification."""
+
+        driver = self._transaction_driver(
+            name,
+            read_only=read_only,
+            requires=requires,
+        )
         return driver.transaction(read_only=read_only)
+
+    def unit_of_work(
+        self,
+        name: str | None = None,
+        *,
+        read_only: bool = False,
+        requires: Iterable[DatabaseFeature] = (),
+    ) -> UnitOfWork:
+        """Create a single-use routed unit of work without entering it."""
+
+        driver = self._transaction_driver(
+            name,
+            read_only=read_only,
+            requires=requires,
+        )
+        return UnitOfWork(driver, read_only=read_only)
 
 
 def bind_database_manager(
