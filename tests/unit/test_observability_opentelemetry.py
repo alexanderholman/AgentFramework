@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -31,15 +31,6 @@ def _health() -> HealthState:
         reason_code="runtime.warming",
         fresh_until=_NOW + timedelta(seconds=30),
     )
-
-
-def _record() -> OpenTelemetryRecord:
-    signal = TelemetrySignal.create(
-        kind=TelemetryKind.LOG,
-        name="test.signal",
-        observed_at=_NOW,
-    )
-    return OpenTelemetryRecord.from_signal(signal)
 
 
 def test_record_preserves_safe_context_and_exact_event_time() -> None:
@@ -183,9 +174,11 @@ def test_publisher_isolates_optional_exporter_failure() -> None:
     assert publisher.evidence.successful_deliveries == 1
 
 
-def test_projection_rejects_invalid_inputs() -> None:
+def test_projection_rejects_invalid_inputs_and_direct_construction() -> None:
     with pytest.raises(TypeError, match="TelemetrySignal"):
         OpenTelemetryRecord.from_signal(object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="created from"):
+        OpenTelemetryRecord()
 
     signal = TelemetrySignal.create(
         kind=TelemetryKind.LOG,
@@ -194,27 +187,6 @@ def test_projection_rejects_invalid_inputs() -> None:
     )
     with pytest.raises(ValueError, match="scope"):
         OpenTelemetryRecord.from_signal(signal, instrumentation_scope="not a scope")
-
-
-def test_direct_construction_cannot_bypass_record_validation() -> None:
-    record = _record()
-
-    with pytest.raises(ValueError, match="schema version"):
-        replace(record, schema_version="other")
-    with pytest.raises(ValueError, match="non-negative"):
-        replace(record, time_unix_nano=-1)
-    with pytest.raises(ValueError, match="sensitive"):
-        replace(record, attributes=(("af.attribute.password", "private"),))
-    with pytest.raises(ValueError, match="canonically sorted"):
-        replace(
-            record,
-            attributes=(
-                ("af.attribute.state", "ready"),
-                ("af.attribute.attempt", 1),
-            ),
-        )
-    with pytest.raises(ValueError, match="trace id"):
-        replace(record, span_id="span")
 
 
 def test_projection_rejects_pre_epoch_events() -> None:
