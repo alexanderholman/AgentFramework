@@ -638,7 +638,7 @@ class MigrationRunner:
                     maximum=len(probe.expected_rows),
                 )
             except DatabaseOperationError as error:
-                if error.reason in (
+                if error.stage == "database.cursor-close" or error.reason in (
                     PlatformReason.CANCELLED,
                     PlatformReason.SHUTDOWN_FAILED,
                     PlatformReason.TRANSIENT_FAILURE,
