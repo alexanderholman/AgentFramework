@@ -152,9 +152,11 @@ def test_unit_of_work_reports_commit_and_sanitizes_edge_failures() -> None:
 
     with pytest.raises(ValueError, match="must not be empty"):
         AfterCommitCallbackError(())
-    with pytest.raises(DatabaseOperationError) as enter_failure:
-        with UnitOfWork(_EnterFailureDriver()):  # type: ignore[arg-type]
-            pass
+    with (
+        pytest.raises(DatabaseOperationError) as enter_failure,
+        UnitOfWork(_EnterFailureDriver()),  # type: ignore[arg-type]
+    ):
+        pass
     assert enter_failure.value.reason is PlatformReason.TRANSIENT_FAILURE
 
     inactive = UnitOfWork(driver)
