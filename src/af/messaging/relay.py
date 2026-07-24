@@ -156,6 +156,7 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
         self._held = False
         self._finished = False
         self._last_observed_at: datetime | None = None
+        self._generation: int | None = None
 
     def __enter__(self) -> OutboxRelayLease:
         if self._held or self._finished:
@@ -184,7 +185,7 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                     )
                 )
                 if _one_or_zero(changed) == 0:
-                    transaction.execute(
+                    inserted = transaction.execute(
                         DatabaseStatement(
                             f"""INSERT INTO {_LOCK_TABLE} (
                                 relay_name,
@@ -197,7 +198,7 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                                 :owner_id,
                                 :acquired_at,
                                 :expires_at,
-                                0
+                                1
                             )""",
                             {
                                 "relay_name": self._relay_name,
@@ -207,16 +208,40 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                             },
                         )
                     )
+                    if _one_or_zero(inserted) != 1:
+                        raise OutboxRelayIntegrityError()
+                rows = transaction.query(
+                    DatabaseStatement(
+                        f"""SELECT owner_id, expires_at, renewal
+                        FROM {_LOCK_TABLE}
+                        WHERE relay_name = :relay_name""",
+                        {"relay_name": self._relay_name},
+                        read_only=True,
+                    )
+                )
+                if len(rows) != 1:
+                    raise OutboxRelayIntegrityError()
+                row = rows[0]
+                if (
+                    row["owner_id"] != self._owner_id
+                    or row["expires_at"] != _timestamp(expires_at)
+                ):
+                    raise OutboxRelayIntegrityError()
+                generation = _generation(row["renewal"])
+        except OutboxRelayIntegrityError:
+            raise
         except DatabaseOperationError as error:
             raise OutboxRelayLeaseUnavailable(protected_cause=error) from None
         self._held = True
+        self._generation = generation
         self._last_observed_at = now
         return self
 
     def renew(self) -> None:
-        """Extend ownership only while this owner still holds an unexpired lease."""
+        """Extend ownership only while this lease generation remains authoritative."""
 
-        if not self._held:
+        generation = self._generation
+        if not self._held or generation is None:
             raise OutboxRelayLeaseUnavailable()
         now = self._now()
         last = self._last_observed_at
@@ -234,23 +259,28 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                             renewal = renewal + 1
                         WHERE relay_name = :relay_name
                           AND owner_id = :owner_id
+                          AND renewal = :renewal
                           AND expires_at > :now""",
                         {
                             "expires_at": _timestamp(expires_at),
                             "relay_name": self._relay_name,
                             "owner_id": self._owner_id,
+                            "renewal": generation,
                             "now": _timestamp(now),
                         },
                     )
                 )
                 if _one_or_zero(changed) != 1:
                     self._held = False
+                    self._generation = None
                     raise OutboxRelayLeaseUnavailable()
         except OutboxRelayLeaseUnavailable:
             raise
         except DatabaseOperationError as error:
             self._held = False
+            self._generation = None
             raise OutboxRelayLeaseUnavailable(protected_cause=error) from None
+        self._generation = generation + 1
         self._last_observed_at = now
 
     def __exit__(
@@ -260,7 +290,8 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
         traceback: TracebackType | None,
     ) -> Literal[False]:
         del error_type, error, traceback
-        if not self._held:
+        generation = self._generation
+        if not self._held or generation is None:
             return False
         try:
             with self._driver.transaction() as transaction:
@@ -268,10 +299,12 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                     DatabaseStatement(
                         f"""DELETE FROM {_LOCK_TABLE}
                         WHERE relay_name = :relay_name
-                          AND owner_id = :owner_id""",
+                          AND owner_id = :owner_id
+                          AND renewal = :renewal""",
                         {
                             "relay_name": self._relay_name,
                             "owner_id": self._owner_id,
+                            "renewal": generation,
                         },
                     )
                 )
@@ -283,6 +316,7 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
             raise OutboxRelayIntegrityError(protected_cause=release_error) from None
         finally:
             self._held = False
+            self._generation = None
         return False
 
     def _now(self) -> datetime:
@@ -338,7 +372,7 @@ class OutboxRelay:
                         owner_id VARCHAR(128) NOT NULL,
                         acquired_at VARCHAR(32) NOT NULL,
                         expires_at VARCHAR(32) NOT NULL,
-                        renewal INTEGER NOT NULL
+                        renewal BIGINT NOT NULL
                     )"""
                 )
             )
@@ -452,6 +486,14 @@ def _aware_utc(value: datetime, field: str) -> datetime:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _generation(value: object) -> int:
+    if type(value) is not int or value < 1:
+        raise OutboxRelayIntegrityError(
+            protected_cause=ValueError("outbox relay generation is invalid")
+        )
+    return value
 
 
 def _one_or_zero(value: int) -> int:
