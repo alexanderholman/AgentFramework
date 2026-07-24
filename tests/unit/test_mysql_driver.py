@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from threading import Event
+from typing import Any, Never, cast
+from unittest.mock import Mock
+
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
@@ -16,7 +21,7 @@ from af.infrastructure import mysql as mysql_module
 from af.infrastructure.mysql import MySQLDriver
 
 
-def _sqlite_engine(_url: str, **_options: object):
+def _sqlite_engine(_url: str, **_options: object) -> Engine:
     return create_engine("sqlite+pysqlite:///:memory:", poolclass=StaticPool)
 
 
@@ -76,6 +81,104 @@ def test_mysql_stream_is_bounded_by_transaction(monkeypatch: pytest.MonkeyPatch)
         assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
+def test_mysql_cursor_close_is_idempotent_and_sanitized() -> None:
+    transaction = Mock()
+    transaction.active = True
+    result = Mock()
+    result.keys.return_value = ()
+    close_failure = SQLAlchemyError("private mysql close detail")
+    result.close.side_effect = close_failure
+    cursor = mysql_module._MySQLCursor(
+        cast(Any, transaction),
+        cast(Any, result),
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        cursor.close()
+    cursor.close()
+
+    assert captured.value.stage == "database.cursor-close"
+    assert captured.value.protected_cause is close_failure
+    assert "private mysql close detail" not in str(captured.value)
+    assert "private mysql close detail" not in repr(captured.value)
+    assert result.close.call_count == 1
+
+
+@pytest.mark.parametrize("cancellation_states", [(True,), (False, True)])
+def test_mysql_cursor_cancellation_precedes_close_failure(
+    cancellation_states: tuple[bool, ...],
+) -> None:
+    transaction = Mock()
+    transaction.active = True
+    transaction.cancellation_requested.side_effect = cancellation_states
+    result = Mock()
+    result.keys.return_value = ("value",)
+    result.fetchone.return_value = (1,)
+    close_failure = SQLAlchemyError("private cancelled cursor close detail")
+    result.close.side_effect = close_failure
+    cursor = mysql_module._MySQLCursor(
+        cast(Any, transaction),
+        cast(Any, result),
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        next(cursor)
+
+    assert captured.value.reason is PlatformReason.CANCELLED
+    assert captured.value.stage == "database.cursor"
+    cleanup_failure = captured.value.protected_cause
+    assert isinstance(cleanup_failure, DatabaseOperationError)
+    assert cleanup_failure.protected_cause is close_failure
+    assert "private cancelled cursor close detail" not in str(captured.value)
+    assert "private cancelled cursor close detail" not in repr(captured.value)
+    assert result.close.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("operation", "statement", "stage"),
+    [
+        ("execute", DatabaseStatement("SELECT 1"), "database.execute"),
+        (
+            "stream",
+            DatabaseStatement("SELECT 1", read_only=True),
+            "database.query",
+        ),
+    ],
+)
+def test_mysql_post_execution_cancellation_precedes_result_close_failure(
+    operation: str,
+    statement: DatabaseStatement,
+    stage: str,
+) -> None:
+    cancellation = Event()
+    result = Mock()
+    result.keys.return_value = ()
+    close_failure = SQLAlchemyError("private cancelled result close detail")
+    result.close.side_effect = close_failure
+    connection = Mock()
+
+    def execute(*_args: object, **_kwargs: object) -> Mock:
+        cancellation.set()
+        return result
+
+    connection.execute.side_effect = execute
+    transaction = mysql_module._MySQLTransaction(
+        cast(Any, connection),
+        cancellation,
+        read_only=False,
+    )
+
+    with pytest.raises(DatabaseOperationError) as captured:
+        getattr(transaction, operation)(statement)
+
+    assert captured.value.reason is PlatformReason.CANCELLED
+    assert captured.value.stage == stage
+    assert captured.value.protected_cause is close_failure
+    assert "private cancelled result close detail" not in str(captured.value)
+    assert "private cancelled result close detail" not in repr(captured.value)
+    assert result.close.call_count == 1
+
+
 def test_mysql_read_only_and_capabilities_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -98,7 +201,7 @@ def test_mysql_rejects_invalid_url_and_sanitizes_connect_failure(
     with pytest.raises(ValueError, match="mysql\\+pymysql"):
         MySQLDriver("sqlite:///:memory:")
 
-    def fail(_url: str, **_options: object):
+    def fail(_url: str, **_options: object) -> Never:
         raise SQLAlchemyError("mysql+pymysql://user:secret@private/database")
 
     monkeypatch.setattr(mysql_module, "create_engine", fail)
