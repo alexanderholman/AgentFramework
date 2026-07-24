@@ -5,14 +5,23 @@ from pathlib import Path
 
 import pytest
 
+from af.framework.application import Application
+from af.framework.container import Container, ProviderRegistrar, ServiceProvider
+from af.framework.errors import PlatformReason
 from af.framework.managers import (
+    CapabilitySet,
+    CapabilityValidationError,
     DriverRegistration,
     DriverResolutionError,
     ManagerConfigurationError,
 )
 from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
 from af.search.embedded_manager import embedded_search_registration
-from af.search.manager import SearchFeature, SearchManager
+from af.search.manager import (
+    SearchFeature,
+    SearchManager,
+    bind_search_manager,
+)
 
 _NOW = datetime(2026, 7, 24, 13, tzinfo=UTC)
 
@@ -135,4 +144,129 @@ def test_search_manager_operations_require_verified_capabilities(
 
     assert manager.connection(requires=(required,)) is manager.connection()
     assert getattr(manager, operation)
+    manager.close()
+
+
+
+def test_search_manager_preserves_generic_capability_inputs(tmp_path: Path) -> None:
+    manager = _manager(tmp_path / "search.sqlite3")
+
+    driver = manager.connection(
+        requires=CapabilitySet((SearchFeature.FULL_TEXT.value,))
+    )
+    assert manager.connection(requires=SearchFeature.INDEXING.value) is driver
+    with pytest.raises(ValueError):
+        manager.connection(requires=(object(),))  # type: ignore[arg-type]
+    manager.close()
+
+
+def test_search_manager_is_application_owned_and_snapshots_configuration(
+    tmp_path: Path,
+) -> None:
+    connections = {
+        "primary": {
+            "driver": "embedded",
+            "database": str(tmp_path / "search.sqlite3"),
+        }
+    }
+
+    class SearchProvider(ServiceProvider):
+        provider_id = "search"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_search_manager(
+                registrar,
+                connections=connections,
+                default="primary",
+                deployment_profile="test",
+                policy_version="policy-v1",
+                registrations=(embedded_search_registration(clock=lambda: _NOW),),
+                clock=lambda: _NOW,
+            )
+
+    application = Application(Container(), (SearchProvider(),))
+    application.register()
+    connections["primary"]["database"] = ""
+    application.boot()
+    application.serve()
+    manager = application.container.resolve(SearchManager)
+    manager.upsert((_resource("resource-a"),))
+
+    application.shutdown()
+
+    with pytest.raises(DriverResolutionError) as captured:
+        manager.search(_query())
+    assert captured.value.reason is PlatformReason.DEPENDENCY_RESOLUTION_FAILED
+
+
+def test_search_provider_rejects_missing_or_duplicate_registrations() -> None:
+    class Registrar:
+        def bind(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            del args, kwargs
+
+    registration = embedded_search_registration(clock=lambda: _NOW)
+    common = {
+        "connections": {"primary": {"driver": "embedded", "database": ":memory:"}},
+        "default": "primary",
+        "deployment_profile": "test",
+        "policy_version": "policy-v1",
+    }
+    with pytest.raises(ManagerConfigurationError):
+        bind_search_manager(
+            Registrar(), registrations=(), **common  # type: ignore[arg-type]
+        )
+    with pytest.raises(ManagerConfigurationError):
+        bind_search_manager(
+            Registrar(),  # type: ignore[arg-type]
+            registrations=(registration, registration),
+            **common,
+        )
+
+
+@pytest.mark.parametrize(
+    "connection",
+    [
+        {"driver": "embedded"},
+        {"driver": "embedded", "database": ":memory:", "extra": True},
+        {"driver": "other", "database": ":memory:"},
+    ],
+)
+def test_embedded_registration_rejects_invalid_configuration(
+    connection: dict[str, object],
+) -> None:
+    manager = SearchManager(
+        connections={"primary": connection},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=lambda: _NOW,
+    )
+    manager.install(embedded_search_registration(clock=lambda: _NOW))
+
+    with pytest.raises(DriverResolutionError):
+        manager.connection()
+    manager.close()
+
+
+def test_embedded_registration_rejects_invalid_runtime_evidence_time(
+    tmp_path: Path,
+) -> None:
+    manager = SearchManager(
+        connections={
+            "primary": {
+                "driver": "embedded",
+                "database": str(tmp_path / "search.sqlite3"),
+            }
+        },
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=lambda: _NOW,
+    )
+    manager.install(
+        embedded_search_registration(clock=lambda: datetime(2026, 7, 24))
+    )
+
+    with pytest.raises(CapabilityValidationError):
+        manager.connection()
     manager.close()
