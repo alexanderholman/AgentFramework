@@ -80,9 +80,7 @@ def _registration(monkeypatch: pytest.MonkeyPatch):
         lambda: ("3.3.4", "a" * 64, "b" * 64),
     )
     monkeypatch.setattr(manager_module, "PostgreSQLDriver", _VerifiedDriver)
-    return postgresql_registration(
-        clock=lambda: datetime(2026, 7, 24, 4, 0, tzinfo=UTC)
-    )
+    return postgresql_registration(clock=lambda: datetime(2026, 7, 24, 4, 0, tzinfo=UTC))
 
 
 def test_postgresql_registration_is_inert_and_verifies_exact_runtime(
