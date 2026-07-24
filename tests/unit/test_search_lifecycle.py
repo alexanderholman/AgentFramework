@@ -110,6 +110,23 @@ def test_rebuild_batches_cut_over_and_roll_back_atomically() -> None:
     assert manager.status(build).phase is IndexPhase.RETIRED
 
 
+def test_empty_authoritative_rebuild_cuts_over_and_rolls_back_atomically() -> None:
+    backend = RecordingBackend()
+    manager = IndexLifecycleManager(backend, clock=lambda: _NOW)
+    build = manager.begin("catalog", projection_version=2)
+
+    ready = manager.mark_ready(build, checkpoint="event-empty-snapshot")
+
+    assert ready.phase is IndexPhase.READY
+    assert ready.indexed_resources == 0
+    assert manager.cutover(build).phase is IndexPhase.ACTIVE
+    assert backend.aliases["catalog"] == build.physical_name
+
+    assert manager.rollback("catalog") == "catalog-g00000001"
+    assert backend.aliases["catalog"] == "catalog-g00000001"
+    assert manager.status(build).phase is IndexPhase.RETIRED
+
+
 def test_partial_bulk_failure_blocks_cutover_and_preserves_current_alias() -> None:
     backend = RecordingBackend()
     backend.partial_failure = True
