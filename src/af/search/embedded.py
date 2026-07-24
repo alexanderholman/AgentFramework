@@ -343,7 +343,7 @@ class EmbeddedSearchDriver(AbstractContextManager["EmbeddedSearchDriver"]):
         try:
             self._connection.interrupt()
         except BaseException as error:
-            if self._shutdown_started():
+            if isinstance(error, sqlite3.Error) and self._shutdown_started():
                 return
             _raise_operation_error(error, stage="search.embedded.cancel")
 
