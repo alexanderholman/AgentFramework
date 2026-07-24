@@ -17,10 +17,10 @@ jobs:
       UV_LOCKED: "1"
       UV_PYTHON: "3.12"
     steps:
-      - name: Check out exact event head
+      - name: Check out implementation branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: codex/fix-database-pool-driver-identity
           fetch-depth: 0
           persist-credentials: false
 
@@ -44,32 +44,25 @@ jobs:
 
           path = Path("src/af/framework/database_pool.py")
           source = path.read_text(encoding="utf-8")
-          old = '''        drivers: list[DatabaseDriver] = []
-          try:
-              for _ in range(size):
-                  driver = factory()
-                  if not self._is_driver(driver):
-                      raise TypeError("database pool factory returned an invalid driver")
-                  drivers.append(driver)
-          '''
-          new = '''        drivers: list[DatabaseDriver] = []
-          driver_ids: set[int] = set()
-          try:
-              for _ in range(size):
-                  driver = factory()
-                  if not self._is_driver(driver):
-                      raise TypeError("database pool factory returned an invalid driver")
-                  driver_id = id(driver)
-                  if driver_id in driver_ids:
-                      raise ValueError(
-                          "database pool factory returned a duplicate driver instance"
-                      )
-                  drivers.append(driver)
-                  driver_ids.add(driver_id)
-          '''
-          if source.count(old) != 1:
+          declaration = "        drivers: list[DatabaseDriver] = []\n"
+          append = "                drivers.append(driver)\n"
+          if source.count(declaration) != 1 or source.count(append) != 1:
               raise SystemExit("unexpected database pool constructor")
-          path.write_text(source.replace(old, new), encoding="utf-8")
+          source = source.replace(
+              declaration,
+              declaration + "        driver_ids: set[int] = set()\n",
+          )
+          source = source.replace(
+              append,
+              "                driver_id = id(driver)\n"
+              "                if driver_id in driver_ids:\n"
+              "                    raise ValueError(\n"
+              "                        \"database pool factory returned a duplicate driver instance\"\n"
+              "                    )\n"
+              + append
+              + "                driver_ids.add(driver_id)\n",
+          )
+          path.write_text(source, encoding="utf-8")
           PY
           uv run ruff format src/af/framework/database_pool.py tests/unit/test_database_pool_identity.py
           uv run ruff check --fix src/af/framework/database_pool.py tests/unit/test_database_pool_identity.py
