@@ -105,10 +105,7 @@ class OutboxRetryPolicy:
     retry_delay: timedelta = timedelta(seconds=30)
 
     def __post_init__(self) -> None:
-        if (
-            type(self.max_attempts) is not int
-            or not 1 <= self.max_attempts <= _MAX_ATTEMPTS
-        ):
+        if type(self.max_attempts) is not int or not 1 <= self.max_attempts <= _MAX_ATTEMPTS:
             raise ValueError("outbox retry maximum attempts is invalid")
         if (
             not isinstance(self.retry_delay, timedelta)
@@ -225,10 +222,7 @@ class OutboxRelayLease(AbstractContextManager["OutboxRelayLease"]):
                 if len(rows) != 1:
                     raise OutboxRelayIntegrityError()
                 row = rows[0]
-                if (
-                    row["owner_id"] != self._owner_id
-                    or row["expires_at"] != _timestamp(expires_at)
-                ):
+                if row["owner_id"] != self._owner_id or row["expires_at"] != _timestamp(expires_at):
                     raise OutboxRelayIntegrityError()
                 generation = _generation(row["renewal"])
         except OutboxRelayIntegrityError:
