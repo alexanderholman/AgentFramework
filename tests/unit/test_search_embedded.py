@@ -364,6 +364,52 @@ def test_base_exception_during_upsert_rolls_back_and_recovers(tmp_path: Path) ->
     driver.close()
 
 
+def test_rollback_failure_quarantines_partial_upsert_and_preserves_interrupt(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "upsert-rollback-failure.sqlite3"
+
+    class RollbackFailingConnection(sqlite3.Connection):
+        interrupt_next_insert = True
+
+        def execute(  # type: ignore[override]
+            self,
+            sql: str,
+            parameters: tuple[object, ...] = (),
+            /,
+        ) -> sqlite3.Cursor:
+            cursor = super().execute(sql, parameters)
+            if self.interrupt_next_insert and "INSERT INTO af_search_fts" in sql:
+                self.interrupt_next_insert = False
+                raise KeyboardInterrupt
+            return cursor
+
+        def rollback(self) -> None:
+            raise sqlite3.OperationalError("sensitive rollback failure")
+
+    driver = EmbeddedSearchDriver(database)
+    driver._connection.close()
+    driver._connection = sqlite3.connect(
+        database,
+        isolation_level=None,
+        check_same_thread=False,
+        factory=RollbackFailingConnection,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        driver.upsert((_resource("resource-a"),))
+
+    with pytest.raises(SearchDriverIneligible) as unavailable:
+        driver.search(_query())
+
+    assert unavailable.value.reason is PlatformReason.SHUTDOWN_FAILED
+    assert "rollback" not in str(unavailable.value).lower()
+    driver.close()
+
+    with EmbeddedSearchDriver(database) as recovered:
+        assert recovered.search(_query()) == ()
+
+
 def test_interrupted_delete_preserves_resource_and_reports_cancellation(
     tmp_path: Path,
 ) -> None:
