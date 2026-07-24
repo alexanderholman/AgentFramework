@@ -62,9 +62,11 @@ def test_mariadb_driver_executes_savepoints_and_read_only_transactions(
                 )
             )
         assert [row.as_mapping() for row in rows] == [{"id": 1, "value": "kept"}]
-        with pytest.raises(DatabaseOperationError) as denied:
-            with driver.transaction(read_only=True) as transaction:
-                transaction.execute(DatabaseStatement("CREATE TABLE denied (id INTEGER)"))
+        with (
+            pytest.raises(DatabaseOperationError) as denied,
+            driver.transaction(read_only=True) as transaction,
+        ):
+            transaction.execute(DatabaseStatement("CREATE TABLE denied (id INTEGER)"))
         assert denied.value.reason is PlatformReason.AUTHORIZATION_DENIED
         with pytest.raises(UnsupportedDatabaseFeature):
             driver.require(DatabaseFeature.JSON)
