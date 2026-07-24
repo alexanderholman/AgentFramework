@@ -55,9 +55,9 @@ def test_mysql_cancellation_is_typed_and_connection_recovers() -> None:
 
     def run_query() -> None:
         try:
-            with driver.transaction(read_only=True) as transaction:
+            with driver.transaction() as transaction:
                 started.set()
-                transaction.query(DatabaseStatement("SELECT SLEEP(30)", read_only=True))
+                transaction.execute(DatabaseStatement("DO SLEEP(30)"))
         except DatabaseOperationError as error:
             captured.append(error)
 
