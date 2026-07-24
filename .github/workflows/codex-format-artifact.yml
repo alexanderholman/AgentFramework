@@ -1,0 +1,46 @@
+name: Codex format artifact
+
+on:
+  push:
+    branches: [codex/inbox-projection-checkpoints]
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Format projection module
+        run: uv run --offline --locked --no-sources --extra dev ruff format src/af/messaging/projections.py
+
+      - name: Upload formatted module
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-formatted-projection
+          path: src/af/messaging/projections.py
+          if-no-files-found: error
+          retention-days: 1
