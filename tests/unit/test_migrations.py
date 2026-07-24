@@ -463,6 +463,43 @@ def test_migration_probe_preserves_operational_failure_and_closes_cursor(
     assert probe_rows.closed
 
 
+def test_migration_probe_wraps_permanent_failure_with_migration_identity() -> None:
+    probe = MigrationProbe(
+        DatabaseStatement("SELECT value FROM probe", read_only=True),
+        (),
+    )
+    migration = Migration(
+        "20260724080000_permanent_probe_failure",
+        (DatabaseStatement("CREATE TABLE permanent_probe_failure (value INTEGER)"),),
+        verify=(probe,),
+    )
+    ledger = GuardedCursor(
+        (_applied_row(migration.migration_id, migration.checksum),),
+        maximum_pulls=2,
+    )
+    failure = DatabaseOperationError(
+        reason=PlatformReason.PERMANENT_FAILURE,
+        stage="database.stream",
+        protected_cause=RuntimeError("private database credential"),
+    )
+    probe_rows = FailingCursor(failure)
+    runner = MigrationRunner(
+        StreamingDriver((ledger, probe_rows)),
+        (migration,),
+        owner_id="permanent-probe",
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(MigrationVerificationError) as captured:
+        runner.verify()
+
+    assert captured.value.migration_id == migration.migration_id
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert "private database credential" not in str(captured.value)
+    assert "private database credential" not in repr(captured.value)
+    assert probe_rows.closed
+
+
 def test_migration_probe_preserves_primary_failure_when_cursor_close_also_fails() -> None:
     probe = MigrationProbe(
         DatabaseStatement("SELECT value FROM probe", read_only=True),
