@@ -83,12 +83,17 @@ class DatabasePool(AbstractContextManager["DatabasePool"]):
             raise ValueError("database pool acquire timeout is invalid")
 
         drivers: list[DatabaseDriver] = []
+        driver_ids: set[int] = set()
         try:
             for _ in range(size):
                 driver = factory()
                 if not self._is_driver(driver):
                     raise TypeError("database pool factory returned an invalid driver")
+                driver_id = id(driver)
+                if driver_id in driver_ids:
+                    raise ValueError("database pool factory returned a duplicate driver instance")
                 drivers.append(driver)
+                driver_ids.add(driver_id)
             base_features = drivers[0].features
             if any(driver.features != base_features for driver in drivers[1:]):
                 raise ValueError("database pool drivers expose inconsistent capabilities")
