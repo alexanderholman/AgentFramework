@@ -232,14 +232,18 @@ class RecordingRecorder:
         return DesignRecordResult(
             status=DesignRecordStatus.RECORDED,
             record=record,
-            record_path=str(Path(request.coordination.manifest.repository.git_common_dir) / "record"),
+            record_path=str(
+                Path(request.coordination.manifest.repository.git_common_dir) / "record"
+            ),
         )
 
 
 def test_controller_separates_read_only_prepare_from_explicit_record(tmp_path: Path) -> None:
     provider = RecordingEvidenceProvider()
     recorder = RecordingRecorder()
-    controller = SelfDesignRecordingController(_operation(provider), recorder, lambda: _OBSERVED_AT)
+    controller = SelfDesignRecordingController(
+        _operation(provider), recorder, lambda: _OBSERVED_AT
+    )
     coordination = _coordination(tmp_path)
 
     prepared = controller.prepare()
