@@ -8,17 +8,18 @@ on:
       - ".github/workflows/format-diagnostic.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   format:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact event head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
+          persist-credentials: true
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -29,15 +30,15 @@ jobs:
         run: uv sync --locked --extra dev
       - name: Format changed Python files
         run: uv run ruff format src/af/messaging tests/unit/test_message_envelopes.py
-      - name: Stage formatted artifact
+      - name: Commit formatter output
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          mkdir -p formatted/src/af/messaging formatted/tests/unit
-          cp src/af/messaging/*.py formatted/src/af/messaging/
-          cp tests/unit/test_message_envelopes.py formatted/tests/unit/
-      - name: Upload formatted files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: formatted-message-envelope
-          path: formatted
-          if-no-files-found: error
-          retention-days: 1
+          if git diff --quiet -- src/af/messaging tests/unit/test_message_envelopes.py; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/af/messaging tests/unit/test_message_envelopes.py
+          git commit -m "style(messaging): apply canonical formatting"
+          git push origin "HEAD:${HEAD_BRANCH}"
