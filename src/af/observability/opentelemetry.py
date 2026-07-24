@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from inspect import isasyncgen, isawaitable, iscoroutinefunction
+from math import isfinite
 from typing import Protocol
 
 from af.observability.signals import HealthState, TelemetryKind, TelemetrySignal
@@ -15,12 +17,27 @@ type OpenTelemetryAttributeValue = bool | int | float | str
 
 _SCHEMA_VERSION = "af.opentelemetry.v1"
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
+_ATTRIBUTE_KEY = re.compile(r"^[a-z][a-z0-9_.-]{0,126}[a-z0-9]$|^[a-z]$")
+_ATTRIBUTE_TOKEN = re.compile(r"^[a-z0-9](?:[a-z0-9_.:-]{0,198}[a-z0-9])?$")
+_SENSITIVE_KEY = re.compile(
+    r"(?:^|[_.-])(?:authorization|cookie|credential|document|password|payload|"
+    r"prompt|response|secret|token|vector|content)(?:$|[_.-])"
+)
+_TENANT_REF = re.compile(r"^sha256:[0-9a-f]{64}$")
+_UNSAFE_TEXT = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+_MAX_ATTRIBUTES = 40
+_MAX_VALUE_LENGTH = 200
 
 
 def _unix_nano(value: datetime) -> int:
     normalized = value.astimezone(UTC)
     delta = normalized - _EPOCH
-    return (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
+    result = (delta.days * 86_400 + delta.seconds) * 1_000_000_000
+    result += delta.microseconds * 1_000
+    if result < 0:
+        raise ValueError("OpenTelemetry event time cannot precede the Unix epoch")
+    return result
 
 
 def _health_attributes(
@@ -36,6 +53,55 @@ def _health_attributes(
         ("af.health.readiness", state.readiness.value),
         ("af.health.reason_code", state.reason_code),
     )
+
+
+def _opaque(value: object, label: str) -> None:
+    if value is None:
+        return
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > _MAX_VALUE_LENGTH
+        or _UNSAFE_TEXT.search(value)
+    ):
+        raise ValueError(f"{label} must be bounded non-empty single-line text")
+
+
+def _attribute_value(value: object) -> OpenTelemetryAttributeValue:
+    if type(value) is bool:
+        return value
+    if type(value) is int:
+        if not -(2**63) <= value < 2**63:
+            raise ValueError("OpenTelemetry integer attributes must be signed 64-bit values")
+        return value
+    if type(value) is float:
+        if not isfinite(value):
+            raise ValueError("OpenTelemetry float attributes must be finite")
+        return value
+    if type(value) is str and _ATTRIBUTE_TOKEN.fullmatch(value) is not None:
+        return value
+    raise ValueError("OpenTelemetry string attributes must be bounded low-cardinality tokens")
+
+
+def _validate_attributes(
+    attributes: object,
+) -> tuple[tuple[str, OpenTelemetryAttributeValue], ...]:
+    if type(attributes) is not tuple or len(attributes) > _MAX_ATTRIBUTES:
+        raise ValueError(f"OpenTelemetry records allow at most {_MAX_ATTRIBUTES} attributes")
+    validated: list[tuple[str, OpenTelemetryAttributeValue]] = []
+    for item in attributes:
+        if type(item) is not tuple or len(item) != 2:
+            raise ValueError("OpenTelemetry attributes must be key-value pairs")
+        key, value = item
+        if type(key) is not str or _ATTRIBUTE_KEY.fullmatch(key) is None:
+            raise ValueError("OpenTelemetry attribute keys must be canonical identifiers")
+        if _SENSITIVE_KEY.search(key):
+            raise ValueError("OpenTelemetry attributes cannot use sensitive keys")
+        validated.append((key, _attribute_value(value)))
+    canonical = tuple(sorted(validated, key=lambda item: item[0]))
+    if len(dict(canonical)) != len(canonical) or canonical != attributes:
+        raise ValueError("OpenTelemetry attributes must be unique and canonically sorted")
+    return canonical
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -56,6 +122,42 @@ class OpenTelemetryRecord:
     trace_flags: int = 0
     tenant_ref: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.schema_version != _SCHEMA_VERSION:
+            raise ValueError("OpenTelemetry record schema version is unsupported")
+        if (
+            type(self.instrumentation_scope) is not str
+            or _IDENTIFIER.fullmatch(self.instrumentation_scope) is None
+        ):
+            raise ValueError("OpenTelemetry instrumentation scope must be canonical")
+        if not isinstance(self.kind, TelemetryKind):
+            raise TypeError("OpenTelemetry record kind is invalid")
+        if type(self.name) is not str or _IDENTIFIER.fullmatch(self.name) is None:
+            raise ValueError("OpenTelemetry record name must be canonical")
+        if type(self.time_unix_nano) is not int or self.time_unix_nano < 0:
+            raise ValueError("OpenTelemetry event time must be non-negative Unix nanoseconds")
+        _validate_attributes(self.attributes)
+        if self.operation is not None and (
+            type(self.operation) is not str or _IDENTIFIER.fullmatch(self.operation) is None
+        ):
+            raise ValueError("OpenTelemetry operation must be canonical")
+        for value, label in (
+            (self.correlation_id, "OpenTelemetry correlation id"),
+            (self.causation_id, "OpenTelemetry causation id"),
+            (self.trace_id, "OpenTelemetry trace id"),
+            (self.span_id, "OpenTelemetry span id"),
+        ):
+            _opaque(value, label)
+        if type(self.trace_flags) is not int or not 0 <= self.trace_flags <= 255:
+            raise ValueError("OpenTelemetry trace flags must be an unsigned byte")
+        if self.trace_id is None and (self.span_id is not None or self.trace_flags):
+            raise ValueError("OpenTelemetry span and flags require a trace id")
+        if self.tenant_ref is not None and (
+            type(self.tenant_ref) is not str
+            or _TENANT_REF.fullmatch(self.tenant_ref) is None
+        ):
+            raise ValueError("OpenTelemetry tenant reference must be an opaque sha256 digest")
+
     @classmethod
     def from_signal(
         cls,
@@ -64,10 +166,10 @@ class OpenTelemetryRecord:
         *,
         instrumentation_scope: str = "af",
     ) -> OpenTelemetryRecord:
+        """Project one already-validated signal into the optional adapter boundary."""
+
         if type(signal) is not TelemetrySignal:
             raise TypeError("OpenTelemetry projection requires a TelemetrySignal")
-        if type(instrumentation_scope) is not str or not instrumentation_scope:
-            raise ValueError("OpenTelemetry instrumentation scope must be non-empty text")
         context = signal.context
         attributes = tuple(
             sorted(
@@ -123,12 +225,14 @@ class OpenTelemetrySink:
             raise ValueError("OpenTelemetry exporter is invalid") from error
         if not callable(export) or iscoroutinefunction(export):
             raise ValueError("OpenTelemetry exporter must expose synchronous export")
-        if type(instrumentation_scope) is not str or not instrumentation_scope:
-            raise ValueError("OpenTelemetry instrumentation scope must be non-empty text")
+        if type(instrumentation_scope) is not str or _IDENTIFIER.fullmatch(instrumentation_scope) is None:
+            raise ValueError("OpenTelemetry instrumentation scope must be canonical")
         self._exporter = exporter
         self._instrumentation_scope = instrumentation_scope
 
     def emit(self, signal: TelemetrySignal, /) -> None:
+        """Project and export one signal; publisher isolation owns exporter failure."""
+
         record = OpenTelemetryRecord.from_signal(
             signal,
             instrumentation_scope=self._instrumentation_scope,
