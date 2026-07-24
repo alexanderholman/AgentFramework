@@ -156,3 +156,33 @@ def test_embedded_search_escapes_fts_syntax_and_sanitizes_closed_driver(
 
     assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
     assert "sqlite" not in str(captured.value).lower()
+
+
+def test_embedded_search_rejects_invalid_operations_and_is_idempotent() -> None:
+    with pytest.raises(ValueError):
+        EmbeddedSearchDriver("")
+
+    resource = _resource("resource-a")
+    driver = EmbeddedSearchDriver(":memory:")
+
+    with pytest.raises(ValueError):
+        driver.upsert(())
+    with pytest.raises(ValueError):
+        driver.upsert((resource, resource))
+    with pytest.raises(TypeError):
+        driver.search(object())  # type: ignore[arg-type]
+    with pytest.raises(SearchDriverIneligible) as captured:
+        driver.search(_query("!!!"))
+
+    assert captured.value.reason is PlatformReason.VALIDATION_FAILED
+    assert (
+        driver.delete(
+            tenant_id="tenant-a",
+            source_id="source-primary",
+            resource_id="missing",
+        )
+        is False
+    )
+    driver.cancel()
+    driver.close()
+    driver.close()
