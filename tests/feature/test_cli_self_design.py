@@ -86,8 +86,14 @@ def test_self_design_command_is_byte_stable_for_identical_evidence() -> None:
     first = RecordingEvidenceProvider(_snapshot())
     second = RecordingEvidenceProvider(_snapshot())
 
-    first_result = runner.invoke(create_cli(self_design_operation=_operation(first)), ["self-design"])
-    second_result = runner.invoke(create_cli(self_design_operation=_operation(second)), ["self-design"])
+    first_result = runner.invoke(
+        create_cli(self_design_operation=_operation(first)),
+        ["self-design"],
+    )
+    second_result = runner.invoke(
+        create_cli(self_design_operation=_operation(second)),
+        ["self-design"],
+    )
 
     assert first_result.exit_code == 0
     assert second_result.exit_code == 0
