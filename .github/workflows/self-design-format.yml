@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   capture:
-    name: Capture canonical Ruff formatting
+    name: Capture canonical self-design slice
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -38,9 +38,12 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --extra dev
 
-      - name: Apply canonical formatter to the bounded slice
+      - name: Apply canonical formatter and safe lint fixes
         run: |
           uv run ruff format \
+            src/af/framework/self_design.py \
+            tests/unit/test_self_design.py
+          uv run ruff check --fix \
             src/af/framework/self_design.py \
             tests/unit/test_self_design.py
           git diff -- \
@@ -48,12 +51,29 @@ jobs:
             tests/unit/test_self_design.py \
             > self-design-format.patch
 
-      - name: Upload formatted bounded slice
+      - name: Verify bounded slice
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            uv run ruff format --check \
+              src/af/framework/self_design.py \
+              tests/unit/test_self_design.py
+            uv run ruff check \
+              src/af/framework/self_design.py \
+              tests/unit/test_self_design.py
+            uv run mypy src/af/framework/self_design.py
+            uv run pytest -q tests/unit/test_self_design.py
+          } 2>&1 | tee self-design-verify.log
+
+      - name: Upload canonical bounded slice
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: self-design-format
           path: |
             self-design-format.patch
+            self-design-verify.log
             src/af/framework/self_design.py
             tests/unit/test_self_design.py
           if-no-files-found: error
