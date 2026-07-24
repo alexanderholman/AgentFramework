@@ -474,6 +474,8 @@ class JsonEnvelopeCodec:
             field="message envelope metadata",
         )
         kind_value = raw.get("kind")
+        if type(kind_value) is not str:
+            raise InvalidMessageEnvelope("message kind is invalid")
         try:
             kind = EnvelopeKind(kind_value)
         except (TypeError, ValueError) as error:

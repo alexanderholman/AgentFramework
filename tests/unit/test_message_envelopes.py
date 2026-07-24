@@ -200,9 +200,9 @@ def test_payload_rejects_cycles_unsupported_values_and_resource_exhaustion() -> 
 
 
 def test_direct_payload_construction_cannot_bypass_snapshot_validation() -> None:
-    with pytest.raises(InvalidMessageEnvelope, match="MessageEnvelope.create"):
+    with pytest.raises(InvalidMessageEnvelope, match=r"MessageEnvelope\.create"):
         MessageEnvelope(metadata=_metadata(), payload={"mutable": True})  # type: ignore[arg-type]
-    with pytest.raises(InvalidMessageEnvelope, match="MessageEnvelope.create"):
+    with pytest.raises(InvalidMessageEnvelope, match=r"MessageEnvelope\.create"):
         MessageEnvelope(
             metadata=_metadata(),
             payload=FrozenJsonObject((("z", 1), ("a", 2))),
