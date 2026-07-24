@@ -115,9 +115,7 @@ def test_duplicate_message_id_fails_without_creating_a_second_record() -> None:
     with driver.transaction(read_only=True) as transaction:
         pending = outbox.pending(transaction, now=_NOW)
 
-    assert tuple(record.envelope.metadata.message_id for record in pending) == (
-        "event-duplicate",
-    )
+    assert tuple(record.envelope.metadata.message_id for record in pending) == ("event-duplicate",)
     driver.close()
 
 
