@@ -1,0 +1,66 @@
+name: AF PostgreSQL
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: af-postgresql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: PostgreSQL relational conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-bookworm@sha256:4f736ae292687621d4dbe0d499ffd024a36bd2ee7d8ca6f2ccd4c800f047b394
+        env:
+          POSTGRES_DB: af
+          POSTGRES_USER: af
+          POSTGRES_PASSWORD: af_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U af -d af"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      AF_POSTGRESQL_TEST_URL: postgresql+psycopg://af:af_test_password@127.0.0.1:5432/af
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
+    steps:
+      - name: Check out exact event head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event_name == 'push' && github.event.after || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Run PostgreSQL real-service certification
+        run: >-
+          uv run --with "psycopg[binary]==3.3.4"
+          pytest -q tests/integration/test_postgresql_relational.py
