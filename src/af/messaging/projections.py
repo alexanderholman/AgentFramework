@@ -455,10 +455,7 @@ class TransactionalProjectionGuard:
             self._inbox.record(transaction, candidate)
             return ProjectionDecision.STALE
 
-        if (
-            current.position == previous.position
-            and current.message_id != previous.message_id
-        ):
+        if current.position == previous.position and current.message_id != previous.message_id:
             raise ProjectionIntegrityError()
         if current.position == previous.position:
             self._inbox.record(transaction, candidate)
