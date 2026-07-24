@@ -684,8 +684,17 @@ class MigrationRunner:
                     probe.statement,
                     maximum=len(probe.expected_rows),
                 )
-            except DatabaseOperationError:
-                raise
+            except DatabaseOperationError as error:
+                if error.stage == "database.cursor-close" or error.reason in (
+                    PlatformReason.CANCELLED,
+                    PlatformReason.SHUTDOWN_FAILED,
+                    PlatformReason.TRANSIENT_FAILURE,
+                ):
+                    raise
+                raise MigrationVerificationError(
+                    migration.migration_id,
+                    protected_cause=error,
+                ) from None
             if actual != probe.expected_rows:
                 raise MigrationVerificationError(
                     migration.migration_id,
