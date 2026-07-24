@@ -27,6 +27,17 @@ from af.infrastructure.sqlite import SQLiteDriver
 _NOW = datetime(2026, 7, 24, 8, tzinfo=UTC)
 
 
+class MutableClock:
+    def __init__(self, value: datetime = _NOW) -> None:
+        self.value = value
+
+    def __call__(self) -> datetime:
+        return self.value
+
+    def advance(self, delta: timedelta) -> None:
+        self.value += delta
+
+
 def _statement(sql: str) -> DatabaseStatement:
     return DatabaseStatement(sql)
 
@@ -424,3 +435,74 @@ def test_migration_contracts_reject_ambiguous_or_unbounded_inputs() -> None:
             lock_lease=timedelta(0),
         )
     driver.close()
+
+
+def test_migration_lease_renewal_extends_exclusion_window(tmp_path: Path) -> None:
+    database = tmp_path / "migration-renewal.sqlite3"
+    clock = MutableClock()
+    first_driver = SQLiteDriver(database)
+    second_driver = SQLiteDriver(database)
+    first = MigrationRunner(
+        first_driver,
+        (),
+        owner_id="runner-a",
+        clock=clock,
+        lock_lease=timedelta(minutes=1),
+    )
+    second = MigrationRunner(
+        second_driver,
+        (),
+        owner_id="runner-b",
+        clock=clock,
+        lock_lease=timedelta(minutes=1),
+    )
+    first.bootstrap()
+
+    with first.lock() as lease:
+        clock.advance(timedelta(seconds=30))
+        lease.renew()
+        clock.advance(timedelta(seconds=40))
+        with pytest.raises(MigrationLockUnavailable), second.lock():
+            pass
+
+    with second.lock():
+        pass
+    first_driver.close()
+    second_driver.close()
+
+
+def test_reused_migration_owner_cannot_renew_or_release_reclaimed_lease(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "migration-fencing.sqlite3"
+    clock = MutableClock()
+    first_driver = SQLiteDriver(database)
+    second_driver = SQLiteDriver(database)
+    first = MigrationRunner(
+        first_driver,
+        (),
+        owner_id="shared-owner",
+        clock=clock,
+        lock_lease=timedelta(minutes=1),
+    )
+    reincarnated = MigrationRunner(
+        second_driver,
+        (),
+        owner_id="shared-owner",
+        clock=clock,
+        lock_lease=timedelta(minutes=1),
+    )
+    first.bootstrap()
+
+    with first.lock() as stale:
+        clock.advance(timedelta(minutes=2))
+        with reincarnated.lock() as current:
+            with pytest.raises(MigrationLockUnavailable):
+                stale.renew()
+            clock.advance(timedelta(seconds=1))
+            current.renew()
+
+    with reincarnated.lock():
+        pass
+    first_driver.close()
+    second_driver.close()
