@@ -4,11 +4,6 @@ import hashlib
 from collections.abc import Mapping
 
 import pytest
-from af.search.opensearch import (
-    OpenSearchDriver,
-    OpenSearchOperationError,
-    opensearch_index_body,
-)
 
 from af.framework.errors import PlatformReason
 from af.search.contracts import (
@@ -16,6 +11,11 @@ from af.search.contracts import (
     ResourceKind,
     SearchFilter,
     SearchQuery,
+)
+from af.search.opensearch import (
+    OpenSearchDriver,
+    OpenSearchOperationError,
+    opensearch_index_body,
 )
 
 
@@ -62,6 +62,7 @@ def _query(
 class _Indices:
     def __init__(self) -> None:
         self.mapping: object = {"af-search": {"mappings": opensearch_index_body()["mappings"]}}
+        self.error: Exception | None = None
 
     def get_mapping(
         self,
@@ -71,6 +72,8 @@ class _Indices:
         headers: object = None,
     ) -> object:
         del index, params, headers
+        if self.error is not None:
+            raise self.error
         return self.mapping
 
 
@@ -89,9 +92,16 @@ class RecordingClient:
         self.search_calls: list[tuple[object, object, object]] = []
         self.delete_calls: list[tuple[object, object, object]] = []
         self.closed = 0
+        self.info_error: Exception | None = None
+        self.bulk_error: Exception | None = None
+        self.search_error: Exception | None = None
+        self.delete_error: Exception | None = None
+        self.close_error: Exception | None = None
 
     def info(self, *, params: object = None, headers: object = None) -> object:
         del params, headers
+        if self.info_error is not None:
+            raise self.info_error
         return self.info_response
 
     def bulk(
@@ -104,6 +114,8 @@ class RecordingClient:
     ) -> object:
         del headers
         self.bulk_calls.append((index, body, params))
+        if self.bulk_error is not None:
+            raise self.bulk_error
         if self.bulk_response is not None:
             return self.bulk_response
         assert type(body) is tuple
@@ -124,6 +136,8 @@ class RecordingClient:
     ) -> object:
         del headers
         self.search_calls.append((index, body, params))
+        if self.search_error is not None:
+            raise self.search_error
         return self.search_response
 
     def delete(
@@ -136,10 +150,14 @@ class RecordingClient:
     ) -> object:
         del headers
         self.delete_calls.append((index, id, params))
+        if self.delete_error is not None:
+            raise self.delete_error
         return self.delete_response
 
     def close(self) -> None:
         self.closed += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 
 def _document_id(resource: ResourceEnvelope) -> str:
@@ -221,7 +239,7 @@ def test_opensearch_pushes_tenant_and_acl_filters_before_top_k() -> None:
     index, body, params = client.search_calls[0]
     assert index == "af-search"
     assert params == {
-        "allow_partial_search_results": False,
+        "allow_partial_search_results": "false",
         "request_timeout": 0.25,
     }
     assert type(body) is dict
@@ -469,3 +487,307 @@ def test_opensearch_rejects_unverified_service_identity(info: Mapping[str, objec
         OpenSearchDriver(client, index="af-search")
 
     assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+
+
+class _TransportError(RuntimeError):
+    def __init__(self, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        super().__init__("private-transport-secret")
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        (401, PlatformReason.AUTHORIZATION_DENIED),
+        (404, PlatformReason.CAPABILITY_UNAVAILABLE),
+        (429, PlatformReason.TRANSIENT_FAILURE),
+        (503, PlatformReason.TRANSIENT_FAILURE),
+        (400, PlatformReason.PERMANENT_FAILURE),
+        (None, PlatformReason.PERMANENT_FAILURE),
+    ],
+)
+def test_opensearch_connection_failures_are_typed_and_sanitized(
+    status: int | None,
+    reason: PlatformReason,
+) -> None:
+    client = RecordingClient()
+    client.info_error = _TransportError(status)
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        OpenSearchDriver(client, index="af-search")
+
+    assert captured.value.reason is reason
+    assert "private-transport-secret" not in str(captured.value)
+    assert "private-transport-secret" not in repr(captured.value)
+
+
+def test_opensearch_mapping_transport_failure_is_sanitized() -> None:
+    client = RecordingClient()
+    client.indices.error = _TransportError(503)
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        OpenSearchDriver(client, index="af-search")
+
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+
+
+@pytest.mark.parametrize(
+    ("index", "request_timeout"),
+    [
+        ("AF-SEARCH", 5.0),
+        ("af/search", 5.0),
+        ("af-search", True),
+        ("af-search", 0.0),
+        ("af-search", 61.0),
+    ],
+)
+def test_opensearch_rejects_invalid_local_configuration(
+    index: str,
+    request_timeout: object,
+) -> None:
+    with pytest.raises(ValueError):
+        OpenSearchDriver(
+            RecordingClient(),
+            index=index,
+            request_timeout=request_timeout,  # type: ignore[arg-type]
+        )
+
+
+def test_opensearch_rejects_invalid_resource_operations_before_transport() -> None:
+    client = RecordingClient()
+    resource = _resource("resource-a")
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(ValueError):
+        driver.upsert(())
+    with pytest.raises(ValueError):
+        driver.upsert((resource, resource))
+    with pytest.raises(TypeError):
+        driver.search(object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        driver.delete(tenant_id="", source_id="source-primary", resource_id="resource-a")
+
+    assert client.bulk_calls == []
+    assert client.search_calls == []
+    assert client.delete_calls == []
+
+
+@pytest.mark.parametrize(
+    ("response", "reason"),
+    [
+        (
+            {
+                "errors": False,
+                "items": [{"index": {"_id": "wrong", "status": 201}}],
+            },
+            PlatformReason.INTEGRITY_FAILURE,
+        ),
+        (
+            {
+                "errors": False,
+                "items": [{"delete": {"_id": "wrong", "status": 201}}],
+            },
+            PlatformReason.INTEGRITY_FAILURE,
+        ),
+        (
+            {
+                "errors": False,
+                "items": [{"index": {"_id": "wrong", "status": True}}],
+            },
+            PlatformReason.INTEGRITY_FAILURE,
+        ),
+        (
+            {
+                "errors": False,
+                "items": [{"index": {"_id": "unused", "status": 400}}],
+            },
+            PlatformReason.INTEGRITY_FAILURE,
+        ),
+    ],
+)
+def test_opensearch_rejects_corrupt_bulk_acknowledgements(
+    response: object,
+    reason: PlatformReason,
+) -> None:
+    client = RecordingClient()
+    resource = _resource("resource-a")
+    if (
+        type(response) is dict
+        and type(response.get("items")) is list
+        and response["items"]
+        and type(response["items"][0]) is dict
+        and type(response["items"][0].get("index")) is dict
+        and response["items"][0]["index"].get("_id") == "unused"
+    ):
+        response["items"][0]["index"]["_id"] = _document_id(resource)
+    client.bulk_response = response
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.upsert((resource,))
+
+    assert captured.value.reason is reason
+
+
+def test_opensearch_permanent_bulk_partial_failure_is_sanitized() -> None:
+    client = RecordingClient()
+    resource = _resource("resource-a")
+    client.bulk_response = {
+        "errors": True,
+        "items": [
+            {
+                "index": {
+                    "_id": _document_id(resource),
+                    "status": 400,
+                    "error": {"reason": "private-permanent-secret"},
+                }
+            }
+        ],
+    }
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.upsert((resource,))
+
+    assert captured.value.reason is PlatformReason.PERMANENT_FAILURE
+    assert "private-permanent-secret" not in str(captured.value)
+
+
+def test_opensearch_operation_transport_failures_are_sanitized() -> None:
+    client = RecordingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+    resource = _resource("resource-a")
+
+    client.bulk_error = _TransportError(503)
+    with pytest.raises(OpenSearchOperationError) as bulk:
+        driver.upsert((resource,))
+    assert bulk.value.reason is PlatformReason.TRANSIENT_FAILURE
+    client.bulk_error = None
+
+    client.search_error = _TransportError(403)
+    with pytest.raises(OpenSearchOperationError) as search:
+        driver.search(_query())
+    assert search.value.reason is PlatformReason.AUTHORIZATION_DENIED
+    client.search_error = None
+
+    client.delete_error = _TransportError(404)
+    with pytest.raises(OpenSearchOperationError) as delete:
+        driver.delete(
+            tenant_id="tenant-a",
+            source_id="source-primary",
+            resource_id="resource-a",
+        )
+    assert delete.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        {},
+        {"timed_out": False, "_shards": {"failed": 1}, "hits": {"hits": []}},
+        {"timed_out": False, "_shards": {"failed": 0}, "hits": {"hits": {}}},
+        {
+            "timed_out": False,
+            "_shards": {"failed": 0},
+            "hits": {"hits": [None] * 21},
+        },
+    ],
+)
+def test_opensearch_rejects_incomplete_or_partial_search_responses(
+    response: object,
+) -> None:
+    client = RecordingClient()
+    client.search_response = response
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.search(_query())
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "shape",
+        "id",
+        "acl",
+        "provenance",
+        "projection",
+        "locator",
+        "score",
+        "duplicate",
+    ],
+)
+def test_opensearch_rejects_corrupt_hits(mutation: str) -> None:
+    client = RecordingClient()
+    resource = _resource("resource-a")
+    hit: dict[str, object] = {
+        "_id": _document_id(resource),
+        "_score": 1.0,
+        "_source": _hit_source(resource),
+    }
+    raw_hits: list[object] = [hit]
+    if mutation == "shape":
+        raw_hits[0] = None
+    elif mutation == "id":
+        hit["_id"] = "wrong"
+    elif mutation == "acl":
+        hit["_source"]["acl"] = ["group:private"]  # type: ignore[index]
+    elif mutation == "provenance":
+        hit["_source"]["provenance"] = ["private-secret"]  # type: ignore[index]
+    elif mutation == "projection":
+        hit["_source"]["projection_version"] = True  # type: ignore[index]
+    elif mutation == "locator":
+        hit["_source"]["authoritative_locator"] = ""  # type: ignore[index]
+    elif mutation == "score":
+        hit["_score"] = float("nan")
+    elif mutation == "duplicate":
+        raw_hits.append(dict(hit))
+    client.search_response = {
+        "timed_out": False,
+        "_shards": {"failed": 0},
+        "hits": {"hits": raw_hits},
+    }
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.search(_query())
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert "private-secret" not in str(captured.value)
+
+
+def test_opensearch_rejects_corrupt_delete_acknowledgement() -> None:
+    client = RecordingClient()
+    client.delete_response = {"_id": "wrong", "result": "deleted"}
+    driver = OpenSearchDriver(client, index="af-search")
+
+    with pytest.raises(OpenSearchOperationError) as captured:
+        driver.delete(
+            tenant_id="tenant-a",
+            source_id="source-primary",
+            resource_id="resource-a",
+        )
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+def test_opensearch_close_failure_preserves_cancellation() -> None:
+    client = RecordingClient()
+    driver = OpenSearchDriver(client, index="af-search")
+    client.close_error = _TransportError(500)
+    cancellation = OpenSearchOperationError(
+        PlatformReason.CANCELLED,
+        stage="search.test.cancel",
+    )
+
+    with pytest.raises(OpenSearchOperationError) as captured, driver:
+        raise cancellation
+
+    assert captured.value is cancellation
+    client.close_error = None
+    driver.close()
+    with pytest.raises(OpenSearchOperationError):
+        driver.__enter__()

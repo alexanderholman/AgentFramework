@@ -10,17 +10,17 @@ from types import ModuleType
 from uuid import uuid4
 
 import pytest
+
+from af.framework.errors import PlatformReason
+from af.framework.managers import CapabilityBinding, ConnectionRef, HealthStatus
+from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
+from af.search.manager import SearchDriver, SearchFeature
 from af.search.opensearch import (
     OpenSearchDriver,
     OpenSearchOperationError,
     opensearch_index_body,
 )
 from af.search.opensearch_manager import opensearch_registration
-
-from af.framework.errors import PlatformReason
-from af.framework.managers import CapabilityBinding, ConnectionRef, HealthStatus
-from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
-from af.search.manager import SearchDriver, SearchFeature
 from af.testing import ConformanceEvidence, RealServiceHook, SearchDriverConformanceSuite
 
 
@@ -43,9 +43,10 @@ def _module() -> ModuleType:
 
 
 def _client() -> object:
+    url = _url()
     constructor = _module().OpenSearch
     return constructor(
-        [_url()],
+        [url],
         http_compress=True,
         timeout=5.0,
         max_retries=0,

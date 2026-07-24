@@ -475,8 +475,11 @@ def test_python_workflow_uses_exact_push_before_and_event_head_checkout() -> Non
     assert "http.https://github.com/.extraheader" not in workflow_text
 
 
-@pytest.mark.parametrize("workflow_name", ["postgresql.yml", "mysql.yml", "mariadb.yml"])
-def test_relational_workflow_checks_out_exact_event_head(workflow_name: str) -> None:
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["postgresql.yml", "mysql.yml", "mariadb.yml", "opensearch.yml"],
+)
+def test_service_workflow_checks_out_exact_event_head(workflow_name: str) -> None:
     workflow_path = REPO_ROOT / ".github" / "workflows" / workflow_name
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
     job = workflow["jobs"]["integration"]
@@ -489,3 +492,23 @@ def test_relational_workflow_checks_out_exact_event_head(workflow_name: str) -> 
     )
     assert head_step["with"]["fetch-depth"] == 0
     assert head_step["with"]["persist-credentials"] is False
+
+
+def test_opensearch_workflow_pins_real_service_and_client() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "opensearch.yml"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    job = workflow["jobs"]["integration"]
+
+    assert job["services"]["opensearch"]["image"] == (
+        "opensearchproject/opensearch:3.7.0@"
+        "sha256:44ba7ea58a319adf61c33ab16873f9ef5dbb30b291a832d375172f0b2d24e3c9"
+    )
+    assert job["env"]["AF_OPENSEARCH_TEST_VERSION"] == "3.7.0"
+    integration = next(
+        step
+        for step in job["steps"]
+        if step["name"] == "Run OpenSearch 3.7 real-service certification"
+    )
+    assert 'uv run --with "opensearch-py==3.2.0"' in integration["run"]
+    assert "unset AF_OPENSEARCH_TEST_URL AF_OPENSEARCH_TEST_VERSION" in workflow_text

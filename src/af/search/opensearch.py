@@ -1,0 +1,662 @@
+"""Bounded OpenSearch lexical driver with mandatory policy pushdown."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+from contextlib import AbstractContextManager
+from threading import RLock
+from types import TracebackType
+from typing import Literal, Protocol
+
+from af.framework.errors import PlatformError, PlatformReason
+from af.search.contracts import ResourceEnvelope, SearchHit, SearchQuery
+
+__all__ = (
+    "OpenSearchDriver",
+    "OpenSearchOperationError",
+    "opensearch_index_body",
+)
+
+_INDEX = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,198}[a-z0-9])?$")
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,254}[A-Za-z0-9])?$")
+_SERVER_VERSION = re.compile(r"^3\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+_UNSAFE_TEXT = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+_SUPPORTED_FILTERS = frozenset({"tenant_id", "acl"})
+_SOURCE_FIELDS = (
+    "resource_id",
+    "source_id",
+    "authoritative_locator",
+    "tenant_id",
+    "projection_version",
+    "acl",
+    "provenance",
+)
+_MAX_BATCH = 10_000
+_MAX_BULK_ITEMS = 256
+_MAX_BULK_BYTES = 9_000_000
+_MAX_LONG = 9_223_372_036_854_775_807
+
+
+class OpenSearchOperationError(PlatformError):
+    """Sanitized OpenSearch operation failure."""
+
+
+def _failure(
+    reason: PlatformReason,
+    *,
+    stage: str,
+    protected_cause: BaseException | None = None,
+) -> OpenSearchOperationError:
+    return OpenSearchOperationError(
+        reason,
+        stage=stage,
+        protected_cause=protected_cause,
+    )
+
+
+def _index_name(value: object) -> str:
+    if type(value) is not str or _INDEX.fullmatch(value) is None:
+        raise ValueError("OpenSearch index name must be canonical lowercase text")
+    return value
+
+
+def _identity(value: object) -> str:
+    if type(value) is not str or _IDENTIFIER.fullmatch(value) is None:
+        raise ValueError("search identity must be canonical")
+    return value
+
+
+def _timeout(value: object) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not 0 < float(value) <= 60.0
+    ):
+        raise ValueError("OpenSearch request timeout is invalid")
+    return float(value)
+
+
+def opensearch_index_body() -> dict[str, object]:
+    """Return the strict mapping required by the AF OpenSearch driver."""
+
+    return {
+        "mappings": {
+            "dynamic": "strict",
+            "_meta": {"af_schema_version": "1"},
+            "properties": {
+                "resource_id": {"type": "keyword"},
+                "kind": {"type": "keyword"},
+                "source_id": {"type": "keyword"},
+                "authoritative_locator": {"type": "keyword", "index": False},
+                "tenant_id": {"type": "keyword"},
+                "projection_version": {"type": "long"},
+                "acl": {"type": "keyword"},
+                "provenance": {"type": "keyword", "index": False},
+                "text": {"type": "text"},
+                "attributes": {"type": "object", "enabled": False},
+            },
+        }
+    }
+
+
+class OpenSearchIndicesClient(Protocol):
+    """Typed subset of the optional client's index namespace."""
+
+    def get_mapping(
+        self,
+        *,
+        index: object,
+        params: object = None,
+        headers: object = None,
+    ) -> object: ...
+
+
+class OpenSearchClient(Protocol):
+    """Typed subset of opensearch-py used by the trusted adapter."""
+
+    indices: OpenSearchIndicesClient
+
+    def info(
+        self,
+        *,
+        params: object = None,
+        headers: object = None,
+    ) -> object: ...
+
+    def bulk(
+        self,
+        *,
+        body: object,
+        index: object = None,
+        params: object = None,
+        headers: object = None,
+    ) -> object: ...
+
+    def search(
+        self,
+        *,
+        body: object = None,
+        index: object = None,
+        params: object = None,
+        headers: object = None,
+    ) -> object: ...
+
+    def delete(
+        self,
+        *,
+        index: object,
+        id: object,
+        params: object = None,
+        headers: object = None,
+    ) -> object: ...
+
+    def close(self) -> None: ...
+
+
+def _mapping(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _status_code(error: Exception) -> int | None:
+    try:
+        value = getattr(error, "status_code", None)
+    except BaseException:
+        return None
+    if type(value) is int:
+        return value
+    return None
+
+
+def _operation_reason(error: Exception) -> PlatformReason:
+    status = _status_code(error)
+    if status in {401, 403}:
+        return PlatformReason.AUTHORIZATION_DENIED
+    if status == 404:
+        return PlatformReason.CAPABILITY_UNAVAILABLE
+    if status in {408, 429} or (status is not None and status >= 500):
+        return PlatformReason.TRANSIENT_FAILURE
+    return PlatformReason.PERMANENT_FAILURE
+
+
+def _call_failure(error: Exception, *, stage: str) -> OpenSearchOperationError:
+    return _failure(
+        _operation_reason(error),
+        stage=stage,
+        protected_cause=error,
+    )
+
+
+def _integrity(stage: str) -> OpenSearchOperationError:
+    return _failure(
+        PlatformReason.INTEGRITY_FAILURE,
+        stage=stage,
+        protected_cause=ValueError("OpenSearch acknowledgement is invalid"),
+    )
+
+
+def _document_id(tenant_id: str, source_id: str, resource_id: str) -> str:
+    payload = "\0".join(("af-search-document-v1", tenant_id, source_id, resource_id)).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _document(resource: ResourceEnvelope) -> dict[str, object]:
+    return {
+        "resource_id": resource.resource_id,
+        "kind": resource.kind.value,
+        "source_id": resource.source_id,
+        "authoritative_locator": resource.authoritative_locator,
+        "tenant_id": resource.tenant_id,
+        "projection_version": resource.projection_version,
+        "acl": list(resource.acl),
+        "provenance": list(resource.provenance),
+        "text": resource.text,
+        "attributes": dict(resource.attributes),
+    }
+
+
+def _encoded_bytes(value: Mapping[str, object]) -> int:
+    return (
+        len(
+            json.dumps(
+                value,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        )
+        + 1
+    )
+
+
+def _evidence(value: object, *, digest: bool = False) -> tuple[str, ...]:
+    if type(value) is not list or not value or len(value) > 256:
+        raise ValueError("OpenSearch hit evidence is invalid")
+    checked: list[str] = []
+    for item in value:
+        if (
+            type(item) is not str
+            or not item
+            or len(item) > 256
+            or _UNSAFE_TEXT.search(item) is not None
+            or (digest and _SHA256.fullmatch(item) is None)
+        ):
+            raise ValueError("OpenSearch hit evidence is invalid")
+        checked.append(item)
+    if len(set(checked)) != len(checked):
+        raise ValueError("OpenSearch hit evidence is invalid")
+    return tuple(checked)
+
+
+def _control_flow_rank(error: BaseException) -> int:
+    if not isinstance(error, Exception):
+        return 3
+    if isinstance(error, PlatformError):
+        if error.reason is PlatformReason.CANCELLED:
+            return 2
+        if error.reason is PlatformReason.SHUTDOWN_FAILED:
+            return 1
+    return 0
+
+
+class OpenSearchDriver(AbstractContextManager["OpenSearchDriver"]):
+    """OpenSearch 3 lexical adapter with fail-closed policy enforcement."""
+
+    def __init__(
+        self,
+        client: OpenSearchClient,
+        *,
+        index: str,
+        request_timeout: float = 5.0,
+    ) -> None:
+        self._client = client
+        self._index = _index_name(index)
+        self._request_timeout = _timeout(request_timeout)
+        self._lock = RLock()
+        self._closed = False
+        self._closing = False
+        self._server_version = self._verify_service()
+        self._verify_mapping()
+
+    @property
+    def server_version(self) -> str:
+        """Return the verified OpenSearch service version."""
+
+        return self._server_version
+
+    def _verify_service(self) -> str:
+        try:
+            response = self._client.info(params={"request_timeout": self._request_timeout})
+        except Exception as error:
+            raise _call_failure(error, stage="search.opensearch.connect") from None
+        root = _mapping(response)
+        version = None if root is None else _mapping(root.get("version"))
+        distribution = None if version is None else version.get("distribution")
+        number = None if version is None else version.get("number")
+        if (
+            distribution != "opensearch"
+            or type(number) is not str
+            or _SERVER_VERSION.fullmatch(number) is None
+        ):
+            raise _failure(
+                PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="search.opensearch.identity",
+            )
+        return number
+
+    def _verify_mapping(self) -> None:
+        try:
+            response = self._client.indices.get_mapping(
+                index=self._index,
+                params={"request_timeout": self._request_timeout},
+            )
+        except Exception as error:
+            raise _call_failure(error, stage="search.opensearch.mapping") from None
+        root = _mapping(response)
+        if root is None or len(root) != 1:
+            raise _failure(
+                PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="search.opensearch.mapping",
+            )
+        record = _mapping(next(iter(root.values())))
+        mappings = None if record is None else _mapping(record.get("mappings"))
+        expected = opensearch_index_body()["mappings"]
+        if mappings is None or dict(mappings) != expected:
+            raise _failure(
+                PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="search.opensearch.mapping",
+            )
+
+    def _assert_open(self) -> None:
+        if self._closed or self._closing:
+            raise _failure(
+                PlatformReason.SHUTDOWN_FAILED,
+                stage="search.opensearch.connection",
+            )
+
+    @staticmethod
+    def _validate_resources(
+        resources: tuple[ResourceEnvelope, ...],
+    ) -> tuple[tuple[str, str, str], ...]:
+        if (
+            type(resources) is not tuple
+            or not resources
+            or len(resources) > _MAX_BATCH
+            or any(not isinstance(item, ResourceEnvelope) for item in resources)
+        ):
+            raise ValueError("search resources must be a bounded non-empty tuple")
+        identities = tuple((item.tenant_id, item.source_id, item.resource_id) for item in resources)
+        if len(set(identities)) != len(identities):
+            raise ValueError("search resource identities must be unique")
+        if any(item.projection_version > _MAX_LONG for item in resources):
+            raise _failure(
+                PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="search.opensearch.projection-version",
+            )
+        return identities
+
+    def upsert(self, resources: tuple[ResourceEnvelope, ...], /) -> int:
+        """Write bounded idempotent chunks and acknowledge only complete success."""
+
+        self._validate_resources(resources)
+        with self._lock:
+            self._assert_open()
+            chunk_resources: list[ResourceEnvelope] = []
+            chunk_body: list[Mapping[str, object]] = []
+            chunk_bytes = 0
+            for resource in resources:
+                document_id = _document_id(
+                    resource.tenant_id,
+                    resource.source_id,
+                    resource.resource_id,
+                )
+                action: Mapping[str, object] = {"index": {"_id": document_id}}
+                document = _document(resource)
+                item_bytes = _encoded_bytes(action) + _encoded_bytes(document)
+                if chunk_resources and (
+                    len(chunk_resources) >= _MAX_BULK_ITEMS
+                    or chunk_bytes + item_bytes > _MAX_BULK_BYTES
+                ):
+                    self._write_chunk(tuple(chunk_resources), tuple(chunk_body))
+                    chunk_resources.clear()
+                    chunk_body.clear()
+                    chunk_bytes = 0
+                chunk_resources.append(resource)
+                chunk_body.extend((action, document))
+                chunk_bytes += item_bytes
+            if chunk_resources:
+                self._write_chunk(tuple(chunk_resources), tuple(chunk_body))
+        return len(resources)
+
+    def _write_chunk(
+        self,
+        resources: tuple[ResourceEnvelope, ...],
+        body: tuple[Mapping[str, object], ...],
+    ) -> None:
+        try:
+            response = self._client.bulk(
+                index=self._index,
+                body=body,
+                params={
+                    "refresh": "wait_for",
+                    "request_timeout": self._request_timeout,
+                },
+            )
+        except Exception as error:
+            raise _call_failure(error, stage="search.opensearch.bulk") from None
+        root = _mapping(response)
+        items = None if root is None else root.get("items")
+        errors = None if root is None else root.get("errors")
+        if type(errors) is not bool or type(items) is not list or len(items) != len(resources):
+            raise _integrity("search.opensearch.bulk-ack")
+        failed_statuses: list[int] = []
+        for resource, item in zip(resources, items, strict=True):
+            item_record = _mapping(item)
+            acknowledgement = None if item_record is None else _mapping(item_record.get("index"))
+            expected_id = _document_id(
+                resource.tenant_id,
+                resource.source_id,
+                resource.resource_id,
+            )
+            status = None if acknowledgement is None else acknowledgement.get("status")
+            document_id = None if acknowledgement is None else acknowledgement.get("_id")
+            if type(status) is not int or document_id != expected_id:
+                raise _integrity("search.opensearch.bulk-ack")
+            if not 200 <= status < 300:
+                failed_statuses.append(status)
+        if errors != bool(failed_statuses):
+            raise _integrity("search.opensearch.bulk-ack")
+        if failed_statuses:
+            transient = all(status in {408, 429} or status >= 500 for status in failed_statuses)
+            raise _failure(
+                (
+                    PlatformReason.TRANSIENT_FAILURE
+                    if transient
+                    else PlatformReason.PERMANENT_FAILURE
+                ),
+                stage="search.opensearch.bulk-partial",
+            )
+
+    def search(self, query: SearchQuery, /) -> tuple[SearchHit, ...]:
+        """Search only when tenant and ACL predicates can be pushed before ranking."""
+
+        if not isinstance(query, SearchQuery):
+            raise TypeError("OpenSearch requires a SearchQuery")
+        fields = frozenset(item.field for item in query.filters)
+        tenant_ids = query.required_filter("tenant_id")
+        requested_acl = query.required_filter("acl")
+        if fields != _SUPPORTED_FILTERS or tenant_ids is None or requested_acl is None:
+            raise _failure(
+                PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="search.opensearch.policy-pushdown",
+            )
+        timeout_seconds = min(self._request_timeout, query.deadline_ms / 1_000)
+        body: Mapping[str, object] = {
+            "_source": list(_SOURCE_FIELDS),
+            "query": {
+                "bool": {
+                    "must": [
+                        {
+                            "match": {
+                                "text": {
+                                    "query": query.text,
+                                    "operator": "and",
+                                }
+                            }
+                        }
+                    ],
+                    "filter": [
+                        {"terms": {"tenant_id": list(tenant_ids)}},
+                        {"terms": {"acl": list(requested_acl)}},
+                    ],
+                }
+            },
+            "size": query.limit,
+            "sort": [
+                {"_score": "desc"},
+                {"resource_id": "asc"},
+                {"source_id": "asc"},
+                {"tenant_id": "asc"},
+            ],
+            "timeout": f"{query.deadline_ms}ms",
+            "track_total_hits": False,
+        }
+        with self._lock:
+            self._assert_open()
+            try:
+                response = self._client.search(
+                    index=self._index,
+                    body=body,
+                    params={
+                        "allow_partial_search_results": "false",
+                        "request_timeout": timeout_seconds,
+                    },
+                )
+            except Exception as error:
+                raise _call_failure(error, stage="search.opensearch.query") from None
+        return self._hits(
+            response,
+            query=query,
+            tenant_ids=tenant_ids,
+            requested_acl=requested_acl,
+        )
+
+    @staticmethod
+    def _hits(
+        response: object,
+        *,
+        query: SearchQuery,
+        tenant_ids: tuple[str, ...],
+        requested_acl: tuple[str, ...],
+    ) -> tuple[SearchHit, ...]:
+        root = _mapping(response)
+        shards = None if root is None else _mapping(root.get("_shards"))
+        hits_record = None if root is None else _mapping(root.get("hits"))
+        raw_hits = None if hits_record is None else hits_record.get("hits")
+        failed_shards = None if shards is None else shards.get("failed")
+        if (
+            root is None
+            or type(root.get("timed_out")) is not bool
+            or root.get("timed_out")
+            or type(failed_shards) is not int
+            or failed_shards != 0
+            or type(raw_hits) is not list
+            or len(raw_hits) > query.limit
+        ):
+            if root is not None and root.get("timed_out") is True:
+                raise _failure(
+                    PlatformReason.CANCELLED,
+                    stage="search.opensearch.query-timeout",
+                )
+            raise _integrity("search.opensearch.query-ack")
+        allowed_tenants = frozenset(tenant_ids)
+        allowed_acl = frozenset(requested_acl)
+        identities: set[tuple[str, str, str]] = set()
+        results: list[SearchHit] = []
+        try:
+            for rank, raw_hit in enumerate(raw_hits, start=1):
+                hit_record = _mapping(raw_hit)
+                source = None if hit_record is None else _mapping(hit_record.get("_source"))
+                if hit_record is None or source is None:
+                    raise ValueError("OpenSearch hit shape is invalid")
+                resource_id = source.get("resource_id")
+                source_id = source.get("source_id")
+                tenant_id = source.get("tenant_id")
+                if (
+                    type(resource_id) is not str
+                    or type(source_id) is not str
+                    or type(tenant_id) is not str
+                    or tenant_id not in allowed_tenants
+                    or hit_record.get("_id") != _document_id(tenant_id, source_id, resource_id)
+                ):
+                    raise ValueError("OpenSearch hit identity is invalid")
+                stored_acl = _evidence(source.get("acl"))
+                acl_evidence = tuple(value for value in stored_acl if value in allowed_acl)
+                if not acl_evidence:
+                    raise ValueError("OpenSearch hit ACL evidence is invalid")
+                provenance = _evidence(source.get("provenance"), digest=True)
+                projection_version = source.get("projection_version")
+                if type(projection_version) is not int or not 1 <= projection_version <= _MAX_LONG:
+                    raise ValueError("OpenSearch projection version is invalid")
+                identity = (tenant_id, source_id, resource_id)
+                if identity in identities:
+                    raise ValueError("OpenSearch returned a duplicate identity")
+                identities.add(identity)
+                results.append(
+                    SearchHit(
+                        resource_id=resource_id,
+                        source_id=source_id,
+                        authoritative_locator=source.get("authoritative_locator"),  # type: ignore[arg-type]
+                        tenant_id=tenant_id,
+                        projection_version=projection_version,
+                        acl_evidence=acl_evidence,
+                        provenance=provenance,
+                        score=hit_record.get("_score"),  # type: ignore[arg-type]
+                        rank=rank,
+                    )
+                )
+        except (TypeError, ValueError) as error:
+            raise _failure(
+                PlatformReason.INTEGRITY_FAILURE,
+                stage="search.opensearch.hit",
+                protected_cause=error,
+            ) from None
+        return tuple(results)
+
+    def delete(self, *, tenant_id: str, source_id: str, resource_id: str) -> bool:
+        """Delete one tenant-scoped stable document identity."""
+
+        tenant_id = _identity(tenant_id)
+        source_id = _identity(source_id)
+        resource_id = _identity(resource_id)
+        document_id = _document_id(tenant_id, source_id, resource_id)
+        with self._lock:
+            self._assert_open()
+            try:
+                response = self._client.delete(
+                    index=self._index,
+                    id=document_id,
+                    params={
+                        "ignore": 404,
+                        "refresh": "wait_for",
+                        "request_timeout": self._request_timeout,
+                    },
+                )
+            except Exception as error:
+                raise _call_failure(error, stage="search.opensearch.delete") from None
+        root = _mapping(response)
+        result = None if root is None else root.get("result")
+        acknowledged_id = None if root is None else root.get("_id")
+        if acknowledged_id != document_id or result not in {"deleted", "not_found"}:
+            raise _integrity("search.opensearch.delete-ack")
+        return result == "deleted"
+
+    def cancel(self) -> None:
+        """Report the unsupported boundary without claiming server cancellation."""
+
+        raise _failure(
+            PlatformReason.CAPABILITY_UNAVAILABLE,
+            stage="search.opensearch.cancel",
+        )
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed or self._closing:
+                return
+            self._closing = True
+            try:
+                self._client.close()
+            except Exception as error:
+                raise _failure(
+                    PlatformReason.SHUTDOWN_FAILED,
+                    stage="search.opensearch.shutdown",
+                    protected_cause=error,
+                ) from None
+            else:
+                self._closed = True
+            finally:
+                self._closing = False
+
+    def __enter__(self) -> OpenSearchDriver:
+        self._assert_open()
+        return self
+
+    def __exit__(
+        self,
+        error_type: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
+        del error_type, traceback
+        try:
+            self.close()
+        except BaseException as close_error:
+            if error is not None and _control_flow_rank(close_error) <= _control_flow_rank(error):
+                return False
+            raise
+        return False
