@@ -35,7 +35,7 @@ dev = [
 ]
 
 [project.scripts]
-af = "af.interfaces.cli:app"
+af = "af.interfaces.console:app"
 af-mcp = "af.interfaces.mcp:main"
 
 [tool.hatch.build.targets.wheel]
