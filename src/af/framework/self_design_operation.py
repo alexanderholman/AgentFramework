@@ -19,6 +19,7 @@ class DesignEvidenceProvider(Protocol):
 
     def capture_snapshot(self) -> DesignSnapshot:
         """Capture the exact evidence used for one bounded planning cycle."""
+        ...
 
 
 class SelfDesignOperation:
