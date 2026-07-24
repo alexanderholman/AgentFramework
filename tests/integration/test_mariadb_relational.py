@@ -33,9 +33,7 @@ def _url() -> str:
 
 
 def test_mariadb_server_identity_is_verified() -> None:
-    with MariaDBDriver(_url()) as driver, driver.transaction(
-        read_only=True
-    ) as transaction:
+    with MariaDBDriver(_url()) as driver, driver.transaction(read_only=True) as transaction:
         rows = transaction.query(
             DatabaseStatement("SELECT VERSION() AS version", read_only=True)
         )
