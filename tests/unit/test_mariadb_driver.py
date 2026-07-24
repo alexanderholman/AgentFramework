@@ -144,9 +144,11 @@ def test_mariadb_transaction_contract_fails_closed_and_recovers(
         driver.transaction(read_only=cast(bool, 1))
 
     with driver.transaction() as transaction:
-        with pytest.raises(DatabaseOperationError) as nested:
-            with driver.transaction():
-                pass
+        with (
+            pytest.raises(DatabaseOperationError) as nested,
+            driver.transaction(),
+        ):
+            pass
         assert nested.value.reason is PlatformReason.TRANSIENT_FAILURE
         with pytest.raises(ValueError, match="canonical"):
             transaction.savepoint("not-canonical!")
@@ -162,9 +164,8 @@ def test_mariadb_transaction_contract_fails_closed_and_recovers(
     driver.cancel()
     driver.close()
     driver.cancel()
-    with pytest.raises(DatabaseOperationError) as closed:
-        with driver:
-            pass
+    with pytest.raises(DatabaseOperationError) as closed, driver:
+        pass
     assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
