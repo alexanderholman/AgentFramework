@@ -26,9 +26,9 @@ from af.testing import ConformanceEvidence, RealServiceHook, RelationalDriverCon
 
 
 def _url() -> str:
-    value = os.environ.get("AF_POSTGRESQL_TEST_URL")
+    value = os.environ.get("AF_MYSQL_TEST_URL")
     if value is None:
-        pytest.skip("AF_POSTGRESQL_TEST_URL is not configured")
+        pytest.skip("AF_MYSQL_TEST_URL is not configured")
     return value
 
 
