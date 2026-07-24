@@ -826,7 +826,7 @@ def test_initializer_rejects_ambiguous_upstream_url_configuration(
 
     with pytest.raises(
         VersionControlInitializationError,
-        match="(?:upstream remote|repository Git) configuration is invalid",
+        match=r"(?:upstream remote|repository Git) configuration is invalid",
     ):
         GitVersionControlBackend().initialize(VersionControlRequest(cwd=repository))
     assert not (repository / ".git" / "af").exists()
@@ -1002,7 +1002,7 @@ def test_initializer_sanitizes_subprocess_execution_failure(
     monkeypatch.setattr(git_version_control_module.subprocess, "run", fail_execution)
     with pytest.raises(
         VersionControlInitializationError,
-        match="^Git version-control initialization failed$",
+        match=r"^Git version-control initialization failed$",
     ):
         backend.initialize(VersionControlRequest(cwd=repository))
 
