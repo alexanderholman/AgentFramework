@@ -103,18 +103,14 @@ class RepositoryObservation:
             "branch",
             _bounded_line(self.branch, label="branch", maximum=_BRANCH_MAX_LENGTH),
         )
-        if not isinstance(self.object_format, GitObjectFormat):
-            try:
-                object.__setattr__(
-                    self,
-                    "object_format",
-                    GitObjectFormat(self.object_format),
-                )
-            except (TypeError, ValueError):
-                raise ValueError("Git object format is invalid") from None
+        try:
+            object_format = GitObjectFormat(self.object_format)
+        except (TypeError, ValueError):
+            raise ValueError("Git object format is invalid") from None
+        object.__setattr__(self, "object_format", object_format)
         head_sha = _bounded_line(self.head_sha, label="HEAD SHA", maximum=64)
         if _HEAD_PATTERN.fullmatch(head_sha) is None or len(head_sha) != (
-            40 if self.object_format is GitObjectFormat.SHA1 else 64
+            40 if object_format is GitObjectFormat.SHA1 else 64
         ):
             raise ValueError("HEAD SHA is invalid")
         object.__setattr__(self, "head_sha", head_sha)
