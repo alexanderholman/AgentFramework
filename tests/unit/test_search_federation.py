@@ -338,6 +338,30 @@ def test_federator_rejects_invalid_router_clock_and_query() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tenant_id", "bad tenant"),
+        ("source_id", "bad/source"),
+        ("resource_id", ""),
+    ],
+)
+def test_federation_explanation_rejects_noncanonical_identity(
+    field: str,
+    value: str,
+) -> None:
+    values: dict[str, object] = {
+        "tenant_id": "tenant-a",
+        "source_id": "source-primary",
+        "resource_id": "resource-a",
+        "contributions": (FederationContribution("alpha", 1, 0.5),),
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError, match="must be canonical"):
+        FederationExplanation(**values)  # type: ignore[arg-type]
+
+
 def test_federation_value_contracts_reject_invalid_evidence() -> None:
     hit = _hit("resource-a", rank=1)
     contribution = FederationContribution("alpha", 1, 0.5)
