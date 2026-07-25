@@ -419,6 +419,15 @@ def test_federated_result_rejects_contradictory_source_and_identity_evidence() -
             searched_sources=("alpha",),
             failures=(FederationFailure("alpha", PlatformReason.CANCELLED),),
         )
+    with pytest.raises(ValueError, match="source outcomes exceed"):
+        FederatedSearchResult(
+            hits=(),
+            explanations=(),
+            searched_sources=tuple(f"source-{index}" for index in range(16)),
+            failures=(
+                FederationFailure("overflow", PlatformReason.PERMANENT_FAILURE),
+            ),
+        )
     with pytest.raises(ValueError, match="contribution sources"):
         FederatedSearchResult(
             hits=(hit,),
