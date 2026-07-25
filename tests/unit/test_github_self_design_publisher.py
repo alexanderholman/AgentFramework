@@ -38,7 +38,9 @@ from af.framework.version_control import (
     VersionControlManifest,
 )
 from af.infrastructure.github_self_design import (
+    GitHubCommentPublication,
     GitHubDesignPublisher,
+    GitHubIssueComment,
     GitHubIssueState,
     GitHubIssueStatus,
 )
@@ -249,11 +251,22 @@ def _issue(
 class RecordingGitHubClient:
     def __init__(self, current: GitHubIssueState | None = None) -> None:
         self.current = current or _issue()
+        self.comment: GitHubIssueComment | None = None
         self.calls: list[tuple[object, ...]] = []
 
     def get_issue(self, repository: str, issue_number: int) -> GitHubIssueState:
         self.calls.append(("get", repository, issue_number))
         return self.current
+
+    def get_issue_comment(
+        self,
+        repository: str,
+        issue_number: int,
+        comment_id: int,
+    ) -> GitHubIssueComment:
+        self.calls.append(("get-comment", repository, issue_number, comment_id))
+        assert self.comment is not None
+        return self.comment
 
     def create_issue(
         self,
@@ -283,7 +296,7 @@ class RecordingGitHubClient:
         body: str,
         expected_revision: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
+    ) -> GitHubCommentPublication:
         self.calls.append(
             (
                 "comment",
@@ -294,12 +307,20 @@ class RecordingGitHubClient:
                 idempotency_key,
             )
         )
+        updated_at = self.current.updated_at + timedelta(seconds=1)
         self.current = replace(
             self.current,
-            updated_at=self.current.updated_at + timedelta(seconds=1),
+            updated_at=updated_at,
             comment_count=self.current.comment_count + 1,
         )
-        return self.current
+        self.comment = GitHubIssueComment(
+            repository=repository,
+            issue_number=issue_number,
+            comment_id=9001,
+            body=body,
+            updated_at=updated_at,
+        )
+        return GitHubCommentPublication(issue=self.current, comment=self.comment)
 
 
 def test_issue_revision_is_canonical_and_evidence_complete() -> None:
@@ -364,8 +385,69 @@ def test_comment_rechecks_target_and_passes_exact_precondition(tmp_path: Path) -
             current.revision,
             request.draft.digest,
         ),
+        ("get-comment", _REPOSITORY, 124, 9001),
         ("get", _REPOSITORY, 124),
     ]
+
+
+def test_comment_rejects_wrong_returned_body(tmp_path: Path) -> None:
+    current = _issue()
+    request = _request(
+        tmp_path,
+        DesignUnitKind.ACCEPTANCE_REPAIR,
+        expected_target_revision=current.revision,
+    )
+    client = RecordingGitHubClient(current)
+    original_add = client.add_issue_comment
+
+    def wrong_body_comment(
+        repository: str,
+        issue_number: int,
+        *,
+        body: str,
+        expected_revision: str,
+        idempotency_key: str,
+    ) -> GitHubCommentPublication:
+        publication = original_add(
+            repository,
+            issue_number,
+            body=body,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+        return replace(
+            publication,
+            comment=replace(publication.comment, body="different comment"),
+        )
+
+    client.add_issue_comment = wrong_body_comment  # type: ignore[method-assign]
+
+    with pytest.raises(DesignPublicationError, match="comment result is inconsistent"):
+        GitHubDesignPublisher(client, _REPOSITORY).publish(request)
+
+
+def test_comment_rejects_post_publication_readback_drift(tmp_path: Path) -> None:
+    current = _issue()
+    request = _request(
+        tmp_path,
+        DesignUnitKind.ACCEPTANCE_REPAIR,
+        expected_target_revision=current.revision,
+    )
+    client = RecordingGitHubClient(current)
+    original_get = client.get_issue_comment
+
+    def drifted_comment(
+        repository: str,
+        issue_number: int,
+        comment_id: int,
+    ) -> GitHubIssueComment:
+        comment = original_get(repository, issue_number, comment_id)
+        return replace(comment, body="drifted comment")
+
+    client.get_issue_comment = drifted_comment  # type: ignore[method-assign]
+
+    with pytest.raises(DesignPublicationError, match="comment readback drifted"):
+        GitHubDesignPublisher(client, _REPOSITORY).publish(request)
 
 
 def test_stale_target_stops_before_comment_effect(tmp_path: Path) -> None:
