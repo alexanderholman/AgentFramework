@@ -275,7 +275,14 @@ class GitHubDesignPublisher:
 
             self._verify_published_result(draft, published, current)
             if published_comment is not None:
-                self._verify_published_comment(draft, published, published_comment)
+                if current is None:
+                    raise TypeError("GitHub self-design publication target state is missing")
+                self._verify_published_comment(
+                    draft,
+                    current,
+                    published,
+                    published_comment,
+                )
                 observed_comment = self._client.get_issue_comment(
                     self._repository,
                     published.issue_number,
@@ -338,9 +345,12 @@ class GitHubDesignPublisher:
     def _verify_published_comment(
         self,
         draft: DesignPublicationDraft,
+        previous: GitHubIssueState,
         published: GitHubIssueState,
         comment: GitHubIssueComment,
     ) -> None:
+        if not isinstance(previous, GitHubIssueState):
+            raise TypeError("GitHub self-design publication target state is missing")
         if not isinstance(comment, GitHubIssueComment):
             raise TypeError("GitHub self-design comment evidence is invalid")
         if (
@@ -349,6 +359,11 @@ class GitHubDesignPublisher:
             or comment.body != draft.body
         ):
             raise DesignPublicationError("GitHub self-design comment result is inconsistent")
+        if (
+            comment.updated_at < previous.updated_at
+            or comment.updated_at > published.updated_at
+        ):
+            raise DesignPublicationError("GitHub self-design comment transition is inconsistent")
 
     def _verify_observed_comment(
         self,
