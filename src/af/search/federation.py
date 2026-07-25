@@ -134,7 +134,9 @@ class FederatedSearchResult:
             )
         ):
             raise ValueError("federation explanations are invalid")
-        _validate_sources(self.searched_sources, allow_empty=True)
+        searched_sources = frozenset(
+            _validate_sources(self.searched_sources, allow_empty=True)
+        )
         if (
             type(self.failures) is not tuple
             or len(self.failures) > _MAX_SOURCES
@@ -143,13 +145,26 @@ class FederatedSearchResult:
             )
         ):
             raise ValueError("federation failures are invalid")
+        failure_sources = tuple(failure.source_name for failure in self.failures)
+        if len(set(failure_sources)) != len(failure_sources):
+            raise ValueError("federation failure sources must be unique")
+        if searched_sources.intersection(failure_sources):
+            raise ValueError("federation source outcomes must be disjoint")
         hit_identities = tuple(_identity(hit) for hit in self.hits)
         explanation_identities = tuple(
             (item.tenant_id, item.source_id, item.resource_id)
             for item in self.explanations
         )
+        if len(set(hit_identities)) != len(hit_identities):
+            raise ValueError("federated hit identities must be unique")
         if hit_identities != explanation_identities:
             raise ValueError("federation explanations do not match hits")
+        if any(
+            contribution.source_name not in searched_sources
+            for explanation in self.explanations
+            for contribution in explanation.contributions
+        ):
+            raise ValueError("federation contribution sources were not searched")
 
     @property
     def complete(self) -> bool:
