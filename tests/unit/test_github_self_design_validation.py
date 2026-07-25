@@ -26,6 +26,7 @@ def _issue_values() -> dict[str, object]:
         "status": GitHubIssueStatus.OPEN,
         "updated_at": _UPDATED_AT,
         "comment_count": 2,
+        "latest_comment_id": 8999,
     }
 
 
@@ -49,6 +50,7 @@ def _comment_values() -> dict[str, object]:
         ("status", "open", TypeError, "issue status"),
         ("updated_at", datetime(2026, 7, 25, 4, 30), ValueError, "timezone aware"),
         ("comment_count", -1, ValueError, "comment count"),
+        ("latest_comment_id", 0, ValueError, "latest comment identity"),
     ),
 )
 def test_issue_state_rejects_invalid_external_evidence(
@@ -61,6 +63,17 @@ def test_issue_state_rejects_invalid_external_evidence(
     values[field] = value
 
     with pytest.raises(error_type, match=message):
+        GitHubIssueState(**values)  # type: ignore[arg-type]
+
+
+def test_issue_state_rejects_comment_count_watermark_mismatch() -> None:
+    values = _issue_values()
+    values.update(comment_count=0, latest_comment_id=8999)
+    with pytest.raises(ValueError, match="watermark is inconsistent"):
+        GitHubIssueState(**values)  # type: ignore[arg-type]
+
+    values.update(comment_count=1, latest_comment_id=None)
+    with pytest.raises(ValueError, match="watermark is inconsistent"):
         GitHubIssueState(**values)  # type: ignore[arg-type]
 
 
