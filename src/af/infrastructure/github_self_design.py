@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from af.framework.self_design_publication import (
+    DesignPublicationDraft,
     DesignPublicationEffect,
     DesignPublicationError,
     DesignPublicationReceipt,
@@ -162,6 +163,7 @@ class GitHubDesignPublisher:
 
         self._verify_local_record(request)
         draft = request.draft
+        current: GitHubIssueState | None = None
         try:
             if draft.effect is DesignPublicationEffect.CREATE_ISSUE:
                 assert draft.title is not None
@@ -193,13 +195,7 @@ class GitHubDesignPublisher:
         except Exception as error:
             raise DesignPublicationError("GitHub self-design publication failed") from error
 
-        if not isinstance(published, GitHubIssueState):
-            raise TypeError("GitHub self-design issue client returned invalid state")
-        expected_number = draft.target_issue_number
-        if published.repository != self._repository or (
-            expected_number is not None and published.issue_number != expected_number
-        ):
-            raise DesignPublicationError("GitHub self-design publication result is misbound")
+        self._verify_published_result(draft, published, current)
         return DesignPublicationReceipt(
             status=DesignPublicationStatus.PUBLISHED,
             effect=draft.effect,
@@ -208,6 +204,45 @@ class GitHubDesignPublisher:
             target_revision=published.revision,
             draft_digest=draft.digest,
         )
+
+    def _verify_published_result(
+        self,
+        draft: DesignPublicationDraft,
+        published: GitHubIssueState,
+        previous: GitHubIssueState | None,
+    ) -> None:
+        if not isinstance(published, GitHubIssueState):
+            raise TypeError("GitHub self-design issue client returned invalid state")
+        expected_number = draft.target_issue_number
+        if published.repository != self._repository or (
+            expected_number is not None and published.issue_number != expected_number
+        ):
+            raise DesignPublicationError("GitHub self-design publication result is misbound")
+
+        if draft.effect is DesignPublicationEffect.CREATE_ISSUE:
+            if (
+                published.title != draft.title
+                or published.body != draft.body
+                or published.status is not GitHubIssueStatus.OPEN
+                or published.comment_count != 0
+            ):
+                raise DesignPublicationError(
+                    "GitHub self-design issue creation result is inconsistent"
+                )
+            return
+
+        if previous is None:
+            raise TypeError("GitHub self-design publication target state is missing")
+        if (
+            published.title != previous.title
+            or published.body != previous.body
+            or published.status is not previous.status
+            or published.comment_count != previous.comment_count + 1
+            or published.updated_at < previous.updated_at
+        ):
+            raise DesignPublicationError(
+                "GitHub self-design comment result is not append-only"
+            )
 
     def _verify_issue_binding(self, issue: GitHubIssueState, issue_number: int) -> None:
         if not isinstance(issue, GitHubIssueState):
