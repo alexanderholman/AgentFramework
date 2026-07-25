@@ -14,6 +14,7 @@ from af.framework.self_design_publication import (
 from af.infrastructure.github_self_design import (
     GitHubCommentPublication,
     GitHubDesignPublisher,
+    GitHubIssueCreation,
     GitHubIssueState,
     GitHubIssueStatus,
 )
@@ -26,6 +27,13 @@ class ClientShape:
     def get_issue(self, repository: str, issue_number: int) -> GitHubIssueState:
         raise AssertionError((repository, issue_number))
 
+    def get_issue_creation(
+        self,
+        repository: str,
+        issue_number: int,
+    ) -> GitHubIssueCreation:
+        raise AssertionError((repository, issue_number))
+
     def create_issue(
         self,
         repository: str,
@@ -33,7 +41,7 @@ class ClientShape:
         title: str,
         body: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
+    ) -> GitHubIssueCreation:
         raise AssertionError((repository, title, body, idempotency_key))
 
     def add_issue_comment(
