@@ -405,6 +405,28 @@ def test_comment_rechecks_target_and_passes_exact_precondition(tmp_path: Path) -
     ]
 
 
+def test_first_comment_advances_from_an_empty_watermark(tmp_path: Path) -> None:
+    current = _issue(comment_count=0, latest_comment_id=None)
+    request = _request(
+        tmp_path,
+        DesignUnitKind.ACCEPTANCE_REPAIR,
+        expected_target_revision=current.revision,
+    )
+    client = RecordingGitHubClient(current)
+
+    receipt = GitHubDesignPublisher(client, _REPOSITORY).publish(request)
+
+    assert receipt.issue_number == 124
+    assert client.current.comment_count == 1
+    assert client.current.latest_comment_id == 9001
+    assert client.comment is not None
+    assert client.comment.comment_id == 9001
+    assert client.calls[-2:] == [
+        ("get-comment", _REPOSITORY, 124, 9001),
+        ("get", _REPOSITORY, 124),
+    ]
+
+
 def test_comment_rejects_wrong_returned_body(tmp_path: Path) -> None:
     current = _issue()
     request = _request(
