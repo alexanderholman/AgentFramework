@@ -35,14 +35,16 @@ def _hit(
     locator: str | None = None,
     provenance: str = "a",
     highlights: tuple[str, ...] = (),
+    tenant_id: str = "tenant-a",
+    acl_evidence: tuple[str, ...] = ("group:research",),
 ) -> SearchHit:
     return SearchHit(
         resource_id=resource_id,
         source_id="source-primary",
         authoritative_locator=locator or f"af://source-primary/{resource_id}",
-        tenant_id="tenant-a",
+        tenant_id=tenant_id,
         projection_version=1,
-        acl_evidence=("group:research",),
+        acl_evidence=acl_evidence,
         provenance=("sha256:" + provenance * 64,),
         score=1.0 / rank,
         rank=rank,
@@ -231,6 +233,37 @@ def test_federator_fails_closed_on_contradictory_authority_evidence() -> None:
 
     assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
     assert "conflicting" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "acl_evidence"),
+    [
+        ("tenant-b", ("group:research",)),
+        ("tenant-a", ("group:other",)),
+    ],
+)
+def test_federator_fails_closed_when_returned_hits_violate_query_policy(
+    tenant_id: str,
+    acl_evidence: tuple[str, ...],
+) -> None:
+    router = Router(
+        {
+            "alpha": (
+                _hit(
+                    "unauthorized",
+                    rank=1,
+                    tenant_id=tenant_id,
+                    acl_evidence=acl_evidence,
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(FederationIntegrityError) as captured:
+        SearchFederator(router, sources=("alpha",)).search(_query())
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert "unauthorized" not in str(captured.value)
 
 
 def test_federator_limits_results_and_orders_ties_by_stable_identity() -> None:
