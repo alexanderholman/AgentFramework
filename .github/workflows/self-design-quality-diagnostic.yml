@@ -1,0 +1,63 @@
+name: Self-design quality diagnostic
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: af-self-design-quality-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: Capture exact quality-gate failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AF_APPEND_ONLY_BASE_REF: ${{ github.event.pull_request.base.sha }}
+      AF_APPEND_ONLY_HEAD_REF: ${{ github.event.pull_request.head.sha }}
+      AF_APPEND_ONLY_BASE_STRATEGY: merge-base
+      UV_LOCKED: "1"
+      UV_PYTHON: "3.12"
+    steps:
+      - name: Check out exact event head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Capture quality gate
+        shell: bash
+        run: |
+          set +e
+          python scripts/af_dev.py --action check --execute > quality-gate.log 2>&1
+          status=$?
+          printf '\nexit_status=%s\n' "$status" >> quality-gate.log
+          exit 0
+
+      - name: Upload diagnostic log
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: self-design-quality-gate-log
+          path: quality-gate.log
+          if-no-files-found: error
+          retention-days: 1
