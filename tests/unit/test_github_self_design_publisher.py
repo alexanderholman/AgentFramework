@@ -426,6 +426,47 @@ def test_comment_rejects_wrong_returned_body(tmp_path: Path) -> None:
         GitHubDesignPublisher(client, _REPOSITORY).publish(request)
 
 
+def test_comment_rejects_preexisting_same_body_comment_alias(tmp_path: Path) -> None:
+    current = _issue()
+    request = _request(
+        tmp_path,
+        DesignUnitKind.ACCEPTANCE_REPAIR,
+        expected_target_revision=current.revision,
+    )
+    client = RecordingGitHubClient(current)
+    original_add = client.add_issue_comment
+
+    def aliased_comment(
+        repository: str,
+        issue_number: int,
+        *,
+        body: str,
+        expected_revision: str,
+        idempotency_key: str,
+    ) -> GitHubCommentPublication:
+        publication = original_add(
+            repository,
+            issue_number,
+            body="different appended comment",
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+        previous_comment = GitHubIssueComment(
+            repository=repository,
+            issue_number=issue_number,
+            comment_id=8999,
+            body=body,
+            updated_at=current.updated_at - timedelta(seconds=1),
+        )
+        client.comment = previous_comment
+        return replace(publication, comment=previous_comment)
+
+    client.add_issue_comment = aliased_comment  # type: ignore[method-assign]
+
+    with pytest.raises(DesignPublicationError, match="comment transition is inconsistent"):
+        GitHubDesignPublisher(client, _REPOSITORY).publish(request)
+
+
 def test_comment_rejects_post_publication_readback_drift(tmp_path: Path) -> None:
     current = _issue()
     request = _request(
