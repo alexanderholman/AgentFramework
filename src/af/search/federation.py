@@ -331,11 +331,17 @@ class SearchFederator:
     ) -> None:
         if (
             type(hits) is not tuple
-            or len(hits) > 1_000
+            or len(hits) > query.limit
             or any(not isinstance(hit, SearchHit) for hit in hits)
         ):
             raise FederationIntegrityError(
                 protected_cause=ValueError("search source returned malformed hits")
+            )
+        if tuple(hit.rank for hit in hits) != tuple(range(1, len(hits) + 1)):
+            raise FederationIntegrityError(
+                protected_cause=ValueError(
+                    "search source returned noncanonical rank evidence"
+                )
             )
         tenant_filter = query.required_filter("tenant_id")
         acl_filter = query.required_filter("acl")
