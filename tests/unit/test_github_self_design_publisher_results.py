@@ -137,3 +137,27 @@ def test_comment_result_rejects_non_append_only_transition() -> None:
     ):
         with pytest.raises(DesignPublicationError, match="comment result is not append-only"):
             publisher._verify_published_result(draft, drifted, previous)
+
+
+def test_post_publication_readback_must_match_returned_revision() -> None:
+    publisher = GitHubDesignPublisher(ClientShape(), _REPOSITORY)
+    published = _issue(updated_at=_NOW + timedelta(seconds=1), comment_count=3)
+
+    publisher._verify_observed_result(published, published)
+
+    with pytest.raises(DesignPublicationError, match="post-publication state drifted"):
+        publisher._verify_observed_result(
+            published,
+            replace(published, comment_count=published.comment_count + 1),
+        )
+
+
+def test_post_publication_readback_rejects_misbound_state() -> None:
+    publisher = GitHubDesignPublisher(ClientShape(), _REPOSITORY)
+    published = _issue(issue_number=147, comment_count=0)
+
+    with pytest.raises(DesignPublicationError, match="target state is misbound"):
+        publisher._verify_observed_result(
+            published,
+            replace(published, issue_number=148),
+        )
