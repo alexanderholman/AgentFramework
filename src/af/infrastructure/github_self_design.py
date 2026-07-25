@@ -62,6 +62,7 @@ class GitHubIssueState:
     status: GitHubIssueStatus
     updated_at: datetime
     comment_count: int
+    latest_comment_id: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.repository) is not str or _REPOSITORY.fullmatch(self.repository) is None:
@@ -86,6 +87,12 @@ class GitHubIssueState:
         object.__setattr__(self, "updated_at", _aware_utc(self.updated_at))
         if type(self.comment_count) is not int or self.comment_count < 0:
             raise ValueError("GitHub issue comment count is invalid")
+        if self.latest_comment_id is not None and (
+            type(self.latest_comment_id) is not int or self.latest_comment_id < 1
+        ):
+            raise ValueError("GitHub issue latest comment identity is invalid")
+        if (self.comment_count == 0) is not (self.latest_comment_id is None):
+            raise ValueError("GitHub issue comment watermark is inconsistent")
 
     def canonical_json(self) -> str:
         """Return the deterministic external target representation."""
@@ -94,6 +101,7 @@ class GitHubIssueState:
                 "body": self.body,
                 "comment_count": self.comment_count,
                 "issue_number": self.issue_number,
+                "latest_comment_id": self.latest_comment_id,
                 "repository": self.repository,
                 "status": self.status.value,
                 "title": self.title,
@@ -338,6 +346,7 @@ class GitHubDesignPublisher:
             or published.body != previous.body
             or published.status is not previous.status
             or published.comment_count != previous.comment_count + 1
+            or published.latest_comment_id == previous.latest_comment_id
             or published.updated_at < previous.updated_at
         ):
             raise DesignPublicationError("GitHub self-design comment result is not append-only")
@@ -356,6 +365,8 @@ class GitHubDesignPublisher:
         if (
             comment.repository != self._repository
             or comment.issue_number != published.issue_number
+            or comment.comment_id != published.latest_comment_id
+            or comment.comment_id == previous.latest_comment_id
             or comment.body != draft.body
         ):
             raise DesignPublicationError("GitHub self-design comment result is inconsistent")
