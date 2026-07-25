@@ -240,9 +240,7 @@ class GitHubDesignPublisher:
             or published.comment_count != previous.comment_count + 1
             or published.updated_at < previous.updated_at
         ):
-            raise DesignPublicationError(
-                "GitHub self-design comment result is not append-only"
-            )
+            raise DesignPublicationError("GitHub self-design comment result is not append-only")
 
     def _verify_issue_binding(self, issue: GitHubIssueState, issue_number: int) -> None:
         if not isinstance(issue, GitHubIssueState):
