@@ -316,7 +316,7 @@ class SearchFederator:
     ) -> None:
         if (
             type(hits) is not tuple
-            or len(hits) > query.limit
+            or len(hits) > 1_000
             or any(not isinstance(hit, SearchHit) for hit in hits)
         ):
             raise FederationIntegrityError(
