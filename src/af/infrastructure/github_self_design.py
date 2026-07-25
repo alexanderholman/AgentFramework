@@ -347,8 +347,10 @@ class GitHubDesignPublisher:
             or published.status is not previous.status
             or published.comment_count != previous.comment_count + 1
             or published.latest_comment_id is None
-            or previous.latest_comment_id is None
-            or published.latest_comment_id <= previous.latest_comment_id
+            or (
+                previous.latest_comment_id is not None
+                and published.latest_comment_id <= previous.latest_comment_id
+            )
             or published.updated_at < previous.updated_at
         ):
             raise DesignPublicationError("GitHub self-design comment result is not append-only")
@@ -368,8 +370,10 @@ class GitHubDesignPublisher:
             comment.repository != self._repository
             or comment.issue_number != published.issue_number
             or comment.comment_id != published.latest_comment_id
-            or previous.latest_comment_id is None
-            or comment.comment_id <= previous.latest_comment_id
+            or (
+                previous.latest_comment_id is not None
+                and comment.comment_id <= previous.latest_comment_id
+            )
             or comment.body != draft.body
         ):
             raise DesignPublicationError("GitHub self-design comment result is inconsistent")
