@@ -250,7 +250,9 @@ class GitHubDesignPublisher:
         published: GitHubIssueState,
         observed: GitHubIssueState,
     ) -> None:
-        if not isinstance(published, GitHubIssueState) or not isinstance(observed, GitHubIssueState):
+        if not isinstance(published, GitHubIssueState) or not isinstance(
+            observed, GitHubIssueState
+        ):
             raise TypeError("GitHub self-design issue client returned invalid state")
         self._verify_issue_binding(observed, published.issue_number)
         if observed.revision != published.revision:
