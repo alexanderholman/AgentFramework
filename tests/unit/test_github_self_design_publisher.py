@@ -484,6 +484,59 @@ def test_comment_rejects_equal_timestamp_preexisting_comment_alias(
         GitHubDesignPublisher(client, _REPOSITORY).publish(request)
 
 
+def test_comment_rejects_lower_id_preexisting_comment_alias(
+    tmp_path: Path,
+) -> None:
+    current = _issue()
+    request = _request(
+        tmp_path,
+        DesignUnitKind.ACCEPTANCE_REPAIR,
+        expected_target_revision=current.revision,
+    )
+    client = RecordingGitHubClient(current)
+    original_add = client.add_issue_comment
+
+    def aliased_comment(
+        repository: str,
+        issue_number: int,
+        *,
+        body: str,
+        expected_revision: str,
+        idempotency_key: str,
+    ) -> GitHubCommentPublication:
+        publication = original_add(
+            repository,
+            issue_number,
+            body="different appended comment",
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+        lower_comment_id = 8998
+        aliased_issue = replace(
+            publication.issue,
+            latest_comment_id=lower_comment_id,
+        )
+        previous_comment = GitHubIssueComment(
+            repository=repository,
+            issue_number=issue_number,
+            comment_id=lower_comment_id,
+            body=body,
+            updated_at=current.updated_at,
+        )
+        client.current = aliased_issue
+        client.comment = previous_comment
+        return replace(
+            publication,
+            issue=aliased_issue,
+            comment=previous_comment,
+        )
+
+    client.add_issue_comment = aliased_comment  # type: ignore[method-assign]
+
+    with pytest.raises(DesignPublicationError, match="comment result is inconsistent"):
+        GitHubDesignPublisher(client, _REPOSITORY).publish(request)
+
+
 def test_comment_rejects_post_publication_readback_drift(tmp_path: Path) -> None:
     current = _issue()
     request = _request(
