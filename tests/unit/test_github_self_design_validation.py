@@ -74,9 +74,7 @@ class ValidClientShape:
         expected_revision: str,
         idempotency_key: str,
     ) -> GitHubIssueState:
-        raise AssertionError(
-            (repository, issue_number, body, expected_revision, idempotency_key)
-        )
+        raise AssertionError((repository, issue_number, body, expected_revision, idempotency_key))
 
 
 def test_publisher_rejects_incomplete_client_boundary() -> None:
