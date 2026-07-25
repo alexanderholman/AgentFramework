@@ -190,18 +190,21 @@ class GitHubDesignPublisher:
                     expected_revision=draft.expected_target_revision,
                     idempotency_key=draft.digest,
                 )
+
+            self._verify_published_result(draft, published, current)
+            observed = self._client.get_issue(self._repository, published.issue_number)
+            self._verify_observed_result(published, observed)
         except DesignPublicationError:
             raise
         except Exception as error:
             raise DesignPublicationError("GitHub self-design publication failed") from error
 
-        self._verify_published_result(draft, published, current)
         return DesignPublicationReceipt(
             status=DesignPublicationStatus.PUBLISHED,
             effect=draft.effect,
             repository=self._repository,
-            issue_number=published.issue_number,
-            target_revision=published.revision,
+            issue_number=observed.issue_number,
+            target_revision=observed.revision,
             draft_digest=draft.digest,
         )
 
@@ -241,6 +244,17 @@ class GitHubDesignPublisher:
             or published.updated_at < previous.updated_at
         ):
             raise DesignPublicationError("GitHub self-design comment result is not append-only")
+
+    def _verify_observed_result(
+        self,
+        published: GitHubIssueState,
+        observed: GitHubIssueState,
+    ) -> None:
+        if not isinstance(published, GitHubIssueState) or not isinstance(observed, GitHubIssueState):
+            raise TypeError("GitHub self-design issue client returned invalid state")
+        self._verify_issue_binding(observed, published.issue_number)
+        if observed.revision != published.revision:
+            raise DesignPublicationError("GitHub self-design post-publication state drifted")
 
     def _verify_issue_binding(self, issue: GitHubIssueState, issue_number: int) -> None:
         if not isinstance(issue, GitHubIssueState):
