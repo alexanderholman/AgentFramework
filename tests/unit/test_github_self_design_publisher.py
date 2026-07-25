@@ -236,6 +236,7 @@ def _issue(
     issue_number: int = 124,
     comment_count: int = 2,
     updated_at: datetime = _OBSERVED_AT,
+    latest_comment_id: int | None = 8999,
 ) -> GitHubIssueState:
     return GitHubIssueState(
         repository=_REPOSITORY,
@@ -245,6 +246,7 @@ def _issue(
         status=GitHubIssueStatus.OPEN,
         updated_at=updated_at,
         comment_count=comment_count,
+        latest_comment_id=latest_comment_id,
     )
 
 
@@ -312,6 +314,7 @@ class RecordingGitHubClient:
             self.current,
             updated_at=updated_at,
             comment_count=self.current.comment_count + 1,
+            latest_comment_id=9001,
         )
         self.comment = GitHubIssueComment(
             repository=repository,
@@ -426,7 +429,9 @@ def test_comment_rejects_wrong_returned_body(tmp_path: Path) -> None:
         GitHubDesignPublisher(client, _REPOSITORY).publish(request)
 
 
-def test_comment_rejects_preexisting_same_body_comment_alias(tmp_path: Path) -> None:
+def test_comment_rejects_equal_timestamp_preexisting_comment_alias(
+    tmp_path: Path,
+) -> None:
     current = _issue()
     request = _request(
         tmp_path,
@@ -456,7 +461,7 @@ def test_comment_rejects_preexisting_same_body_comment_alias(tmp_path: Path) -> 
             issue_number=issue_number,
             comment_id=8999,
             body=body,
-            updated_at=current.updated_at - timedelta(seconds=1),
+            updated_at=current.updated_at,
         )
         client.comment = previous_comment
         return replace(publication, comment=previous_comment)
