@@ -9,6 +9,7 @@ from af.infrastructure.github_self_design import (
     GitHubCommentPublication,
     GitHubDesignPublisher,
     GitHubIssueComment,
+    GitHubIssueCreation,
     GitHubIssueState,
     GitHubIssueStatus,
 )
@@ -38,6 +39,67 @@ def _comment_values() -> dict[str, object]:
         "body": "Exact append-only evidence.",
         "updated_at": _UPDATED_AT,
     }
+
+
+def test_creation_evidence_is_canonical_and_strictly_bound() -> None:
+    issue = GitHubIssueState(**_issue_values())  # type: ignore[arg-type]
+    creation = GitHubIssueCreation(
+        issue=issue,
+        draft_digest="sha256:" + "a" * 64,
+        created_at=_UPDATED_AT - timedelta(seconds=1),
+    )
+    equivalent = replace(
+        creation,
+        created_at=datetime(
+            2026,
+            7,
+            25,
+            5,
+            29,
+            59,
+            tzinfo=timezone(timedelta(hours=1)),
+        ),
+    )
+
+    assert creation.canonical_json() == equivalent.canonical_json()
+    assert creation.revision == equivalent.revision
+    assert creation.revision.startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type", "message"),
+    (
+        ("issue", object(), TypeError, "creation state is invalid"),
+        ("draft_digest", "invalid", ValueError, "draft digest is invalid"),
+        (
+            "created_at",
+            datetime(2026, 7, 25, 4, 29),
+            ValueError,
+            "creation time must be timezone aware",
+        ),
+        (
+            "created_at",
+            _UPDATED_AT + timedelta(seconds=1),
+            ValueError,
+            "creation transition is invalid",
+        ),
+    ),
+)
+def test_creation_evidence_rejects_invalid_values(
+    field: str,
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    values: dict[str, object] = {
+        "issue": GitHubIssueState(**_issue_values()),  # type: ignore[arg-type]
+        "draft_digest": "sha256:" + "a" * 64,
+        "created_at": _UPDATED_AT - timedelta(seconds=1),
+    }
+    values[field] = value
+
+    with pytest.raises(error_type, match=message):
+        GitHubIssueCreation(**values)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -138,6 +200,13 @@ class ValidClientShape:
     def get_issue(self, repository: str, issue_number: int) -> GitHubIssueState:
         raise AssertionError((repository, issue_number))
 
+    def get_issue_creation(
+        self,
+        repository: str,
+        issue_number: int,
+    ) -> GitHubIssueCreation:
+        raise AssertionError((repository, issue_number))
+
     def create_issue(
         self,
         repository: str,
@@ -145,7 +214,7 @@ class ValidClientShape:
         title: str,
         body: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
+    ) -> GitHubIssueCreation:
         raise AssertionError((repository, title, body, idempotency_key))
 
     def add_issue_comment(
