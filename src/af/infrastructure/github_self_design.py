@@ -244,12 +244,15 @@ class GitHubDesignPublisher:
                 raise DesignPublicationError("self-design publication local record is invalid")
             observed = bytearray()
             while len(observed) <= SELF_DESIGN_RECORD_MAX_BYTES:
-                chunk = os.read(descriptor, min(65_536, SELF_DESIGN_RECORD_MAX_BYTES + 1 - len(observed)))
+                remaining = SELF_DESIGN_RECORD_MAX_BYTES + 1 - len(observed)
+                chunk = os.read(descriptor, min(65_536, remaining))
                 if not chunk:
                     break
                 observed.extend(chunk)
         except OSError as error:
-            raise DesignPublicationError("self-design publication local record is unreadable") from error
+            raise DesignPublicationError(
+                "self-design publication local record is unreadable"
+            ) from error
         finally:
             os.close(descriptor)
 
