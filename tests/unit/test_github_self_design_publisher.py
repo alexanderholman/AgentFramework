@@ -264,7 +264,7 @@ class RecordingGitHubClient:
         idempotency_key: str,
     ) -> GitHubIssueState:
         self.calls.append(("create", repository, title, body, idempotency_key))
-        return GitHubIssueState(
+        self.current = GitHubIssueState(
             repository=repository,
             issue_number=147,
             title=title,
@@ -273,6 +273,7 @@ class RecordingGitHubClient:
             updated_at=_OBSERVED_AT + timedelta(seconds=1),
             comment_count=0,
         )
+        return self.current
 
     def add_issue_comment(
         self,
@@ -293,11 +294,12 @@ class RecordingGitHubClient:
                 idempotency_key,
             )
         )
-        return replace(
+        self.current = replace(
             self.current,
             updated_at=self.current.updated_at + timedelta(seconds=1),
             comment_count=self.current.comment_count + 1,
         )
+        return self.current
 
 
 def test_issue_revision_is_canonical_and_evidence_complete() -> None:
@@ -334,7 +336,8 @@ def test_publisher_creates_one_issue_after_exact_record_revalidation(tmp_path: P
             request.draft.title,
             request.draft.body,
             request.draft.digest,
-        )
+        ),
+        ("get", _REPOSITORY, 147),
     ]
 
 
@@ -361,6 +364,7 @@ def test_comment_rechecks_target_and_passes_exact_precondition(tmp_path: Path) -
             current.revision,
             request.draft.digest,
         ),
+        ("get", _REPOSITORY, 124),
     ]
 
 
