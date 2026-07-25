@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-
 from af.framework.self_design import (
     DesignCandidate,
     DesignPolicy,
