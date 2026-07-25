@@ -40,6 +40,7 @@ from af.framework.version_control import (
 from af.infrastructure.github_self_design import (
     GitHubCommentPublication,
     GitHubDesignPublisher,
+    GitHubIssueCreation,
     GitHubIssueComment,
     GitHubIssueState,
     GitHubIssueStatus,
@@ -254,11 +255,21 @@ class RecordingGitHubClient:
     def __init__(self, current: GitHubIssueState | None = None) -> None:
         self.current = current or _issue()
         self.comment: GitHubIssueComment | None = None
+        self.creation: GitHubIssueCreation | None = None
         self.calls: list[tuple[object, ...]] = []
 
     def get_issue(self, repository: str, issue_number: int) -> GitHubIssueState:
         self.calls.append(("get", repository, issue_number))
         return self.current
+
+    def get_issue_creation(
+        self,
+        repository: str,
+        issue_number: int,
+    ) -> GitHubIssueCreation:
+        self.calls.append(("get-creation", repository, issue_number))
+        assert self.creation is not None
+        return self.creation
 
     def get_issue_comment(
         self,
@@ -277,7 +288,7 @@ class RecordingGitHubClient:
         title: str,
         body: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
+    ) -> GitHubIssueCreation:
         self.calls.append(("create", repository, title, body, idempotency_key))
         self.current = GitHubIssueState(
             repository=repository,
@@ -288,7 +299,12 @@ class RecordingGitHubClient:
             updated_at=_OBSERVED_AT + timedelta(seconds=1),
             comment_count=0,
         )
-        return self.current
+        self.creation = GitHubIssueCreation(
+            issue=self.current,
+            draft_digest=idempotency_key,
+            created_at=_OBSERVED_AT + timedelta(seconds=1),
+        )
+        return self.creation
 
     def add_issue_comment(
         self,
@@ -373,7 +389,54 @@ def test_publisher_creates_one_issue_after_exact_record_revalidation(tmp_path: P
             request.draft.body,
             request.draft.digest,
         ),
+        ("get-creation", _REPOSITORY, 147),
         ("get", _REPOSITORY, 147),
+    ]
+
+
+def test_create_rejects_preexisting_identical_issue_alias(tmp_path: Path) -> None:
+    request = _request(tmp_path, DesignUnitKind.CHILD_TASK)
+    client = RecordingGitHubClient()
+    assert request.draft.title is not None
+    client.current = GitHubIssueState(
+        repository=_REPOSITORY,
+        issue_number=147,
+        title=request.draft.title,
+        body=request.draft.body,
+        status=GitHubIssueStatus.OPEN,
+        updated_at=request.authority.issued_at - timedelta(seconds=1),
+        comment_count=0,
+    )
+    client.creation = GitHubIssueCreation(
+        issue=client.current,
+        draft_digest=request.draft.digest,
+        created_at=request.authority.issued_at - timedelta(seconds=1),
+    )
+
+    def aliased_create(
+        repository: str,
+        *,
+        title: str,
+        body: str,
+        idempotency_key: str,
+    ) -> GitHubIssueCreation:
+        client.calls.append(("create", repository, title, body, idempotency_key))
+        assert client.creation is not None
+        return client.creation
+
+    client.create_issue = aliased_create  # type: ignore[method-assign]
+
+    with pytest.raises(DesignPublicationError, match="creation evidence is outside authority"):
+        GitHubDesignPublisher(client, _REPOSITORY).publish(request)
+
+    assert client.calls == [
+        (
+            "create",
+            _REPOSITORY,
+            request.draft.title,
+            request.draft.body,
+            request.draft.digest,
+        )
     ]
 
 
@@ -637,9 +700,9 @@ def test_misbound_client_result_is_rejected(tmp_path: Path) -> None:
         title: str,
         body: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
-        del repository, idempotency_key
-        return GitHubIssueState(
+    ) -> GitHubIssueCreation:
+        del repository
+        issue = GitHubIssueState(
             repository="other/Repository",
             issue_number=147,
             title=title,
@@ -647,6 +710,11 @@ def test_misbound_client_result_is_rejected(tmp_path: Path) -> None:
             status=GitHubIssueStatus.OPEN,
             updated_at=_OBSERVED_AT,
             comment_count=0,
+        )
+        return GitHubIssueCreation(
+            issue=issue,
+            draft_digest=idempotency_key,
+            created_at=_OBSERVED_AT,
         )
 
     client.create_issue = misbound_create  # type: ignore[method-assign]
