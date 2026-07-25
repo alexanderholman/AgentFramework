@@ -109,11 +109,84 @@ class GitHubIssueState:
         return _digest(self.canonical_json())
 
 
+@dataclass(frozen=True, slots=True)
+class GitHubIssueComment:
+    """Canonical evidence for one exact append-only issue comment."""
+
+    repository: str
+    issue_number: int
+    comment_id: int
+    body: str
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if type(self.repository) is not str or _REPOSITORY.fullmatch(self.repository) is None:
+            raise ValueError("GitHub comment repository identity is invalid")
+        if type(self.issue_number) is not int or self.issue_number < 1:
+            raise ValueError("GitHub comment issue number is invalid")
+        if type(self.comment_id) is not int or self.comment_id < 1:
+            raise ValueError("GitHub comment identity is invalid")
+        if (
+            type(self.body) is not str
+            or "\x00" in self.body
+            or len(self.body.encode("utf-8")) > _MAX_ISSUE_BODY_BYTES
+        ):
+            raise ValueError("GitHub comment body is invalid")
+        object.__setattr__(self, "updated_at", _aware_utc(self.updated_at))
+
+    def canonical_json(self) -> str:
+        """Return the deterministic appended-comment representation."""
+        return _canonical_json(
+            {
+                "body": self.body,
+                "comment_id": self.comment_id,
+                "issue_number": self.issue_number,
+                "repository": self.repository,
+                "updated_at": self.updated_at.isoformat(timespec="microseconds").replace(
+                    "+00:00", "Z"
+                ),
+            }
+        )
+
+    @property
+    def revision(self) -> str:
+        """Return the exact digest for this comment evidence."""
+        return _digest(self.canonical_json())
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubCommentPublication:
+    """Immediate client evidence for one appended comment and resulting issue."""
+
+    issue: GitHubIssueState
+    comment: GitHubIssueComment
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.issue, GitHubIssueState):
+            raise TypeError("GitHub comment publication issue state is invalid")
+        if not isinstance(self.comment, GitHubIssueComment):
+            raise TypeError("GitHub comment publication evidence is invalid")
+        if (
+            self.comment.repository != self.issue.repository
+            or self.comment.issue_number != self.issue.issue_number
+        ):
+            raise ValueError("GitHub comment publication evidence is misbound")
+
+
 class GitHubIssueClient(Protocol):
     """Narrow GitHub issue client admitted beneath the publication adapter."""
 
     def get_issue(self, repository: str, issue_number: int) -> GitHubIssueState:
         """Return the current canonical issue state."""
+        ...
+
+    def get_issue_comment(
+        self,
+        repository: str,
+        issue_number: int,
+        comment_id: int,
+    ) -> GitHubIssueComment:
+        """Return canonical evidence for one exact comment identity."""
         ...
 
     def create_issue(
@@ -135,7 +208,7 @@ class GitHubIssueClient(Protocol):
         body: str,
         expected_revision: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
+    ) -> GitHubCommentPublication:
         """Append one comment only while the supplied target revision is current."""
         ...
 
@@ -164,6 +237,7 @@ class GitHubDesignPublisher:
         self._verify_local_record(request)
         draft = request.draft
         current: GitHubIssueState | None = None
+        published_comment: GitHubIssueComment | None = None
         try:
             if draft.effect is DesignPublicationEffect.CREATE_ISSUE:
                 assert draft.title is not None
@@ -176,6 +250,10 @@ class GitHubDesignPublisher:
             else:
                 assert draft.target_issue_number is not None
                 assert draft.expected_target_revision is not None
+                if not callable(getattr(self._client, "get_issue_comment", None)):
+                    raise DesignPublicationError(
+                        "GitHub self-design comment readback is unavailable"
+                    )
                 current = self._client.get_issue(
                     self._repository,
                     draft.target_issue_number,
@@ -183,15 +261,27 @@ class GitHubDesignPublisher:
                 self._verify_issue_binding(current, draft.target_issue_number)
                 if current.revision != draft.expected_target_revision:
                     raise DesignPublicationError("self-design publication target revision is stale")
-                published = self._client.add_issue_comment(
+                publication = self._client.add_issue_comment(
                     self._repository,
                     draft.target_issue_number,
                     body=draft.body,
                     expected_revision=draft.expected_target_revision,
                     idempotency_key=draft.digest,
                 )
+                if not isinstance(publication, GitHubCommentPublication):
+                    raise TypeError("GitHub self-design comment publication evidence is invalid")
+                published = publication.issue
+                published_comment = publication.comment
 
             self._verify_published_result(draft, published, current)
+            if published_comment is not None:
+                self._verify_published_comment(draft, published, published_comment)
+                observed_comment = self._client.get_issue_comment(
+                    self._repository,
+                    published.issue_number,
+                    published_comment.comment_id,
+                )
+                self._verify_observed_comment(published_comment, observed_comment)
             observed = self._client.get_issue(self._repository, published.issue_number)
             self._verify_observed_result(published, observed)
         except DesignPublicationError:
@@ -244,6 +334,39 @@ class GitHubDesignPublisher:
             or published.updated_at < previous.updated_at
         ):
             raise DesignPublicationError("GitHub self-design comment result is not append-only")
+
+    def _verify_published_comment(
+        self,
+        draft: DesignPublicationDraft,
+        published: GitHubIssueState,
+        comment: GitHubIssueComment,
+    ) -> None:
+        if not isinstance(comment, GitHubIssueComment):
+            raise TypeError("GitHub self-design comment evidence is invalid")
+        if (
+            comment.repository != self._repository
+            or comment.issue_number != published.issue_number
+            or comment.body != draft.body
+        ):
+            raise DesignPublicationError("GitHub self-design comment result is inconsistent")
+
+    def _verify_observed_comment(
+        self,
+        published: GitHubIssueComment,
+        observed: GitHubIssueComment,
+    ) -> None:
+        if not isinstance(published, GitHubIssueComment) or not isinstance(
+            observed, GitHubIssueComment
+        ):
+            raise TypeError("GitHub self-design comment client returned invalid evidence")
+        if (
+            observed.repository != self._repository
+            or observed.issue_number != published.issue_number
+            or observed.comment_id != published.comment_id
+        ):
+            raise DesignPublicationError("GitHub self-design comment readback is misbound")
+        if observed.revision != published.revision:
+            raise DesignPublicationError("GitHub self-design comment readback drifted")
 
     def _verify_observed_result(
         self,
