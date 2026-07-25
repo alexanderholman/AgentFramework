@@ -359,10 +359,7 @@ class GitHubDesignPublisher:
             or comment.body != draft.body
         ):
             raise DesignPublicationError("GitHub self-design comment result is inconsistent")
-        if (
-            comment.updated_at < previous.updated_at
-            or comment.updated_at > published.updated_at
-        ):
+        if comment.updated_at < previous.updated_at or comment.updated_at > published.updated_at:
             raise DesignPublicationError("GitHub self-design comment transition is inconsistent")
 
     def _verify_observed_comment(
@@ -446,10 +443,7 @@ class GitHubDesignPublisher:
                 and (after_path.st_dev, after_path.st_ino) == identity
             )
             stable_metadata = (
-                before.st_size
-                == opened.st_size
-                == after_open.st_size
-                == after_path.st_size
+                before.st_size == opened.st_size == after_open.st_size == after_path.st_size
                 and before.st_mtime_ns
                 == opened.st_mtime_ns
                 == after_open.st_mtime_ns
