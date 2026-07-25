@@ -345,6 +345,18 @@ def test_issue_revision_is_canonical_and_evidence_complete() -> None:
     assert issue.revision.startswith("sha256:")
 
 
+def test_issue_comment_watermark_is_count_consistent_and_revision_bound() -> None:
+    issue = _issue()
+
+    assert replace(issue, latest_comment_id=8998).revision != issue.revision
+    with pytest.raises(ValueError, match="watermark is inconsistent"):
+        _issue(comment_count=0, latest_comment_id=8999)
+    with pytest.raises(ValueError, match="watermark is inconsistent"):
+        _issue(comment_count=1, latest_comment_id=None)
+    with pytest.raises(ValueError, match="latest comment identity is invalid"):
+        _issue(comment_count=1, latest_comment_id=0)
+
+
 def test_publisher_creates_one_issue_after_exact_record_revalidation(tmp_path: Path) -> None:
     request = _request(tmp_path, DesignUnitKind.CHILD_TASK)
     client = RecordingGitHubClient()
@@ -468,7 +480,7 @@ def test_comment_rejects_equal_timestamp_preexisting_comment_alias(
 
     client.add_issue_comment = aliased_comment  # type: ignore[method-assign]
 
-    with pytest.raises(DesignPublicationError, match="comment transition is inconsistent"):
+    with pytest.raises(DesignPublicationError, match="comment result is inconsistent"):
         GitHubDesignPublisher(client, _REPOSITORY).publish(request)
 
 
