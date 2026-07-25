@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 from af.infrastructure.github_self_design import (
+    GitHubCommentPublication,
     GitHubDesignPublisher,
+    GitHubIssueComment,
     GitHubIssueState,
     GitHubIssueStatus,
 )
@@ -23,6 +26,16 @@ def _issue_values() -> dict[str, object]:
         "status": GitHubIssueStatus.OPEN,
         "updated_at": _UPDATED_AT,
         "comment_count": 2,
+    }
+
+
+def _comment_values() -> dict[str, object]:
+    return {
+        "repository": _REPOSITORY,
+        "issue_number": 124,
+        "comment_id": 9001,
+        "body": "Exact append-only evidence.",
+        "updated_at": _UPDATED_AT,
     }
 
 
@@ -51,6 +64,63 @@ def test_issue_state_rejects_invalid_external_evidence(
         GitHubIssueState(**values)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "error_type", "message"),
+    (
+        ("repository", "invalid", ValueError, "repository identity"),
+        ("issue_number", 0, ValueError, "issue number"),
+        ("comment_id", 0, ValueError, "comment identity"),
+        ("body", "contains\x00nul", ValueError, "comment body"),
+        ("updated_at", datetime(2026, 7, 25, 4, 30), ValueError, "timezone aware"),
+    ),
+)
+def test_comment_rejects_invalid_external_evidence(
+    field: str,
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    values = _comment_values()
+    values[field] = value
+
+    with pytest.raises(error_type, match=message):
+        GitHubIssueComment(**values)  # type: ignore[arg-type]
+
+
+def test_comment_revision_is_canonical_across_equivalent_timezones() -> None:
+    comment = GitHubIssueComment(**_comment_values())  # type: ignore[arg-type]
+    equivalent = replace(
+        comment,
+        updated_at=datetime(
+            2026,
+            7,
+            25,
+            5,
+            30,
+            tzinfo=timezone(timedelta(hours=1)),
+        ),
+    )
+
+    assert comment.canonical_json() == equivalent.canonical_json()
+    assert comment.revision == equivalent.revision
+    assert comment.revision.startswith("sha256:")
+
+
+def test_comment_publication_rejects_invalid_or_misbound_evidence() -> None:
+    issue = GitHubIssueState(**_issue_values())  # type: ignore[arg-type]
+    comment = GitHubIssueComment(**_comment_values())  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="issue state is invalid"):
+        GitHubCommentPublication(issue=object(), comment=comment)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="evidence is invalid"):
+        GitHubCommentPublication(issue=issue, comment=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="evidence is misbound"):
+        GitHubCommentPublication(
+            issue=issue,
+            comment=replace(comment, issue_number=125),
+        )
+
+
 class ValidClientShape:
     def get_issue(self, repository: str, issue_number: int) -> GitHubIssueState:
         raise AssertionError((repository, issue_number))
@@ -73,7 +143,7 @@ class ValidClientShape:
         body: str,
         expected_revision: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
+    ) -> GitHubCommentPublication:
         raise AssertionError((repository, issue_number, body, expected_revision, idempotency_key))
 
 
@@ -84,4 +154,4 @@ def test_publisher_rejects_incomplete_client_boundary() -> None:
 
 def test_publisher_rejects_invalid_repository_boundary() -> None:
     with pytest.raises(ValueError, match="repository identity is invalid"):
-        GitHubDesignPublisher(ValidClientShape(), "invalid")
+        GitHubDesignPublisher(ValidClientShape(), "invalid")  # type: ignore[arg-type]
