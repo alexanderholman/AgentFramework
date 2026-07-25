@@ -95,6 +95,9 @@ class FederationExplanation:
     contributions: tuple[FederationContribution, ...]
 
     def __post_init__(self) -> None:
+        _validate_identity(self.tenant_id, "tenant identity")
+        _validate_identity(self.source_id, "source identity")
+        _validate_identity(self.resource_id, "resource identity")
         if (
             type(self.contributions) is not tuple
             or not self.contributions
@@ -183,10 +186,14 @@ class _Candidate:
     highlights: list[str]
 
 
-def _validate_source_name(value: object) -> str:
+def _validate_identity(value: object, field_name: str) -> str:
     if type(value) is not str or _SOURCE_NAME.fullmatch(value) is None:
-        raise ValueError("federation source name must be canonical")
+        raise ValueError(f"federation {field_name} must be canonical")
     return value
+
+
+def _validate_source_name(value: object) -> str:
+    return _validate_identity(value, "source name")
 
 
 def _validate_sources(
