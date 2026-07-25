@@ -266,7 +266,12 @@ class SearchFederator:
                 )
                 break
             searched.append(source_name)
-            self._accumulate(candidates, source_name, hits)
+            self._accumulate(
+                candidates,
+                source_name,
+                hits,
+                query=source_query,
+            )
 
         ordered = sorted(
             candidates.values(),
@@ -306,17 +311,35 @@ class SearchFederator:
         candidates: dict[tuple[str, str, str], _Candidate],
         source_name: str,
         hits: object,
+        *,
+        query: SearchQuery,
     ) -> None:
         if (
             type(hits) is not tuple
-            or len(hits) > 1_000
+            or len(hits) > query.limit
             or any(not isinstance(hit, SearchHit) for hit in hits)
         ):
             raise FederationIntegrityError(
                 protected_cause=ValueError("search source returned malformed hits")
             )
+        tenant_filter = query.required_filter("tenant_id")
+        acl_filter = query.required_filter("acl")
+        if tenant_filter is None or acl_filter is None:
+            raise FederationIntegrityError(
+                protected_cause=ValueError("search query policy evidence is unavailable")
+            )
+        allowed_tenants = frozenset(tenant_filter)
+        allowed_acl = frozenset(acl_filter)
         seen: set[tuple[str, str, str]] = set()
         for hit in hits:
+            if hit.tenant_id not in allowed_tenants or allowed_acl.isdisjoint(
+                hit.acl_evidence
+            ):
+                raise FederationIntegrityError(
+                    protected_cause=ValueError(
+                        "search source returned a policy-ineligible hit"
+                    )
+                )
             identity = _identity(hit)
             if identity in seen:
                 raise FederationIntegrityError(
