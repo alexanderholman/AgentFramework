@@ -213,6 +213,26 @@ def test_federator_rejects_malformed_source_results(hits: object) -> None:
     assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
 
 
+@pytest.mark.parametrize(
+    "hits",
+    [
+        (_hit("resource-a", rank=1), _hit("resource-b", rank=1)),
+        (_hit("resource-a", rank=2), _hit("resource-b", rank=1)),
+        tuple(
+            _hit(f"resource-{index}", rank=index + 1)
+            for index in range(21)
+        ),
+    ],
+)
+def test_federator_rejects_noncanonical_or_unbounded_source_ranking(
+    hits: tuple[SearchHit, ...],
+) -> None:
+    with pytest.raises(FederationIntegrityError) as captured:
+        SearchFederator(Router({"alpha": hits}), sources=("alpha",)).search(_query())
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
 def test_federator_fails_closed_on_contradictory_authority_evidence() -> None:
     router = Router(
         {
