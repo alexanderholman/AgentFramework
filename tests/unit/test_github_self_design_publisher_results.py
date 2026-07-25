@@ -4,7 +4,6 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from af.framework.self_design import DesignUnitKind
 from af.framework.self_design_publication import (
     DesignPublicationDraft,
