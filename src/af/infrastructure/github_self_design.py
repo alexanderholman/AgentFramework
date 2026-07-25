@@ -280,6 +280,37 @@ class GitHubDesignPublisher:
                 if not chunk:
                     break
                 observed.extend(chunk)
+
+            after_open = os.fstat(descriptor)
+            after_path = os.lstat(path)
+            identity = (opened.st_dev, opened.st_ino)
+            stable_identity = (
+                not stat.S_ISLNK(after_path.st_mode)
+                and stat.S_ISREG(after_path.st_mode)
+                and (before.st_dev, before.st_ino) == identity
+                and (after_open.st_dev, after_open.st_ino) == identity
+                and (after_path.st_dev, after_path.st_ino) == identity
+            )
+            stable_metadata = (
+                before.st_size
+                == opened.st_size
+                == after_open.st_size
+                == after_path.st_size
+                and before.st_mtime_ns
+                == opened.st_mtime_ns
+                == after_open.st_mtime_ns
+                == after_path.st_mtime_ns
+                and before.st_ctime_ns
+                == opened.st_ctime_ns
+                == after_open.st_ctime_ns
+                == after_path.st_ctime_ns
+            )
+            if not stable_identity or not stable_metadata:
+                raise DesignPublicationError(
+                    "self-design publication local record changed during verification"
+                )
+        except DesignPublicationError:
+            raise
         except OSError as error:
             raise DesignPublicationError(
                 "self-design publication local record is unreadable"
