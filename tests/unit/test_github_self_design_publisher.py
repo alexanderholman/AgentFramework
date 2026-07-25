@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -304,7 +304,14 @@ def test_issue_revision_is_canonical_and_evidence_complete() -> None:
     issue = _issue(updated_at=datetime(2026, 7, 25, 5, 30, tzinfo=UTC))
     equivalent = replace(
         issue,
-        updated_at=datetime(2026, 7, 25, 6, 30, tzinfo=timedelta(hours=1)),
+        updated_at=datetime(
+            2026,
+            7,
+            25,
+            6,
+            30,
+            tzinfo=timezone(timedelta(hours=1)),
+        ),
     )
 
     assert issue.canonical_json() == equivalent.canonical_json()
