@@ -180,9 +180,7 @@ class GitHubDesignPublisher:
                 )
                 self._verify_issue_binding(current, draft.target_issue_number)
                 if current.revision != draft.expected_target_revision:
-                    raise DesignPublicationError(
-                        "self-design publication target revision is stale"
-                    )
+                    raise DesignPublicationError("self-design publication target revision is stale")
                 published = self._client.add_issue_comment(
                     self._repository,
                     draft.target_issue_number,
@@ -221,11 +219,7 @@ class GitHubDesignPublisher:
     def _verify_local_record(request: DesignPublicationRequest) -> None:
         expected = request.recorded.record.canonical_bytes()
         path = request.recorded.record_path
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
             before = os.lstat(path)
             if stat.S_ISLNK(before.st_mode):
