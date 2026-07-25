@@ -364,3 +364,53 @@ def test_federation_value_contracts_reject_invalid_evidence() -> None:
             searched_sources=("alpha",),
             failures=(),
         )
+
+def test_federated_result_rejects_contradictory_source_and_identity_evidence() -> None:
+    hit = _hit("resource-a", rank=1)
+    alpha = FederationContribution("alpha", 1, 0.5)
+    explanation = FederationExplanation(
+        tenant_id=hit.tenant_id,
+        source_id=hit.source_id,
+        resource_id=hit.resource_id,
+        contributions=(alpha,),
+    )
+
+    with pytest.raises(ValueError, match="hit identities"):
+        FederatedSearchResult(
+            hits=(hit, hit),
+            explanations=(explanation, explanation),
+            searched_sources=("alpha",),
+            failures=(),
+        )
+    with pytest.raises(ValueError, match="failure sources"):
+        FederatedSearchResult(
+            hits=(),
+            explanations=(),
+            searched_sources=(),
+            failures=(
+                FederationFailure("alpha", PlatformReason.CANCELLED),
+                FederationFailure("alpha", PlatformReason.PERMANENT_FAILURE),
+            ),
+        )
+    with pytest.raises(ValueError, match="source outcomes"):
+        FederatedSearchResult(
+            hits=(),
+            explanations=(),
+            searched_sources=("alpha",),
+            failures=(FederationFailure("alpha", PlatformReason.CANCELLED),),
+        )
+    with pytest.raises(ValueError, match="contribution sources"):
+        FederatedSearchResult(
+            hits=(hit,),
+            explanations=(
+                FederationExplanation(
+                    tenant_id=hit.tenant_id,
+                    source_id=hit.source_id,
+                    resource_id=hit.resource_id,
+                    contributions=(FederationContribution("beta", 1, 0.5),),
+                ),
+            ),
+            searched_sources=("alpha",),
+            failures=(),
+        )
+
