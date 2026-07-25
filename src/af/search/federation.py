@@ -148,6 +148,8 @@ class FederatedSearchResult:
         failure_sources = tuple(failure.source_name for failure in self.failures)
         if len(set(failure_sources)) != len(failure_sources):
             raise ValueError("federation failure sources must be unique")
+        if len(searched_sources) + len(failure_sources) > _MAX_SOURCES:
+            raise ValueError("federation source outcomes exceed the configured bound")
         if searched_sources.intersection(failure_sources):
             raise ValueError("federation source outcomes must be disjoint")
         hit_identities = tuple(_identity(hit) for hit in self.hits)
