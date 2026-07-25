@@ -439,6 +439,50 @@ def test_create_rejects_preexisting_identical_issue_alias(tmp_path: Path) -> Non
     ]
 
 
+def test_create_rejects_mismatched_draft_digest(tmp_path: Path) -> None:
+    request = _request(tmp_path, DesignUnitKind.CHILD_TASK)
+    client = RecordingGitHubClient()
+    original_create = client.create_issue
+
+    def mismatched_create(
+        repository: str,
+        *,
+        title: str,
+        body: str,
+        idempotency_key: str,
+    ) -> GitHubIssueCreation:
+        creation = original_create(
+            repository,
+            title=title,
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+        return replace(creation, draft_digest="sha256:" + "f" * 64)
+
+    client.create_issue = mismatched_create  # type: ignore[method-assign]
+
+    with pytest.raises(DesignPublicationError, match="creation evidence is inconsistent"):
+        GitHubDesignPublisher(client, _REPOSITORY).publish(request)
+
+
+def test_create_rejects_creation_evidence_readback_drift(tmp_path: Path) -> None:
+    request = _request(tmp_path, DesignUnitKind.CHILD_TASK)
+    client = RecordingGitHubClient()
+    original_get = client.get_issue_creation
+
+    def drifted_creation(
+        repository: str,
+        issue_number: int,
+    ) -> GitHubIssueCreation:
+        creation = original_get(repository, issue_number)
+        return replace(creation, draft_digest="sha256:" + "f" * 64)
+
+    client.get_issue_creation = drifted_creation  # type: ignore[method-assign]
+
+    with pytest.raises(DesignPublicationError, match="creation readback drifted"):
+        GitHubDesignPublisher(client, _REPOSITORY).publish(request)
+
+
 def test_comment_rechecks_target_and_passes_exact_precondition(tmp_path: Path) -> None:
     current = _issue()
     request = _request(
