@@ -40,8 +40,8 @@ from af.framework.version_control import (
 from af.infrastructure.github_self_design import (
     GitHubCommentPublication,
     GitHubDesignPublisher,
-    GitHubIssueCreation,
     GitHubIssueComment,
+    GitHubIssueCreation,
     GitHubIssueState,
     GitHubIssueStatus,
 )
