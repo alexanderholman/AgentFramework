@@ -28,6 +28,7 @@ _REPOSITORY = re.compile(
 )
 _MAX_ISSUE_BODY_BYTES = 1024 * 1024
 _MAX_ISSUE_TITLE_LENGTH = 256
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class GitHubIssueStatus(StrEnum):
@@ -37,9 +38,9 @@ class GitHubIssueStatus(StrEnum):
     CLOSED = "closed"
 
 
-def _aware_utc(value: datetime) -> datetime:
+def _aware_utc(value: datetime, field_name: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("GitHub issue update time must be timezone aware")
+        raise ValueError(f"GitHub {field_name} must be timezone aware")
     return value.astimezone(UTC)
 
 
@@ -84,7 +85,11 @@ class GitHubIssueState:
             raise ValueError("GitHub issue body is invalid")
         if not isinstance(self.status, GitHubIssueStatus):
             raise TypeError("GitHub issue status is invalid")
-        object.__setattr__(self, "updated_at", _aware_utc(self.updated_at))
+        object.__setattr__(
+            self,
+            "updated_at",
+            _aware_utc(self.updated_at, "issue update time"),
+        )
         if type(self.comment_count) is not int or self.comment_count < 0:
             raise ValueError("GitHub issue comment count is invalid")
         if self.latest_comment_id is not None and (
@@ -118,6 +123,42 @@ class GitHubIssueState:
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubIssueCreation:
+    """Canonical evidence binding one created issue to its exact draft request."""
+
+    issue: GitHubIssueState
+    draft_digest: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.issue, GitHubIssueState):
+            raise TypeError("GitHub issue creation state is invalid")
+        if type(self.draft_digest) is not str or _SHA256.fullmatch(self.draft_digest) is None:
+            raise ValueError("GitHub issue creation draft digest is invalid")
+        created_at = _aware_utc(self.created_at, "issue creation time")
+        object.__setattr__(self, "created_at", created_at)
+        if created_at > self.issue.updated_at:
+            raise ValueError("GitHub issue creation transition is invalid")
+
+    def canonical_json(self) -> str:
+        """Return deterministic, independently readable creation evidence."""
+        return _canonical_json(
+            {
+                "created_at": self.created_at.isoformat(timespec="microseconds").replace(
+                    "+00:00", "Z"
+                ),
+                "draft_digest": self.draft_digest,
+                "issue_revision": self.issue.revision,
+            }
+        )
+
+    @property
+    def revision(self) -> str:
+        """Return the exact digest for this creation evidence."""
+        return _digest(self.canonical_json())
+
+
+@dataclass(frozen=True, slots=True)
 class GitHubIssueComment:
     """Canonical evidence for one exact append-only issue comment."""
 
@@ -140,7 +181,11 @@ class GitHubIssueComment:
             or len(self.body.encode("utf-8")) > _MAX_ISSUE_BODY_BYTES
         ):
             raise ValueError("GitHub comment body is invalid")
-        object.__setattr__(self, "updated_at", _aware_utc(self.updated_at))
+        object.__setattr__(
+            self,
+            "updated_at",
+            _aware_utc(self.updated_at, "comment update time"),
+        )
 
     def canonical_json(self) -> str:
         """Return the deterministic appended-comment representation."""
@@ -188,6 +233,14 @@ class GitHubIssueClient(Protocol):
         """Return the current canonical issue state."""
         ...
 
+    def get_issue_creation(
+        self,
+        repository: str,
+        issue_number: int,
+    ) -> GitHubIssueCreation:
+        """Return canonical evidence for one exact issue creation."""
+        ...
+
     def get_issue_comment(
         self,
         repository: str,
@@ -204,8 +257,8 @@ class GitHubIssueClient(Protocol):
         title: str,
         body: str,
         idempotency_key: str,
-    ) -> GitHubIssueState:
-        """Create one issue, using the draft digest as the retry identity."""
+    ) -> GitHubIssueCreation:
+        """Create one issue and return evidence bound to the retry identity."""
         ...
 
     def add_issue_comment(
@@ -246,15 +299,23 @@ class GitHubDesignPublisher:
         draft = request.draft
         current: GitHubIssueState | None = None
         published_comment: GitHubIssueComment | None = None
+        published_creation: GitHubIssueCreation | None = None
         try:
             if draft.effect is DesignPublicationEffect.CREATE_ISSUE:
                 assert draft.title is not None
-                published = self._client.create_issue(
+                if not callable(getattr(self._client, "get_issue_creation", None)):
+                    raise DesignPublicationError(
+                        "GitHub self-design creation readback is unavailable"
+                    )
+                published_creation = self._client.create_issue(
                     self._repository,
                     title=draft.title,
                     body=draft.body,
                     idempotency_key=draft.digest,
                 )
+                if not isinstance(published_creation, GitHubIssueCreation):
+                    raise TypeError("GitHub self-design creation evidence is invalid")
+                published = published_creation.issue
             else:
                 assert draft.target_issue_number is not None
                 assert draft.expected_target_revision is not None
@@ -282,6 +343,13 @@ class GitHubDesignPublisher:
                 published_comment = publication.comment
 
             self._verify_published_result(draft, published, current)
+            if published_creation is not None:
+                self._verify_published_creation(request, published_creation)
+                observed_creation = self._client.get_issue_creation(
+                    self._repository,
+                    published.issue_number,
+                )
+                self._verify_observed_creation(published_creation, observed_creation)
             if published_comment is not None:
                 if current is None:
                     raise TypeError("GitHub self-design publication target state is missing")
@@ -312,6 +380,35 @@ class GitHubDesignPublisher:
             target_revision=observed.revision,
             draft_digest=draft.digest,
         )
+
+    def _verify_published_creation(
+        self,
+        request: DesignPublicationRequest,
+        creation: GitHubIssueCreation,
+    ) -> None:
+        if not isinstance(creation, GitHubIssueCreation):
+            raise TypeError("GitHub self-design creation evidence is invalid")
+        if creation.draft_digest != request.draft.digest:
+            raise DesignPublicationError(
+                "GitHub self-design creation evidence is inconsistent"
+            )
+        if not request.authority.issued_at <= creation.created_at <= request.authority.expires_at:
+            raise DesignPublicationError(
+                "GitHub self-design creation evidence is outside authority"
+            )
+
+    def _verify_observed_creation(
+        self,
+        published: GitHubIssueCreation,
+        observed: GitHubIssueCreation,
+    ) -> None:
+        if not isinstance(published, GitHubIssueCreation) or not isinstance(
+            observed, GitHubIssueCreation
+        ):
+            raise TypeError("GitHub self-design creation client returned invalid evidence")
+        self._verify_issue_binding(observed.issue, published.issue.issue_number)
+        if observed.revision != published.revision:
+            raise DesignPublicationError("GitHub self-design creation readback drifted")
 
     def _verify_published_result(
         self,
