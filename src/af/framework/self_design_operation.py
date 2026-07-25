@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
@@ -20,6 +21,22 @@ class DesignEvidenceProvider(Protocol):
     def capture_snapshot(self) -> DesignSnapshot:
         """Capture the exact evidence used for one bounded planning cycle."""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedDesignPlan:
+    """Bind one immutable snapshot to the exact pure plan derived from it."""
+
+    snapshot: DesignSnapshot
+    plan: DesignPlan
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.snapshot, DesignSnapshot):
+            raise TypeError("prepared self-design snapshot is invalid")
+        if not isinstance(self.plan, DesignPlan):
+            raise TypeError("prepared self-design plan is invalid")
+        if self.plan.snapshot_digest != self.snapshot.digest:
+            raise ValueError("prepared self-design plan is not bound to its snapshot")
 
 
 class SelfDesignOperation:
@@ -48,12 +65,19 @@ class SelfDesignOperation:
         self._clock = clock
         self._planner = planner or SelfDesignPlanner()
 
-    def plan(self) -> DesignPlan:
-        """Capture exactly one snapshot and return the planner's canonical result."""
+    def prepare(self) -> PreparedDesignPlan:
+        """Capture once and bind the snapshot to the exact canonical plan."""
         snapshot = self._provider.capture_snapshot()
         if not isinstance(snapshot, DesignSnapshot):
             raise TypeError("self-design evidence provider returned an invalid snapshot")
         observed_at = self._clock()
         if not isinstance(observed_at, datetime):
             raise TypeError("self-design clock returned an invalid time")
-        return self._planner.plan(snapshot, self._policy, now=observed_at)
+        return PreparedDesignPlan(
+            snapshot=snapshot,
+            plan=self._planner.plan(snapshot, self._policy, now=observed_at),
+        )
+
+    def plan(self) -> DesignPlan:
+        """Capture exactly one snapshot and return the planner's canonical result."""
+        return self.prepare().plan
