@@ -163,7 +163,10 @@ def test_projector_commits_idempotent_tombstone_and_contiguous_checkpoint() -> N
     projector = _projector(driver, search)
 
     assert projector.project(_upsert()) is ProjectionDecision.APPLY
-    assert projector.project(_delete(message_id="event-2", position=2)) is ProjectionDecision.APPLY
+    assert (
+        projector.project(_delete(message_id="event-2", position=2))
+        is ProjectionDecision.APPLY
+    )
 
     assert search.deletes == [("tenant-a", "records", "resource-a", "primary")]
     checkpoint = _checkpoint(driver)
@@ -176,12 +179,17 @@ def test_stale_and_gap_deliveries_cannot_mutate_search() -> None:
     driver = SQLiteDriver(":memory:")
     search = RecordingSearch()
     projector = _projector(driver, search)
-    assert projector.project(_upsert(message_id="event-2", position=2)) is ProjectionDecision.APPLY
+    assert (
+        projector.project(_upsert(message_id="event-2", position=2))
+        is ProjectionDecision.APPLY
+    )
 
     stale = _upsert(message_id="event-1", position=1, resource_id="resource-stale")
     assert projector.project(stale) is ProjectionDecision.STALE
     with pytest.raises(ProjectionGapError):
-        projector.project(_upsert(message_id="event-4", position=4, resource_id="resource-gap"))
+        projector.project(
+            _upsert(message_id="event-4", position=4, resource_id="resource-gap")
+        )
 
     assert len(search.upserts) == 1
     assert _checkpoint(driver).position == 2  # type: ignore[union-attr]
