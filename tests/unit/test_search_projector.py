@@ -7,6 +7,7 @@ import pytest
 from af.framework.errors import PlatformReason
 from af.infrastructure.sqlite import SQLiteDriver
 from af.messaging import (
+    ProjectionCheckpoint,
     ProjectionCheckpointStore,
     ProjectionDecision,
     ProjectionGapError,
@@ -109,7 +110,7 @@ def _projector(
     return projector
 
 
-def _checkpoint(driver: SQLiteDriver):
+def _checkpoint(driver: SQLiteDriver) -> ProjectionCheckpoint | None:
     with driver.transaction(read_only=True) as transaction:
         return ProjectionCheckpointStore().load(
             transaction,
