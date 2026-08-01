@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
 
 import pytest
 
-from af.cache.contracts import CacheKey, CacheNamespace
+from af.cache.contracts import CacheKey, CacheNamespace, LockOwner
 from af.cache.manager import CacheFeature, CacheManager, bind_cache_manager
 from af.cache.memory import MemoryCacheDriver, memory_cache_registration
 from af.cache.null import NullCacheDriver, null_cache_registration
@@ -251,3 +254,125 @@ def test_null_cache_validates_operations_and_fails_closed_after_shutdown() -> No
     with pytest.raises(PlatformError) as captured:
         cache.get(namespace, key)
     assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_memory_lock_is_owner_fenced_and_renews_only_current_lease() -> None:
+    clock = Clock()
+    cache = MemoryCacheDriver(clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:resource")
+    first_owner = LockOwner("owner-a")
+    second_owner = LockOwner("owner-b")
+
+    first = cache.acquire_lock(
+        namespace,
+        key,
+        first_owner,
+        ttl=timedelta(seconds=5),
+    )
+    assert first is not None
+    assert (
+        cache.acquire_lock(
+            namespace,
+            key,
+            second_owner,
+            ttl=timedelta(seconds=5),
+        )
+        is None
+    )
+
+    forged = replace(first, owner=second_owner)
+    assert (
+        cache.renew_lock(
+            namespace,
+            key,
+            forged,
+            ttl=timedelta(seconds=10),
+        )
+        is None
+    )
+    assert not cache.release_lock(namespace, key, forged)
+
+    renewed = cache.renew_lock(
+        namespace,
+        key,
+        first,
+        ttl=timedelta(seconds=10),
+    )
+    assert renewed is not None
+    assert renewed.fencing_token == first.fencing_token
+    clock.now += timedelta(seconds=11)
+
+    second = cache.acquire_lock(
+        namespace,
+        key,
+        second_owner,
+        ttl=timedelta(seconds=5),
+    )
+    assert second is not None
+    assert second.fencing_token > first.fencing_token
+    assert not cache.release_lock(namespace, key, first)
+    assert cache.release_lock(namespace, key, second)
+    cache.close()
+
+
+def test_memory_lock_contention_permits_one_active_owner() -> None:
+    cache = MemoryCacheDriver(clock=Clock())
+    namespace = _namespace()
+    key = CacheKey("lock:contended")
+    barrier = Barrier(8)
+
+    def contend(index: int) -> object:
+        barrier.wait()
+        return cache.acquire_lock(
+            namespace,
+            key,
+            LockOwner(f"owner-{index}"),
+            ttl=timedelta(seconds=30),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        leases = tuple(executor.map(contend, range(8)))
+
+    assert sum(lease is not None for lease in leases) == 1
+    cache.close()
+
+
+def test_cache_manager_routes_verified_lock_capability() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("lock:manager")
+    owner = LockOwner("owner-a")
+
+    lease = manager.acquire_lock(
+        namespace,
+        key,
+        owner,
+        ttl=timedelta(seconds=5),
+    )
+    assert lease is not None
+    renewed = manager.renew_lock(
+        namespace,
+        key,
+        lease,
+        ttl=timedelta(seconds=10),
+    )
+    assert renewed is not None
+    assert manager.release_lock(namespace, key, renewed)
+    manager.close()
+
+
+def test_lock_owner_identity_is_bounded_and_redacted() -> None:
+    with pytest.raises(ValueError):
+        LockOwner("")
+    with pytest.raises(ValueError):
+        LockOwner("x" * 513)
+    assert "owner-secret" not in repr(LockOwner("owner-secret"))
