@@ -1840,3 +1840,35 @@ common directory without contacting or changing the upstream.
 - **TEST-034-3**: A loader that outlives its lease cannot publish stale bytes.
 - **TEST-034-4**: Missing or non-positive funnel durations fail before cache execution.
 - **TEST-034-5**: `memoize` forwards the same bounded coalescing contract.
+
+---
+
+## [SPEC-035] Stale-While-Revalidate Cache Fill
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST preserve raw payload bytes and distinguish fresh lifetime from the bounded retained-stale
+  lifetime without requiring drivers to return expired entries.
+- MUST require verified read, write, TTL, namespace, and lock capabilities.
+- MUST return stale bytes without waiting for the loader and MUST schedule at most one refresh for
+  a namespace/key while a current lease exists.
+- MUST renew ownership before publishing refreshed bytes and MUST preserve stale data after loader,
+  scheduler, or lease-renewal failure.
+- MUST cold-fill through one owner after hard expiry and MUST bound contention by a positive wait
+  timeout.
+- MUST validate all durations, the loader, and the scheduler before cache mutation.
+- MUST scope freshness markers to the exact namespace and a bounded digest of the logical key.
+
+### Tests
+- **TEST-035-1**: Fresh data is returned directly; after fresh expiry repeated callers receive the
+  same stale bytes while only one refresh is scheduled.
+- **TEST-035-2**: Successful refresh replaces the retained value and restores the fresh interval.
+- **TEST-035-3**: Loader, scheduler, and expired-refresh-lease failures preserve stale bytes and
+  permit a later retry.
+- **TEST-035-4**: Hard expiry performs a new bounded cold fill; cold lease loss and persistent
+  contention fail transiently without publishing.
+- **TEST-035-5**: Non-positive durations, non-callable scheduling, and an overflowing hard horizon
+  fail before cache mutation.
+
