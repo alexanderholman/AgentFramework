@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-import click
 import typer
+from typer.core import TyperCommand, TyperGroup
 from typer.main import get_command as get_typer_command
 
 from af.framework.container import ProviderRegistrar, Scope
@@ -43,7 +43,7 @@ def install_cli_command_contributors(cli: typer.Typer, application: AFApplicatio
 
 
 def install_click_group_command_contributors(
-    group: click.Group,
+    group: TyperGroup,
     application: AFApplication,
 ) -> None:
     """Install provider-contributed commands into one invocation-local Click group."""
@@ -52,14 +52,21 @@ def install_click_group_command_contributors(
         contributed = typer.Typer(add_completion=False)
         contributor.register(contributed)
         command = get_typer_command(contributed)
-        if isinstance(command, click.Group):
+        if isinstance(command, TyperGroup):
             for name, child in command.commands.items():
                 group.add_command(child, name)
             continue
+        if not isinstance(command, TyperCommand):
+            raise PlatformError(
+                PlatformReason.CONFIGURATION_INVALID,
+                stage="cli.command-contributors",
+            )
         group.add_command(command, command.name)
 
 
-def _resolve_cli_command_contributors(application: AFApplication) -> tuple[CliCommandContributor, ...]:
+def _resolve_cli_command_contributors(
+    application: AFApplication,
+) -> tuple[CliCommandContributor, ...]:
     """Return validated CLI contributors from an AF application container."""
 
     try:

@@ -11,8 +11,8 @@ from inspect import iscoroutine
 from pathlib import Path
 from typing import Annotated, cast
 
-import click
 import typer
+from typer._click.core import Command, Context
 from typer.core import TyperGroup
 
 from af.application.ideons import InterpretRequest
@@ -20,6 +20,8 @@ from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication, create_application
 from af.bootstrap_version_control import create_version_control_controller
 from af.domain.ideons.records import ContextGraph
+from af.framework.container import Container, InvocationKind
+from af.framework.context import AcceptanceScope, ExecutionContext
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 from af.framework.version_control import VersionControlRequest
@@ -41,6 +43,7 @@ _APPLICATION_FACTORY = re.compile(
 )
 _MAX_APPLICATION_FACTORY_LENGTH = 256
 _CURRENT_APPLICATION_META_KEY = "af.current_application"
+_CURRENT_CONTAINER_META_KEY = "af.current_container"
 
 
 def _validate_application_factory(value: str) -> None:
@@ -90,6 +93,22 @@ def current_application_from_context(context: typer.Context) -> AFApplication:
     return application
 
 
+def current_container_from_context(context: typer.Context) -> Container:
+    current = context.meta.get(_CURRENT_CONTAINER_META_KEY)
+    if not callable(current):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.container-context",
+        )
+    container = current()
+    if not isinstance(container, Container):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.container-context",
+        )
+    return container
+
+
 def create_cli(
     application: AFApplication | None = None,
     *,
@@ -131,10 +150,12 @@ def create_cli(
         create_application if application_factory is None else application_factory
     )
     selected_factory_path: str | None = None
+    lifecycle_context: typer.Context | Context | None = None
+    current_invocation: Container | None = None
     accepts_operator_factory = application is None and application_factory is None
 
     class _AFRootGroup(TyperGroup):
-        def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
+        def get_command(self, ctx: Context, name: str) -> Command | None:
             nonlocal selected_factory_path
             command = super().get_command(ctx, name)
             if command is not None or ctx.resilient_parsing:
@@ -151,8 +172,19 @@ def create_cli(
         cls=_AFRootGroup,
     )
 
+    def current_container() -> Container:
+        application = current()
+        if current_invocation is None:
+            if isinstance(application, AFApplication):
+                return application.container
+            raise PlatformError(
+                PlatformReason.CONTEXT_UNAVAILABLE,
+                stage="cli.container-context",
+            )
+        return current_invocation
+
     def current() -> AFApplication:
-        nonlocal cached_application
+        nonlocal cached_application, current_invocation
         if cached_application is None:
             factory = configured_factory
             external_factory = application_factory is not None
@@ -189,6 +221,20 @@ def create_cli(
                 cached_application = resolved
             else:
                 cached_application = cast(AFApplication, resolved)
+        if (
+            isinstance(cached_application, AFApplication)
+            and lifecycle_context is not None
+            and current_invocation is None
+        ):
+            current_invocation = lifecycle_context.with_resource(
+                cached_application.container.invocation_scope(
+                    context=ExecutionContext(
+                        requested_scope=AcceptanceScope.DETERMINISTIC,
+                        effective_scope=AcceptanceScope.DETERMINISTIC,
+                    ),
+                    kind=InvocationKind.INTERACTION,
+                )
+            )
         return cached_application
 
     def current_version_control() -> VersionControlController:
@@ -212,9 +258,11 @@ def create_cli(
             ),
         ] = None,
     ) -> None:
-        nonlocal selected_factory_path
+        nonlocal lifecycle_context, selected_factory_path
+        lifecycle_context = context
         selected_factory_path = None
         context.meta[_CURRENT_APPLICATION_META_KEY] = current
+        context.meta[_CURRENT_CONTAINER_META_KEY] = current_container
         if factory_path is not None:
             if not accepts_operator_factory:
                 fail(
@@ -230,11 +278,16 @@ def create_cli(
                 fail(error)
 
         def close_owned_application() -> None:
-            nonlocal cached_application, selected_factory_path
+            nonlocal cached_application
+            nonlocal current_invocation
+            nonlocal lifecycle_context
+            nonlocal selected_factory_path
             try:
                 if owns_application and cached_application is not None:
                     cached_application.shutdown()
             finally:
+                current_invocation = None
+                lifecycle_context = None
                 if owns_application:
                     cached_application = None
                 selected_factory_path = None

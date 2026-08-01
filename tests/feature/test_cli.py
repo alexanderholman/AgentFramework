@@ -10,13 +10,18 @@ from typer.testing import CliRunner
 from af.bootstrap import create_application
 from af.config import Settings
 from af.framework.application import ApplicationState
-from af.framework.container import Container, ProviderRegistrar, ServiceProvider
+from af.framework.container import Container, ProviderRegistrar, Scope, ServiceProvider
+from af.framework.context import current_context
 from af.framework.errors import InvalidPrompt
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces import cli as cli_module
-from af.interfaces.cli import create_cli, current_application_from_context
+from af.interfaces.cli import (
+    create_cli,
+    current_application_from_context,
+    current_container_from_context,
+)
 from af.interfaces.cli_commands import bind_cli_command_contributor
 
 runner = CliRunner()
@@ -320,6 +325,108 @@ def test_installed_cli_loads_provider_commands_from_explicit_application_factory
     assert loaded.stdout == "Hello, world!\n"
     assert unloaded.exit_code == 2
     assert contributor.registrations == 1
+
+
+def test_provider_commands_run_inside_a_fresh_cli_invocation_scope() -> None:
+    class InvocationSnapshot:
+        def __init__(
+            self,
+            *,
+            sequence: int,
+            tenant_id: str | None,
+            requested_scope: str,
+            effective_scope: str,
+            invocation_kind: str,
+        ) -> None:
+            self.sequence = sequence
+            self.tenant_id = tenant_id
+            self.requested_scope = requested_scope
+            self.effective_scope = effective_scope
+            self.invocation_kind = invocation_kind
+
+    class ScopeContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-scope")
+            def provider_scope(context: typer.Context) -> None:
+                application = current_application_from_context(context)
+                container = current_container_from_context(context)
+                first = container.resolve(InvocationSnapshot)
+                second = container.resolve(InvocationSnapshot)
+                typer.echo(
+                    json.dumps(
+                        {
+                            "same_application_container": container is application.container,
+                            "same_instance_within_invocation": first is second,
+                            "sequence": first.sequence,
+                            "tenant_id": first.tenant_id,
+                            "requested_scope": first.requested_scope,
+                            "effective_scope": first.effective_scope,
+                            "invocation_kind": first.invocation_kind,
+                        }
+                    )
+                )
+
+    class ScopeProvider(ServiceProvider):
+        provider_id = "test.cli-provider.invocation-scope"
+
+        def __init__(self, contributor: ScopeContributor) -> None:
+            self._contributor = contributor
+            self._sequence = 0
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            registrar.bind(
+                InvocationSnapshot,
+                self._create_snapshot,
+                scope=Scope.INVOCATION,
+            )
+            bind_cli_command_contributor(registrar, self._contributor)
+
+        def _create_snapshot(self, current: Container) -> InvocationSnapshot:
+            del current
+            context = current_context()
+            self._sequence += 1
+            return InvocationSnapshot(
+                sequence=self._sequence,
+                tenant_id=context.tenant_id,
+                requested_scope=context.requested_scope.value,
+                effective_scope=context.effective_scope.value,
+                invocation_kind="interaction",
+            )
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(ScopeProvider(ScopeContributor()),),
+    )
+    try:
+        cli = create_cli(application)
+
+        first = runner.invoke(cli, ["provider-scope"])
+        second = runner.invoke(cli, ["provider-scope"])
+
+        assert first.exit_code == 0
+        assert second.exit_code == 0
+        assert json.loads(first.stdout) == {
+            "same_application_container": False,
+            "same_instance_within_invocation": True,
+            "sequence": 1,
+            "tenant_id": None,
+            "requested_scope": "deterministic",
+            "effective_scope": "deterministic",
+            "invocation_kind": "interaction",
+        }
+        assert json.loads(second.stdout) == {
+            "same_application_container": False,
+            "same_instance_within_invocation": True,
+            "sequence": 2,
+            "tenant_id": None,
+            "requested_scope": "deterministic",
+            "effective_scope": "deterministic",
+            "invocation_kind": "interaction",
+        }
+    finally:
+        application.shutdown()
 
 
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
