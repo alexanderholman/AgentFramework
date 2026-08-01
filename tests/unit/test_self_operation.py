@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -50,6 +51,36 @@ def snapshot() -> SelfOperationSnapshot:
 
 
 class SelfOperationProtocolTests(unittest.TestCase):
+    def test_public_payload_apis_match_canonical_json(self) -> None:
+        observed = snapshot()
+        handoff = StageHandoff(
+            stage=SelfOperationStage.ANALYSIS,
+            source_snapshot_digest=observed.digest,
+            input_artifact_digest=SNAPSHOT_DIGEST,
+            policy_digest=POLICY_DIGEST,
+            predecessor_result_digest=None,
+            entry_authority_id="authority:entry-point",
+        )
+        result = StageResult(
+            stage=SelfOperationStage.ANALYSIS,
+            handoff_digest=handoff.digest,
+            reason=StageReason.SELECTED,
+            output_digest=OUTPUT_DIGEST,
+        )
+        plan = StagePlan(
+            stage=SelfOperationStage.ANALYSIS,
+            handoff=handoff,
+            result=result,
+            route="analyse",
+            allowed_writes=(),
+            stop_conditions=("authority_missing", "snapshot_stale", "unsafe"),
+        )
+
+        self.assertEqual(json.loads(observed.canonical_json()), observed.payload())
+        self.assertEqual(json.loads(handoff.canonical_json()), handoff.payload())
+        self.assertEqual(json.loads(result.canonical_json()), result.payload())
+        self.assertEqual(json.loads(plan.canonical_json()), plan.payload())
+
     def test_snapshot_digest_is_stable_when_inputs_are_reordered(self) -> None:
         first = snapshot()
         reordered = replace(

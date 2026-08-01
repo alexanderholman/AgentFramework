@@ -188,7 +188,7 @@ class AnalysisSnapshot:
         return _canonical_json(
             {
                 "candidates": [item._payload() for item in self.candidates],
-                "operation": self.operation._payload(),
+                "operation": self.operation.payload(),
             }
         )
 
@@ -372,7 +372,7 @@ class AnalysisPlan:
                 "hypotheses": list(self.output.hypotheses) if self.output is not None else None,
                 "route": self.route.value,
                 "selected_candidate_id": self.selected_candidate_id,
-                "stage_plan": self.stage_plan._payload(),
+                "stage_plan": self.stage_plan.payload(),
                 "uncertainties": (
                     list(self.output.uncertainties) if self.output is not None else None
                 ),

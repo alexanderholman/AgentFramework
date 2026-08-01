@@ -106,6 +106,10 @@ class AuthorityRecord:
             "scope_id": self.scope_id,
         }
 
+    def payload(self) -> dict[str, object]:
+        """Return the public canonical payload for this authority record."""
+        return self._payload()
+
 
 @dataclass(frozen=True, slots=True)
 class StageBudget:
@@ -141,6 +145,10 @@ class StageBudget:
             "unit": self.unit,
             "used": self.used,
         }
+
+    def payload(self) -> dict[str, object]:
+        """Return the public canonical payload for this budget record."""
+        return self._payload()
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,9 +208,9 @@ class SelfOperationSnapshot:
 
     def _payload(self) -> dict[str, object]:
         return {
-            "authorities": [item._payload() for item in self.authorities],
+            "authorities": [item.payload() for item in self.authorities],
             "base_ref": self.base_ref,
-            "budgets": [item._payload() for item in self.budgets],
+            "budgets": [item.payload() for item in self.budgets],
             "captured_at": _iso8601(self.captured_at),
             "evidence_digests": list(self.evidence_digests),
             "head_sha": self.head_sha,
@@ -210,9 +218,13 @@ class SelfOperationSnapshot:
             "source_id": self.source_id,
         }
 
+    def payload(self) -> dict[str, object]:
+        """Return the public canonical payload for this snapshot."""
+        return self._payload()
+
     def canonical_json(self) -> str:
         """Return the byte-stable snapshot representation."""
-        return _canonical_json(self._payload())
+        return _canonical_json(self.payload())
 
     @property
     def digest(self) -> str:
@@ -257,9 +269,13 @@ class StageHandoff:
             "stage": self.stage.value,
         }
 
+    def payload(self) -> dict[str, object]:
+        """Return the public canonical payload for this handoff."""
+        return self._payload()
+
     def canonical_json(self) -> str:
         """Return the byte-stable handoff representation."""
-        return _canonical_json(self._payload())
+        return _canonical_json(self.payload())
 
     @property
     def digest(self) -> str:
@@ -297,9 +313,13 @@ class StageResult:
             "stage": self.stage.value,
         }
 
+    def payload(self) -> dict[str, object]:
+        """Return the public canonical payload for this result."""
+        return self._payload()
+
     def canonical_json(self) -> str:
         """Return the byte-stable result representation."""
-        return _canonical_json(self._payload())
+        return _canonical_json(self.payload())
 
     @property
     def digest(self) -> str:
@@ -346,16 +366,20 @@ class StagePlan:
     def _payload(self) -> dict[str, object]:
         return {
             "allowed_writes": list(self.allowed_writes),
-            "handoff": self.handoff._payload(),
-            "result": self.result._payload(),
+            "handoff": self.handoff.payload(),
+            "result": self.result.payload(),
             "route": self.route,
             "stage": self.stage.value,
             "stop_conditions": list(self.stop_conditions),
         }
 
+    def payload(self) -> dict[str, object]:
+        """Return the public canonical payload for this stage plan."""
+        return self._payload()
+
     def canonical_json(self) -> str:
         """Return the byte-stable plan representation."""
-        return _canonical_json(self._payload())
+        return _canonical_json(self.payload())
 
     @property
     def digest(self) -> str:
