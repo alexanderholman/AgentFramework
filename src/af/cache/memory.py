@@ -13,6 +13,8 @@ from threading import RLock
 from af.cache.contracts import (
     CacheKey,
     CacheNamespace,
+    LockLease,
+    LockOwner,
     _validated_operation,
     _validated_ttl,
     _validated_value,
@@ -50,6 +52,8 @@ class MemoryCacheDriver:
         if not callable(self._clock):
             raise TypeError("memory cache clock must be callable")
         self._entries: dict[tuple[CacheNamespace, CacheKey], _Entry] = {}
+        self._locks: dict[tuple[CacheNamespace, CacheKey], LockLease] = {}
+        self._fencing_tokens: dict[tuple[CacheNamespace, CacheKey], int] = {}
         self._lock = RLock()
         self._closed = False
 
@@ -102,7 +106,10 @@ class MemoryCacheDriver:
         namespace, key = _validated_operation(namespace, key)
         with self._lock:
             self._assert_open()
-            return self._entries.pop((namespace, key), None) is not None
+            entry = self._entries.pop((namespace, key), None)
+            if entry is None:
+                return False
+            return entry.expires_at is None or entry.expires_at > self._now()
 
     def flush(self, namespace: CacheNamespace, /) -> int:
         if not isinstance(namespace, CacheNamespace):
@@ -114,11 +121,102 @@ class MemoryCacheDriver:
                 self._entries.pop(key, None)
             return len(keys)
 
+    def _active_lock(
+        self,
+        identity: tuple[CacheNamespace, CacheKey],
+        now: datetime,
+    ) -> LockLease | None:
+        lease = self._locks.get(identity)
+        if lease is not None and lease.expires_at <= now:
+            self._locks.pop(identity, None)
+            return None
+        return lease
+
+    def acquire_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        owner: LockOwner,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(owner, LockOwner):
+            raise TypeError("lock acquire requires a validated owner")
+        validated_ttl = _validated_ttl(ttl)
+        if validated_ttl is None:
+            raise ValueError("lock TTL is required")
+        identity = (namespace, key)
+        with self._lock:
+            self._assert_open()
+            now = self._now()
+            if self._active_lock(identity, now) is not None:
+                return None
+            fencing_token = self._fencing_tokens.get(identity, 0) + 1
+            self._fencing_tokens[identity] = fencing_token
+            lease = LockLease(
+                owner=owner,
+                fencing_token=fencing_token,
+                expires_at=now + validated_ttl,
+            )
+            self._locks[identity] = lease
+            return lease
+
+    def renew_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock renewal requires a validated lease")
+        validated_ttl = _validated_ttl(ttl)
+        if validated_ttl is None:
+            raise ValueError("lock TTL is required")
+        identity = (namespace, key)
+        with self._lock:
+            self._assert_open()
+            now = self._now()
+            if self._active_lock(identity, now) != lease:
+                return None
+            renewed = LockLease(
+                owner=lease.owner,
+                fencing_token=lease.fencing_token,
+                expires_at=now + validated_ttl,
+            )
+            self._locks[identity] = renewed
+            return renewed
+
+    def release_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+    ) -> bool:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock release requires a validated lease")
+        identity = (namespace, key)
+        with self._lock:
+            self._assert_open()
+            if self._active_lock(identity, self._now()) != lease:
+                return False
+            self._locks.pop(identity, None)
+            return True
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._entries.clear()
+            self._locks.clear()
+            self._fencing_tokens.clear()
             self._closed = True
 
 
