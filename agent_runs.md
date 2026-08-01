@@ -1600,3 +1600,45 @@ level cache semantic that does not require a new backend driver contract. `remem
 - DEC-041
 - SPEC-028
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #028 - Database Cache Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache manager branch with memory, null, file, and fenced memory-lock slices
+- Repository SQLite and SQLAlchemy dependencies already exercised by other AF drivers
+
+### Outputs
+- Added failing unit coverage for a verified database-backed cache driver
+- Implemented a persistent `database` cache registration and driver with exact TTL and namespace
+  semantics
+- Appended DEC-042 and SPEC-029 for the bounded database cache slice
+
+### Result Summary
+This run extends the existing issue #19 pull request with the next smallest persistent cache
+backend supported by current repository dependencies. The new driver stores bounded bytes in one
+tenant-scoped table, treats expiry and invalid persisted rows as misses, and deliberately does not
+advertise lock capability yet.
+
+### Issues Encountered
+- The first red-phase test invocation failed before collection because the worktree lacked the dev
+  extra; rerunning with `uv run --extra dev` produced the expected missing-module failure
+
+### Actions Taken
+- Added five red-phase tests covering persistence, expiry, invalid-row cleanup, namespace-safe
+  flush, manager routing, capability boundaries, and shutdown behavior
+- Implemented `src/af/cache/database.py` using the existing SQLAlchemy dependency and verified
+  driver-registration pattern
+- Prepared the branch for focused cache tests and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-042
+- SPEC-029
+- Script: `[SCRIPT:af-dev]`

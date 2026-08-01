@@ -1676,3 +1676,28 @@ common directory without contacting or changing the upstream.
 - **TEST-028-1**: `remember` stores and reuses the first loaded bytes for the same key.
 - **TEST-028-2**: `memoize` wraps a loader and returns cached bytes on subsequent calls.
 - **TEST-028-3**: Non-callable loaders are rejected before cache-fill execution.
+
+---
+
+## [SPEC-029] Database Cache Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `database` cache driver that routes through `CacheManager` using the
+  existing cache read/write/TTL/namespace/flush contracts.
+- MUST persist bounded cache bytes across driver recreation when configured with a persistent
+  database URL.
+- MUST treat expiry at the exact TTL boundary as a cache miss and remove only the expired row.
+- MUST scope delete and flush to one exact application, tenant, namespace, and key boundary.
+- MUST treat malformed persisted values as cache misses and remove only the exact invalid row.
+- MUST NOT advertise lock capability in this slice.
+
+### Tests
+- **TEST-029-1**: Replacement persists the final bytes across driver recreation.
+- **TEST-029-2**: Exact expiry and invalid persisted rows return misses and remove the row.
+- **TEST-029-3**: Flush removes only the selected tenant namespace.
+- **TEST-029-4**: Verified manager routing supports get, set, TTL, and delete, but rejects lock
+  capability requests.
+- **TEST-029-5**: Invalid URLs and post-shutdown operations fail closed.

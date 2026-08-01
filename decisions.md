@@ -2658,3 +2658,31 @@ Issue #19 still lacks higher-level cache fill semantics after the first local ca
 Application code can opt into deterministic cache fills immediately on top of memory, null, and
  file drivers. The slice stays small and testable, but it does not yet provide stale
  revalidation, contention collapse, or distributed single-flight guarantees.
+
+---
+
+## [DEC-042] Keep Database Cache Storage Row-Scoped and Non-Coordinating
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still needs a persistent cache backend that works with the verified `CacheManager`
+contracts and current repository dependencies. The next smallest slice is a database-backed cache
+store without yet expanding into distributed locks or network-specific behavior.
+
+### Decision
+1. Implement a `database` cache driver that stores cache entries in one bounded table keyed by
+   validated application, tenant, namespace, and cache-key identities.
+2. Reuse the existing bytes, TTL, delete, and namespace flush contracts instead of introducing a
+   new serialization or lock contract.
+3. Treat expired or invalid persisted rows as cache misses and remove only the exact affected row.
+4. Advertise read, write, TTL, namespace, and flush capabilities only; do not advertise lock
+   capability in this slice.
+5. Prefer a local SQL backend already shipped in the repository dependency set so the slice
+   remains deterministic and fully testable under `[SCRIPT:af-dev]`.
+
+### Consequences
+AF gains a verified persistent cache backend that survives process restarts and preserves tenant
+flush boundaries without taking on distributed coordination semantics. Redis, Memcached, and
+database-backed lock coordination remain later issue #19 slices.
