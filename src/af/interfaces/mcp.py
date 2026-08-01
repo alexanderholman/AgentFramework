@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from af import __version__
 from af.application.search import SearchController
+from af.application.self_design_execution import SelfDesignExecutionController
 from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
 from af.domain.agent_routing import (
@@ -183,6 +184,7 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     registry = resolved.container.resolve(ProcedureRegistry)
     transport_security = _transport_security_for(resolved)
     self_design_operation = _resolve_self_design_operation(resolved)
+    self_design_execution = _resolve_self_design_execution(resolved)
 
     server: FastMCP[None] = FastMCP(
         name="AF Agent Framework",
@@ -252,6 +254,26 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
                 lambda: cast(
                     dict[str, object],
                     json.loads(self_design_operation.plan().canonical_json()),
+                )
+            )
+
+    if self_design_execution is not None:
+
+        @server.tool(
+            name="af_self_design_execute",
+            description=(
+                "Preview or explicitly execute one configured governed self-design cycle."
+            ),
+            annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+            structured_output=True,
+        )
+        def af_self_design_execute(execute: bool = False) -> dict[str, object]:
+            return _invoke_mcp_tool(
+                lambda: cast(
+                    dict[str, object],
+                    self_design_execution.execute().to_dict()
+                    if execute
+                    else json.loads(self_design_execution.preview().canonical_json()),
                 )
             )
 
@@ -370,6 +392,16 @@ def _resolve_self_design_operation(application: AFApplication) -> SelfDesignOper
     except ServiceNotBound:
         return None
     return operation if isinstance(operation, SelfDesignOperation) else None
+
+
+def _resolve_self_design_execution(
+    application: AFApplication,
+) -> SelfDesignExecutionController | None:
+    try:
+        controller = application.container.resolve(SelfDesignExecutionController)
+    except ServiceNotBound:
+        return None
+    return controller if isinstance(controller, SelfDesignExecutionController) else None
 
 
 def _index_search(search: SearchController, *, limit: int) -> SearchIndexResultModel:
