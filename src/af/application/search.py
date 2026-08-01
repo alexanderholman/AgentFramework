@@ -63,8 +63,9 @@ class SearchService:
         task_resources = tuple(
             _task_to_resource(task) for task in self._tasks.list(limit=normalized_limit, offset=0)
         )
+        remaining_limit = normalized_limit - len(task_resources)
         trace_resources = tuple(
-            _trace_to_resource(trace) for trace in self._traces.list()[:normalized_limit]
+            _trace_to_resource(trace) for trace in self._traces.list()[:remaining_limit]
         )
         task_count = self._manager.upsert(task_resources) if task_resources else 0
         trace_count = self._manager.upsert(trace_resources) if trace_resources else 0

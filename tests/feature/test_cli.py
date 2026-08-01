@@ -153,6 +153,26 @@ def test_cli_search_indexes_and_queries_task_and_trace_history() -> None:
         application.shutdown()
 
 
+def test_cli_search_index_limit_bounds_total_backfill() -> None:
+    application = _search_application()
+    try:
+        application.tasks.create("how many qs in qqqq")
+        application.tasks.execute("hello")
+
+        result = runner.invoke(create_cli(application), ["search", "index", "--limit", "2"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {
+            "indexed": 2,
+            "sources": [
+                {"source": "tasks", "indexed": 1},
+                {"source": "traces", "indexed": 1},
+            ],
+        }
+    finally:
+        application.shutdown()
+
+
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
 
