@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
+from typing import Literal, cast
+from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -11,6 +13,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from af import __version__
 from af.bootstrap import AFApplication, create_application
+from af.framework.context import AcceptanceScope, ExecutionContext, use_context
 from af.framework.errors import (
     InvalidPrompt,
     InvalidProviderConfiguration,
@@ -40,7 +43,26 @@ from af.interfaces.http_body import (
 from af.interfaces.http_trust import format_host, host_matches, parse_host_value
 from af.interfaces.ideons import create_ideon_router
 from af.interfaces.rest import create_rest_router
-from af.interfaces.web import create_web_router
+from af.interfaces.web import WebProfile, create_web_router
+
+_WEB_PROFILES = ("basic", "experimental", "pretty")
+
+
+def _resolve_web_profile(
+    web_profile: str,
+    *,
+    enable_experimental_web_features: bool,
+) -> tuple[WebProfile, Literal["disabled", "fallback", "enabled"]]:
+    if web_profile not in _WEB_PROFILES:
+        allowed_profiles = ", ".join(_WEB_PROFILES)
+        raise InvalidProviderConfiguration(
+            f"web profile must be one of {allowed_profiles}; got {web_profile!r}"
+        )
+    if web_profile == "experimental":
+        if enable_experimental_web_features:
+            return "experimental", "enabled"
+        return "pretty", "fallback"
+    return cast(WebProfile, web_profile), "disabled"
 
 
 def _scope_header_values(scope: Scope, header_name: str) -> tuple[str, ...]:
@@ -158,6 +180,23 @@ class _BoundedBodyMiddleware:
         await response(scope, receive, send)
 
 
+class _RequestContextMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        context = ExecutionContext(
+            correlation_id=str(uuid4()),
+            requested_scope=AcceptanceScope.DETERMINISTIC,
+            effective_scope=AcceptanceScope.DETERMINISTIC,
+        )
+        with use_context(context):
+            await self._app(scope, receive, send)
+
+
 class _TrustedHostMiddleware:
     def __init__(self, app: ASGIApp, *, allowed_hosts: Sequence[str]) -> None:
         self._app = app
@@ -199,19 +238,27 @@ def create_http_app(
     *,
     bind_host: str | None = None,
     allowed_hosts: Sequence[str] | None = None,
+    web_profile: str = "basic",
+    enable_experimental_web_features: bool = False,
 ) -> FastAPI:
     owns_application = application is None
     resolved = application or create_application()
-    resolved_bind_host = bind_host or resolved.settings.host
-    resolved_allowed_hosts = (
-        tuple(allowed_hosts) if allowed_hosts is not None else resolved.settings.allowed_hosts
-    )
     try:
+        resolved_bind_host = bind_host or resolved.settings.host
+        resolved_allowed_hosts = (
+            tuple(allowed_hosts) if allowed_hosts is not None else resolved.settings.allowed_hosts
+        )
+        resolved_web_profile, experimental_state = _resolve_web_profile(
+            web_profile,
+            enable_experimental_web_features=enable_experimental_web_features,
+        )
         return _assemble_http_app(
             resolved,
             owns_application=owns_application,
             bind_host=resolved_bind_host,
             allowed_hosts=resolved_allowed_hosts,
+            web_profile=resolved_web_profile,
+            experimental_state=experimental_state,
         )
     except BaseException:
         if owns_application:
@@ -226,6 +273,8 @@ def _assemble_http_app(
     owns_application: bool,
     bind_host: str,
     allowed_hosts: Sequence[str],
+    web_profile: WebProfile,
+    experimental_state: Literal["disabled", "fallback", "enabled"],
 ) -> FastAPI:
 
     @asynccontextmanager
@@ -243,12 +292,19 @@ def _assemble_http_app(
         lifespan=lifespan,
     )
     app.state.af = resolved
+    app.add_middleware(_RequestContextMiddleware)
     app.add_middleware(_BoundedBodyMiddleware)
     app.add_middleware(
         _TrustedHostMiddleware,
         allowed_hosts=_trusted_hosts_for(bind_host, allowed_hosts),
     )
-    app.include_router(create_web_router(resolved.tasks))
+    app.include_router(
+        create_web_router(
+            resolved.tasks,
+            web_profile=web_profile,
+            experimental_state=experimental_state,
+        )
+    )
     app.include_router(create_rest_router(resolved.tasks))
     app.include_router(create_ideon_router(resolved.ideons))
     app.include_router(create_graphql_router(resolved.tasks), prefix="/graphql")

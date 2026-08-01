@@ -15,9 +15,8 @@
       li { margin-bottom: .65rem; }
     </style>
   </head>
-  <body>
+  <body data-af-web-profile="{{ web_profile|default('basic') }}" data-af-experimental="{{ experimental_state|default('disabled') }}">
     <nav><a href="/">AF</a><a href="/tasks">Tasks</a><a href="/docs">REST docs</a><a href="/graphql">GraphQL</a></nav>
     {% block content %}{% endblock %}
   </body>
 </html>
-

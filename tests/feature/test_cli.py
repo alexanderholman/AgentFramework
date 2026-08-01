@@ -258,11 +258,17 @@ def test_cli_serve_passes_explicit_host_options(
     monkeypatch,
 ) -> None:  # type: ignore[no-untyped-def]
     calls: list[tuple[object, str, int]] = []
+    observed_http_options: list[dict[str, object]] = []
 
     def run(app: object, *, host: str, port: int) -> None:
         calls.append((app, host, port))
 
+    def fake_http_app(application_value, **kwargs):  # type: ignore[no-untyped-def]
+        observed_http_options.append({"application": application_value, **kwargs})
+        return object()
+
     monkeypatch.setattr("uvicorn.run", run)
+    monkeypatch.setattr("af.interfaces.http.create_http_app", fake_http_app)
     result = runner.invoke(
         create_cli(application),
         [
@@ -273,12 +279,24 @@ def test_cli_serve_passes_explicit_host_options(
             "9000",
             "--allowed-host",
             "localhost",
+            "--web-profile",
+            "experimental",
+            "--experimental-web-features",
         ],
     )
 
     assert result.exit_code == 0
     assert len(calls) == 1
     assert calls[0][1:] == ("127.0.0.1", 9000)
+    assert observed_http_options == [
+        {
+            "application": application,
+            "bind_host": "127.0.0.1",
+            "allowed_hosts": ("localhost",),
+            "web_profile": "experimental",
+            "enable_experimental_web_features": True,
+        }
+    ]
 
 
 def test_cli_command_specific_error_paths_are_sanitized(application) -> None:  # type: ignore[no-untyped-def]

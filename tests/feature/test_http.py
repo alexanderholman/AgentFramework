@@ -13,6 +13,7 @@ from af.config import Settings
 from af.domain.tasks import Task
 from af.framework.application import ApplicationState
 from af.framework.container import Container, ProviderRegistrar, ServiceProvider
+from af.framework.context import maybe_current_context
 from af.framework.errors import InvalidPrompt, InvalidProviderConfiguration
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
@@ -79,6 +80,104 @@ def test_html_index_and_form_answer(application) -> None:  # type: ignore[no-unt
     assert "AF Agent Framework" in index.text
     assert created.status_code == 200
     assert 'data-testid="answer">3<' in created.text
+
+
+def test_http_web_profiles_require_explicit_experimental_opt_in(
+    application,
+) -> None:  # type: ignore[no-untyped-def]
+    with TestClient(
+        create_http_app(application, web_profile="basic"),
+        base_url=f"http://{TEST_HOST}",
+    ) as basic_client:
+        basic = basic_client.get("/")
+
+    with TestClient(
+        create_http_app(application, web_profile="pretty"),
+        base_url=f"http://{TEST_HOST}",
+    ) as pretty_client:
+        pretty = pretty_client.get("/")
+
+    with TestClient(
+        create_http_app(application, web_profile="experimental"),
+        base_url=f"http://{TEST_HOST}",
+    ) as fallback_client:
+        fallback = fallback_client.get("/")
+
+    with TestClient(
+        create_http_app(
+            application,
+            web_profile="experimental",
+            enable_experimental_web_features=True,
+        ),
+        base_url=f"http://{TEST_HOST}",
+    ) as experimental_client:
+        experimental = experimental_client.get("/")
+
+    assert 'data-af-web-profile="basic"' in basic.text
+    assert 'data-af-web-profile="pretty"' in pretty.text
+    assert 'data-af-web-profile="pretty"' in fallback.text
+    assert 'data-af-experimental="fallback"' in fallback.text
+    assert 'data-af-web-profile="experimental"' in experimental.text
+    assert 'data-af-experimental="enabled"' in experimental.text
+
+
+def test_http_rejects_unknown_web_profile_with_allowed_values() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(
+        InvalidProviderConfiguration,
+        match=(
+            r"web profile must be one of basic, experimental, pretty; "
+            r"got 'retro-terminal'"
+        ),
+    ):
+        create_http_app(application, web_profile="retro-terminal")
+
+
+def test_http_request_context_is_scoped_per_invocation() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    observed: list[tuple[str | None, str | None, str | None]] = []
+    original_list = application.tasks.list
+
+    def record_list(*, limit=None, offset=0):  # type: ignore[no-untyped-def]
+        context = maybe_current_context()
+        observed.append(
+            (
+                None if context is None else context.correlation_id,
+                None
+                if context is None
+                else None
+                if context.effective_scope is None
+                else context.effective_scope.value,
+                None
+                if context is None
+                else None
+                if context.requested_scope is None
+                else context.requested_scope.value,
+            )
+        )
+        return original_list(limit=limit, offset=offset)
+
+    application.tasks.list = record_list  # type: ignore[assignment]
+
+    with _http_client(application) as client:
+        first = client.get("/tasks")
+        second = client.get("/tasks")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(observed) == 2
+    assert observed[0][0] is not None
+    assert observed[1][0] is not None
+    assert observed[0][0] != observed[1][0]
+    assert observed[0][1:] == [("deterministic", "deterministic")][0]
+    assert observed[1][1:] == [("deterministic", "deterministic")][0]
 
 
 def test_http_app_exposes_the_composed_ideon_route(application) -> None:  # type: ignore[no-untyped-def]
@@ -1152,6 +1251,25 @@ def test_http_construction_failure_closes_internally_created_application(
 
     with pytest.raises(InvalidProviderConfiguration):
         create_http_app(bind_host="0.0.0.0", allowed_hosts=())
+
+    assert owned.lifecycle.state is ApplicationState.SHUTDOWN
+
+
+def test_http_invalid_web_profile_closes_internally_created_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owned = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    monkeypatch.setattr(http_module, "create_application", lambda: owned)
+
+    with pytest.raises(
+        InvalidProviderConfiguration,
+        match=(r"web profile must be one of basic, experimental, pretty; got 'invalid'"),
+    ):
+        create_http_app(web_profile="invalid")
 
     assert owned.lifecycle.state is ApplicationState.SHUTDOWN
 

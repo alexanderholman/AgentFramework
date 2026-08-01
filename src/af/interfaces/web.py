@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import secrets
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, Request, status
@@ -19,6 +20,8 @@ TEMPLATE_DIRECTORY = Path(__file__).parent.parent / "views" / "templates"
 CSRF_COOKIE_NAME = "af-csrf"
 CSRF_FORM_FIELD = "csrf_token"
 _CSRF_SECRET = secrets.token_bytes(32)
+
+type WebProfile = Literal["basic", "pretty", "experimental"]
 
 
 def _validate_prompt(prompt: str) -> str | None:
@@ -95,9 +98,20 @@ def _csrf_forbidden() -> HTMLResponse:
     return HTMLResponse("Forbidden", status_code=status.HTTP_403_FORBIDDEN)
 
 
-def create_web_router(controller: TaskController) -> APIRouter:
+def create_web_router(
+    controller: TaskController,
+    *,
+    web_profile: WebProfile,
+    experimental_state: Literal["disabled", "fallback", "enabled"],
+) -> APIRouter:
     router = APIRouter(tags=["web"])
     templates = Jinja2Templates(directory=TEMPLATE_DIRECTORY)
+
+    def profile_context() -> dict[str, str]:
+        return {
+            "web_profile": web_profile,
+            "experimental_state": experimental_state,
+        }
 
     def render_index(
         request: Request,
@@ -115,6 +129,7 @@ def create_web_router(controller: TaskController) -> APIRouter:
                 "prompt": prompt,
                 "error": error,
                 "csrf_token": token,
+                **profile_context(),
             },
             status_code=status_code,
         )
@@ -139,6 +154,7 @@ def create_web_router(controller: TaskController) -> APIRouter:
                 "prompt": prompt or task.prompt,
                 "error": error,
                 "csrf_token": token,
+                **profile_context(),
             },
             status_code=status_code,
         )
@@ -154,7 +170,7 @@ def create_web_router(controller: TaskController) -> APIRouter:
         return templates.TemplateResponse(
             request=request,
             name="tasks/index.html",
-            context={"tasks": controller.list()},
+            context={"tasks": controller.list(), **profile_context()},
         )
 
     @router.post("/tasks")
