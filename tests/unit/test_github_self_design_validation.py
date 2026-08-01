@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+
 from af.infrastructure.github_self_design import (
     GitHubCommentPublication,
     GitHubDesignPublisher,
