@@ -408,6 +408,11 @@ def create_cli(
         host: Annotated[str | None, typer.Option()] = None,
         port: Annotated[int | None, typer.Option()] = None,
         allowed_host: Annotated[list[str] | None, typer.Option("--allowed-host")] = None,
+        web_profile: Annotated[str, typer.Option("--web-profile")] = "basic",
+        experimental_web_features: Annotated[
+            bool,
+            typer.Option("--experimental-web-features"),
+        ] = False,
     ) -> None:
         """Serve HTML, REST, and GraphQL interfaces."""
         import uvicorn
@@ -420,6 +425,8 @@ def create_cli(
                 resolved,
                 bind_host=host or resolved.settings.host,
                 allowed_hosts=tuple(allowed_host or ()) or None,
+                web_profile=web_profile,
+                enable_experimental_web_features=experimental_web_features,
             ),
             host=host or resolved.settings.host,
             port=port or resolved.settings.port,
