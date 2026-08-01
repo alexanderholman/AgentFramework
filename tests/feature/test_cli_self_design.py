@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime, timedelta
+from types import ModuleType
 from typing import cast
 
+import pytest
 from typer.testing import CliRunner
 
+from af.bootstrap import create_application
+from af.framework.container import ProviderRegistrar, ServiceProvider
 from af.framework.self_design import (
     DesignCandidate,
     DesignPolicy,
@@ -67,6 +72,16 @@ def _operation(provider: DesignEvidenceProvider) -> SelfDesignOperation:
     )
 
 
+class SelfDesignProvider(ServiceProvider):
+    provider_id = "test.self-design"
+
+    def register(self, registrar: ProviderRegistrar) -> None:
+        registrar.bind(
+            SelfDesignOperation,
+            lambda _: _operation(RecordingEvidenceProvider(_snapshot())),
+        )
+
+
 def test_self_design_command_emits_one_canonical_read_only_plan() -> None:
     provider = RecordingEvidenceProvider(_snapshot())
 
@@ -122,6 +137,33 @@ def test_self_design_command_rejects_invalid_provider_output() -> None:
     assert result.exit_code == 2
     assert result.stdout == ""
     assert result.stderr == "self-design evidence provider returned an invalid snapshot\n"
+
+
+def test_installed_self_design_command_loads_operation_from_application_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("test_self_design_operator_profile")
+
+    def build_application():  # type: ignore[no-untyped-def]
+        return create_application(providers=(SelfDesignProvider(),))
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "--application-factory",
+            "test_self_design_operator_profile:build_application",
+            "self-design",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["route"] == "propose"
+    assert payload["selected_candidate_id"] == "issue:124"
+    assert payload["allowed_writes"] == []
 
 
 def test_installed_console_retains_existing_commands() -> None:
