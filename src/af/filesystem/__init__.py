@@ -1,1 +1,1 @@
-"""Filesystem contracts, managers, and built-in verified disks."""
+"""Filesystem contracts, managers, decorators, and built-in verified disks."""

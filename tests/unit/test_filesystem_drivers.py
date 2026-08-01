@@ -11,13 +11,16 @@ import pytest
 
 from af.filesystem.contracts import (
     ByteRange,
+    FilesystemEntry,
     FilesystemKey,
     FilesystemOperationError,
     FileVisibility,
     MultipartPart,
     MultipartUpload,
+    SignedUrlOperation,
     UnsupportedFilesystemFeature,
 )
+from af.filesystem.decorators import ReadOnlyFilesystemDriver, ScopedFilesystemDriver
 from af.filesystem.local import LocalFilesystemDriver, local_filesystem_registration
 from af.filesystem.memory import MemoryFilesystemDriver, memory_filesystem_registration
 from af.framework.errors import PlatformError, PlatformReason
@@ -299,3 +302,159 @@ def test_memory_filesystem_move_is_a_no_op_when_source_equals_destination() -> N
 
     with driver.read(key) as stream:
         assert stream.read() == b"content"
+
+
+def test_scoped_filesystem_driver_rewrites_keys_and_keeps_listings_relative() -> None:
+    base = MemoryFilesystemDriver(clock=lambda: _NOW)
+    driver = ScopedFilesystemDriver(base, FilesystemKey("tenant-a"))
+    key = FilesystemKey("docs/report.txt")
+    copy_key = FilesystemKey("docs/report-copy.txt")
+    moved_key = FilesystemKey("archive/report.txt")
+
+    driver.write(key, BytesIO(b"content"))
+    driver.copy(key, copy_key)
+    driver.move(copy_key, moved_key)
+
+    with base.read(FilesystemKey("tenant-a/docs/report.txt")) as stream:
+        assert stream.read() == b"content"
+    with driver.read(key, byte_range=ByteRange(start=1, end=4)) as stream:
+        assert stream.read() == b"onte"
+
+    assert [entry.key.value for entry in driver.list()] == ["archive/report.txt", "docs/report.txt"]
+    assert driver.metadata(key).key == key
+    assert driver.checksum(key) == hashlib.sha256(b"content").hexdigest()
+    assert driver.delete(moved_key)
+
+
+def test_scoped_filesystem_driver_rejects_underlying_entries_that_escape_scope() -> None:
+    class RogueDriver:
+        def read(self, key: FilesystemKey, /, *, byte_range: ByteRange | None = None) -> BytesIO:
+            del key, byte_range
+            return BytesIO(b"")
+
+        def write(
+            self,
+            key: FilesystemKey,
+            stream: BufferedIOBase,
+            /,
+            *,
+            visibility: FileVisibility = FileVisibility.PRIVATE,
+        ):
+            del key, stream, visibility
+            raise AssertionError("write should not be called")
+
+        def list(self, prefix: FilesystemKey | None = None, /):
+            del prefix
+            return ()
+
+        def metadata(self, key: FilesystemKey, /):
+            del key
+            raise AssertionError("metadata should not be called")
+
+        def checksum(self, key: FilesystemKey, /) -> str:
+            del key
+            raise AssertionError("checksum should not be called")
+
+        def copy(self, source: FilesystemKey, destination: FilesystemKey, /) -> None:
+            del source, destination
+            raise AssertionError("copy should not be called")
+
+        def move(self, source: FilesystemKey, destination: FilesystemKey, /) -> None:
+            del source, destination
+            raise AssertionError("move should not be called")
+
+        def delete(self, key: FilesystemKey, /) -> bool:
+            del key
+            raise AssertionError("delete should not be called")
+
+        def signed_url(
+            self,
+            key: FilesystemKey,
+            /,
+            *,
+            expires_at,
+            operation=SignedUrlOperation.GET,
+        ):
+            del key, expires_at, operation
+            raise AssertionError("signed_url should not be called")
+
+        def set_visibility(self, key: FilesystemKey, visibility: FileVisibility, /):
+            del key, visibility
+            raise AssertionError("set_visibility should not be called")
+
+        def create_multipart_upload(self, key: FilesystemKey, /):
+            del key
+            raise AssertionError("create_multipart_upload should not be called")
+
+        def upload_part(self, upload: MultipartUpload, part_number: int, stream: BufferedIOBase, /):
+            del upload, part_number, stream
+            raise AssertionError("upload_part should not be called")
+
+        def complete_multipart_upload(
+            self,
+            upload: MultipartUpload,
+            parts: tuple[MultipartPart, ...],
+            /,
+        ):
+            del upload, parts
+            raise AssertionError("complete_multipart_upload should not be called")
+
+        def close(self) -> None:
+            return None
+
+    rogue = RogueDriver()
+    driver = ScopedFilesystemDriver(rogue, FilesystemKey("tenant-a"))
+    rogue.list = lambda prefix=None: (  # type: ignore[method-assign]
+        FilesystemEntry(
+            key=FilesystemKey("tenant-b/leak.txt"),
+            size=1,
+            updated_at=_NOW,
+        ),
+    )
+
+    with pytest.raises(FilesystemOperationError) as captured:
+        driver.list()
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+def test_read_only_filesystem_driver_allows_reads_and_blocks_mutations() -> None:
+    base = MemoryFilesystemDriver(clock=lambda: _NOW)
+    key = FilesystemKey("docs/report.txt")
+    upload = MultipartUpload(key=key, upload_id="upload-1")
+    part = MultipartPart(part_number=1, checksum_sha256="a" * 64)
+    base.write(key, BytesIO(b"content"))
+    driver = ReadOnlyFilesystemDriver(base)
+
+    with driver.read(key) as stream:
+        assert stream.read() == b"content"
+    assert [entry.key for entry in driver.list()] == [key]
+    assert driver.metadata(key).key == key
+    assert driver.checksum(key) == hashlib.sha256(b"content").hexdigest()
+
+    blocked_operations = (
+        lambda: driver.write(key, BytesIO(b"new")),
+        lambda: driver.copy(key, FilesystemKey("docs/copy.txt")),
+        lambda: driver.move(key, FilesystemKey("archive/report.txt")),
+        lambda: driver.delete(key),
+        lambda: driver.set_visibility(key, FileVisibility.PUBLIC),
+        lambda: driver.create_multipart_upload(key),
+        lambda: driver.upload_part(upload, 1, BytesIO(b"x")),
+        lambda: driver.complete_multipart_upload(upload, (part,)),
+        lambda: driver.signed_url(
+            key,
+            expires_at=_NOW,
+            operation=SignedUrlOperation.PUT,
+        ),
+    )
+    for operation in blocked_operations:
+        with pytest.raises(FilesystemOperationError) as captured:
+            operation()
+        assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
+
+    with pytest.raises(UnsupportedFilesystemFeature):
+        driver.signed_url(key, expires_at=_NOW, operation=SignedUrlOperation.GET)
+
+    driver.close()
+    with pytest.raises(PlatformError) as closed:
+        driver.list()
+    assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
