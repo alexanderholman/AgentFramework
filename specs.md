@@ -1872,3 +1872,40 @@ common directory without contacting or changing the upstream.
 - **TEST-035-5**: Non-positive durations, non-callable scheduling, and an overflowing hard horizon
   fail before cache mutation.
 
+---
+
+## [SPEC-036] Typed Capability and Request-Requirement Contracts
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST define immutable, versioned, bounded, canonical `CapabilityDescriptor`,
+  `RequestRequirements`, `CapabilityCandidate`, and `CapabilityRoute` values in trusted core.
+- MUST distinguish declared capability facts from measured state, authorization, and verified
+  quality evidence.
+- MUST represent asset, provider, runtime, deployment, procedure, workflow, capability class,
+  lifecycle state, effects, risk, locality, schema, languages/locales, resource envelope,
+  dependencies, and fallbacks without vendor-specific core types.
+- MUST reject unknown fields, invalid bounds, impossible class bindings, self-referential or
+  overlapping relationships, unknown relationship targets, and cyclic dependency or fallback
+  graphs.
+- MUST expose stable canonical JSON-ready serialization and SHA-256 digests for replay,
+  comparison, and evidence binding.
+- MUST match exact typed requirements deterministically and fail closed with stable reason codes
+  `match`, `partial_match`, `excessive_cost`, `unavailable`, `unverified`, `prohibited`,
+  `ambiguous`, or `unsupported`.
+- MUST NOT let a declared capability claim imply deployment readiness, authorization, or verified
+  quality.
+
+### Tests
+- **TEST-036-1**: Static, procedural, model, workflow, and human fixtures round-trip canonically,
+  produce stable digests, and satisfy exact requirements without model inference.
+- **TEST-036-2**: Candidate ordering does not change the route digest, and an exact best-score tie
+  fails closed as `ambiguous`.
+- **TEST-036-3**: Missing accepted lifecycle, missing authorization, and missing verified quality
+  prevent selection even when the declared descriptor matches.
+- **TEST-036-4**: Unknown fields, invalid bounds, impossible state combinations, unknown
+  relationships, and fallback cycles fail closed before selection.
+- **TEST-036-5**: Over-budget candidates surface `excessive_cost`, and structurally compatible but
+  non-exact candidates surface `partial_match`.

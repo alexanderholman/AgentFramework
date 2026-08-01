@@ -2864,3 +2864,32 @@ SWR works uniformly over verified lock-capable cache drivers without changing or
 values or requiring backend-specific expiry introspection. Callers retain responsibility for the
 scheduler and must not reuse AF's reserved digest-derived freshness-marker keys.
 
+---
+
+## [DEC-049] Keep Capability Contracts Typed, Exact, and Evidence-Separated
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #38 requires a provider-neutral capability language that can describe exact request needs,
+stable installed capabilities, measured availability, and deterministic routing decisions without
+importing vendor or runtime-specific policy into AF trusted core.
+
+### Decision
+1. Add a dedicated `af.framework.capabilities` module rather than overloading existing
+   procedure-routing or manager capability sets.
+2. Keep four immutable aggregates as the trusted boundary: `CapabilityDescriptor`,
+   `RequestRequirements`, `CapabilityCandidate`, and `CapabilityRoute`.
+3. Separate declared descriptor facts from measured lifecycle, authorization, and verified quality
+   evidence in `CapabilityCandidate` so capability claims never imply deployment or trust.
+4. Use canonical JSON-ready dictionaries plus SHA-256 digests for replay-safe identity and route
+   comparison.
+5. Start with an exact deterministic matcher that validates relationships and emits stable reason
+   codes for exact match, partial match, excessive cost, unavailable, unverified, prohibited,
+   ambiguous, and unsupported outcomes.
+
+### Consequences
+AF now has a typed, bounded core contract for future capability catalogue, benchmark, and routing
+work. Later issues can layer importers, evidence stores, and richer policy over the same stable
+contracts without weakening the fail-closed exact-match baseline.
