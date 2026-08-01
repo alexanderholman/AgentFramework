@@ -5,11 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from enum import StrEnum
+from time import monotonic, sleep
 from types import MappingProxyType
 from typing import Protocol
+from uuid import uuid4
 
 from af.cache.contracts import CacheKey, CacheNamespace, LockLease, LockOwner
 from af.framework.container import ProviderRegistrar, Resolver, Scope
+from af.framework.errors import PlatformError, PlatformReason
 from af.framework.managers import (
     CapabilitySet,
     DriverRegistration,
@@ -30,6 +33,12 @@ def _loader(loader: object) -> Callable[[], bytes]:
     if not callable(loader):
         raise TypeError("cache loader must be callable")
     return loader
+
+
+def _duration(value: object, *, label: str) -> timedelta:
+    if not isinstance(value, timedelta) or value <= timedelta(0):
+        raise ValueError(f"cache {label} must be a positive duration")
+    return value
 
 
 class CacheFeature(StrEnum):
@@ -207,15 +216,99 @@ class CacheManager(Manager[CacheDriver]):
         loader: Callable[[], bytes],
         *,
         ttl: timedelta | None = None,
+        lock_ttl: timedelta | None = None,
+        wait_timeout: timedelta | None = None,
         name: str | None = None,
     ) -> bytes:
         resolved = _loader(loader)
+        if lock_ttl is None:
+            if wait_timeout is not None:
+                raise ValueError("cache wait timeout requires a lock TTL")
+        else:
+            lock_ttl = _duration(lock_ttl, label="lock TTL")
+            wait_timeout = _duration(
+                lock_ttl if wait_timeout is None else wait_timeout,
+                label="wait timeout",
+            )
         cached = self.get(namespace, key, name=name)
         if cached is not None:
             return cached
+        if lock_ttl is not None and wait_timeout is not None:
+            return self._remember_coalesced(
+                namespace,
+                key,
+                resolved,
+                ttl=ttl,
+                lock_ttl=lock_ttl,
+                wait_timeout=wait_timeout,
+                name=name,
+            )
         value = resolved()
         self.set(namespace, key, value, ttl=ttl, name=name)
         return value
+
+    def _remember_coalesced(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        loader: Callable[[], bytes],
+        *,
+        ttl: timedelta | None,
+        lock_ttl: timedelta,
+        wait_timeout: timedelta,
+        name: str | None,
+    ) -> bytes:
+        driver = self.connection(
+            name,
+            requires=(
+                CacheFeature.READ,
+                CacheFeature.WRITE,
+                CacheFeature.TTL,
+                CacheFeature.NAMESPACES,
+                CacheFeature.LOCKS,
+            ),
+        )
+        owner = LockOwner(f"remember:{uuid4().hex}")
+        deadline = monotonic() + wait_timeout.total_seconds()
+        while True:
+            lease = driver.acquire_lock(namespace, key, owner, ttl=lock_ttl)
+            if lease is not None:
+                active_lease = lease
+                try:
+                    cached = driver.get(namespace, key)
+                    if cached is not None:
+                        return cached
+                    value = loader()
+                    renewed = driver.renew_lock(
+                        namespace,
+                        key,
+                        active_lease,
+                        ttl=lock_ttl,
+                    )
+                    if renewed is None:
+                        cached = driver.get(namespace, key)
+                        if cached is not None:
+                            return cached
+                        raise PlatformError(
+                            PlatformReason.TRANSIENT_FAILURE,
+                            stage="cache.remember.lease_lost",
+                        )
+                    active_lease = renewed
+                    driver.set(namespace, key, value, ttl=ttl)
+                    return value
+                finally:
+                    driver.release_lock(namespace, key, active_lease)
+
+            cached = driver.get(namespace, key)
+            if cached is not None:
+                return cached
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise PlatformError(
+                    PlatformReason.TRANSIENT_FAILURE,
+                    stage="cache.remember.wait_timeout",
+                )
+            sleep(min(0.01, remaining))
 
     def memoize(
         self,
@@ -224,6 +317,8 @@ class CacheManager(Manager[CacheDriver]):
         loader: Callable[[], bytes],
         *,
         ttl: timedelta | None = None,
+        lock_ttl: timedelta | None = None,
+        wait_timeout: timedelta | None = None,
         name: str | None = None,
     ) -> Callable[[], bytes]:
         resolved = _loader(loader)
@@ -234,6 +329,8 @@ class CacheManager(Manager[CacheDriver]):
                 key,
                 resolved,
                 ttl=ttl,
+                lock_ttl=lock_ttl,
+                wait_timeout=wait_timeout,
                 name=name,
             )
 
