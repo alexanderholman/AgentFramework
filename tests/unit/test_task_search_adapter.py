@@ -83,6 +83,21 @@ def test_task_row_adapter_normalizes_naive_datetimes_from_relational_backends() 
     assert resource.attributes["updated_at"] == "2026-07-31T13:00:00Z"
 
 
+def test_task_row_adapter_normalizes_unsafe_document_controls() -> None:
+    row = _row()
+    row.prompt = "alpha\x00beta"
+    row.output = "gamma\u2028delta"
+
+    resource = task_row_to_resource(
+        row,
+        tenant_id="tenant-a",
+        acl=("group:research",),
+        projection_version=1,
+    )
+
+    assert resource.text == "alpha beta\n\ngamma delta"
+
+
 def test_task_row_adapter_rejects_non_task_rows() -> None:
     with pytest.raises(TypeError):
         task_row_to_resource(  # type: ignore[arg-type]

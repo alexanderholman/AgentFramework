@@ -57,3 +57,48 @@ def test_task_relational_row_enters_canonical_search_api() -> None:
     assert hits[0].authoritative_locator == "af://relational/af_tasks/task-1"
     assert hits[0].projection_version == 2
     assert hits[0].provenance == resource.provenance
+
+
+def test_task_relational_row_with_unsafe_controls_still_indexes() -> None:
+    database = Database("sqlite+pysqlite:///:memory:")
+    with database.sessions.begin() as session:
+        session.add(
+            TaskRow(
+                id="task-unsafe",
+                prompt="alpha\x00beta",
+                output="gamma\u2028delta",
+                intent="text.character_count",
+                route="character-count",
+                tier="deterministic",
+                status="completed",
+                verified=True,
+                reused=False,
+                trace_id="trace-unsafe",
+                created_at=datetime(2026, 7, 31, 12, tzinfo=UTC),
+                updated_at=datetime(2026, 7, 31, 13, tzinfo=UTC),
+            )
+        )
+    with database.sessions() as session:
+        row = session.get(TaskRow, "task-unsafe")
+        assert row is not None
+        resource = task_row_to_resource(
+            row,
+            tenant_id="tenant-a",
+            acl=("group:research",),
+            projection_version=2,
+        )
+
+    with EmbeddedSearchDriver(":memory:") as driver:
+        assert driver.upsert((resource,)) == 1
+        hits = driver.search(
+            SearchQuery(
+                text="delta",
+                filters=(
+                    SearchFilter("tenant_id", ("tenant-a",)),
+                    SearchFilter("acl", ("group:research",)),
+                ),
+            )
+        )
+
+    assert len(hits) == 1
+    assert hits[0].resource_id == "task-unsafe"

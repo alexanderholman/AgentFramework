@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 
 from af.infrastructure.database import TaskRow
@@ -13,6 +14,7 @@ __all__ = ("task_row_to_resource",)
 
 _SOURCE_ID = "af_tasks"
 _LOCATOR_PREFIX = "af://relational/af_tasks/"
+_UNSAFE_DOCUMENT_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def task_row_to_resource(
@@ -26,7 +28,7 @@ def task_row_to_resource(
 
     if not isinstance(row, TaskRow):
         raise TypeError("task search adapter requires a TaskRow")
-    text = f"{row.prompt}\n\n{row.output}"
+    text = _document_text(row.prompt, row.output)
     created_at = _timestamp(row.created_at)
     updated_at = _timestamp(row.updated_at)
     attributes = {
@@ -58,6 +60,14 @@ def task_row_to_resource(
 
 def _bool_text(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _document_text(prompt: str, output: str) -> str:
+    return f"{_normalize_document_text(prompt)}\n\n{_normalize_document_text(output)}"
+
+
+def _normalize_document_text(value: str) -> str:
+    return _UNSAFE_DOCUMENT_CHARACTER.sub(" ", value)
 
 
 def _timestamp(value: datetime) -> str:
