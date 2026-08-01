@@ -102,14 +102,9 @@ class CacheManager(Manager[CacheDriver]):
     def install(self, registration: DriverRegistration[CacheDriver]) -> None:
         """Install one inert cache registration."""
 
-        if (
-            type(registration) is not DriverRegistration
-            or registration.manager_id != "cache"
-        ):
+        if type(registration) is not DriverRegistration or registration.manager_id != "cache":
             raise ManagerConfigurationError(
-                protected_cause=ValueError(
-                    "driver registration does not target the cache manager"
-                )
+                protected_cause=ValueError("driver registration does not target the cache manager")
             )
         self.extend(
             registration.driver_name,
