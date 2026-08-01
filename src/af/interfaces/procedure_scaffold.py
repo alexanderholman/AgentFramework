@@ -383,13 +383,64 @@ def test_{slug}_runs_through_cli_and_rest() -> None:
 
 
 def _failure_test(*, package: str, procedure_id: str) -> str:
+    class_name = _class_name_from_procedure_id(procedure_id)
     return f'''from __future__ import annotations
+
+import asyncio
 
 import pytest
 
-from af.framework.errors import UnsupportedWork, VerificationFailed
+from af.bootstrap import create_application
+from af.framework.context import AcceptanceScope, ExecutionContext, use_context
+from af.framework.errors import InvalidPrompt, UnsupportedWork, VerificationFailed
+from af.framework.routing import ProcedureRegistry
+from af.framework.types import (
+    PROMPT_MAX_LENGTH,
+    Classification,
+    ProcedureDescriptor,
+    ProcedureEffect,
+    ProcedureRisk,
+    SelectionDecision,
+    SelectionProposal,
+    SelectorLocality,
+    WorkRequest,
+)
+from af.infrastructure.repositories import InMemoryTaskRepository
+from af.infrastructure.tracing import InMemoryTraceRepository
 
 from {package}.application import build_application
+from {package}.procedure import {class_name}Procedure
+
+
+class _RecordingSelector:
+    def __init__(self, decision: SelectionDecision) -> None:
+        self._decision = decision
+
+    @property
+    def name(self) -> str:
+        return "generated-test-selector"
+
+    @property
+    def locality(self) -> SelectorLocality:
+        return SelectorLocality.LOCAL
+
+    def select(self, prompt: str, catalogue: tuple[object, ...]) -> SelectionDecision:
+        del prompt, catalogue
+        return self._decision
+
+
+class _Unsafe{class_name}Procedure({class_name}Procedure):
+    pure = False
+    replay_safe = False
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id={class_name}Procedure.selection_descriptor.procedure_id,
+        version={class_name}Procedure.selection_descriptor.version,
+        intent={class_name}Procedure.selection_descriptor.intent,
+        arguments={class_name}Procedure.selection_descriptor.arguments,
+        effect=ProcedureEffect.SIDE_EFFECT,
+        risk=ProcedureRisk.ELEVATED,
+        requires_confirmation=True,
+    )
 
 
 def test_blank_payload_has_no_route() -> None:
@@ -397,6 +448,68 @@ def test_blank_payload_has_no_route() -> None:
     try:
         with pytest.raises(UnsupportedWork):
             application.tasks.execute("{procedure_id}   ")
+    finally:
+        application.shutdown()
+
+
+def test_precancelled_context_cancels_before_execution() -> None:
+    application = build_application()
+    context = ExecutionContext(
+        requested_scope=AcceptanceScope.DETERMINISTIC,
+        effective_scope=AcceptanceScope.DETERMINISTIC,
+    )
+    context.cancellation.cancel()
+    try:
+        with use_context(context):
+            with pytest.raises(asyncio.CancelledError):
+                application.tasks.execute("{procedure_id} hello world")
+    finally:
+        application.shutdown()
+
+
+def test_selected_unsafe_procedure_is_denied_by_policy() -> None:
+    procedure = _Unsafe{class_name}Procedure()
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        selector=_RecordingSelector(
+            SelectionDecision(
+                proposal=SelectionProposal(
+                    procedure_id="{procedure_id}",
+                    intent=procedure.selection_descriptor.intent,
+                    arguments={{"text": "hello world"}},
+                    confidence=0.95,
+                )
+            )
+        ),
+    )
+    application.container.resolve(ProcedureRegistry).register(procedure)
+    try:
+        with pytest.raises(UnsupportedWork) as captured:
+            application.agent.handle(
+                WorkRequest(prompt="route generated uppercase through selector")
+            )
+
+        trace = application.traces.get(captured.value.trace_id)
+
+        assert trace.status == "unsupported"
+        assert trace.route is None
+        assert any(
+            event.stage == "select-policy" and "policy_denied" in event.detail
+            for event in trace.events
+        )
+    finally:
+        application.shutdown()
+
+
+def test_prompt_limit_fails_before_execution() -> None:
+    application = build_application()
+    try:
+        with pytest.raises(
+            InvalidPrompt,
+            match=f"prompt must be at most {{PROMPT_MAX_LENGTH}} characters",
+        ):
+            application.tasks.execute("{procedure_id} " + ("a" * PROMPT_MAX_LENGTH))
     finally:
         application.shutdown()
 

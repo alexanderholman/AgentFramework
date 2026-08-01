@@ -131,6 +131,9 @@ def test_make_procedure_scaffolds_a_runnable_provider_example(
         contract.test_routes_expose_stable_procedure_identity()
         behavior.test_uppercase_runs_through_cli_and_rest()
         failure.test_blank_payload_has_no_route()
+        failure.test_precancelled_context_cancels_before_execution()
+        failure.test_selected_unsafe_procedure_is_denied_by_policy()
+        failure.test_prompt_limit_fails_before_execution()
         failure.test_verifier_failure_fails_closed()
     finally:
         application.shutdown()
