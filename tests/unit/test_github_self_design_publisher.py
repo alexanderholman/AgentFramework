@@ -566,7 +566,7 @@ def test_comment_rejects_wrong_returned_body(tmp_path: Path) -> None:
 
     client.add_issue_comment = wrong_body_comment  # type: ignore[method-assign]
 
-    with pytest.raises(DesignPublicationError, match="comment result is inconsistent"):
+    with pytest.raises(DesignPublicationError, match="comment result is not append-only"):
         GitHubDesignPublisher(client, _REPOSITORY).publish(request)
 
 
