@@ -32,6 +32,8 @@ class QueueFeature(StrEnum):
     RETRY = "retry"
     TIMEOUT = "timeout"
     UNIQUENESS = "uniqueness"
+    FIFO = "fifo"
+    TRANSACTIONAL_DISPATCH = "transactional-dispatch"
 
 
 class QueueDriver(Protocol):
@@ -86,6 +88,10 @@ def _dispatch_capabilities(job: QueueJob) -> CapabilitySet:
         required.append(QueueFeature.TIMEOUT)
     if job.unique_key is not None:
         required.append(QueueFeature.UNIQUENESS)
+    if job.fifo_group is not None:
+        required.append(QueueFeature.FIFO)
+    if job.requires_transaction:
+        required.append(QueueFeature.TRANSACTIONAL_DISPATCH)
     return _capabilities(required)
 
 

@@ -1589,3 +1589,40 @@ common directory without contacting or changing the upstream.
 - SPEC-008 (Script-First Automation and Only Write Once)
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 - Epic #120 and bootstrap issue #123
+
+---
+
+## [SPEC-025] Queue Capability Boundaries and Deterministic Ordering Declarations
+**Date**: 2026-08-01
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Require AF queue contracts to express capability-sensitive delivery requests explicitly and fail
+closed when a selected driver cannot prove them. The first queue slices must also document and
+test each built-in driver's real ordering semantics instead of implying broker-generic FIFO or
+transaction guarantees.
+
+### Requirements
+- MUST allow a `QueueJob` to express requested FIFO grouping and transactional dispatch semantics
+  independently of the selected backend
+- MUST reject unsupported FIFO-group and transactional-dispatch requests through capability
+  validation or explicit driver failure before silently enqueuing the job
+- MUST document each built-in driver's actual ordering semantics and delivery boundary
+- MUST state the database queue driver's deterministic reservation order exactly as
+  `available_at`, then `occurred_at`, then `message_id`
+- MUST state that the synchronous queue driver preserves only direct in-process dispatch order and
+  provides no durability, worker isolation, or broker transaction guarantee
+
+### Tests
+- **TEST-025-1**: Queue contract validation accepts canonical FIFO-group and boolean transactional
+  flags and rejects malformed values
+- **TEST-025-2**: Sync and database drivers fail closed for unsupported FIFO-group and
+  transactional-dispatch requests
+- **TEST-025-3**: The database queue reserves jobs in deterministic
+  `available_at`/`occurred_at`/`message_id` order
+- **TEST-025-4**: The synchronous queue driver preserves direct dispatch order for accepted jobs
+
+### Related Specs
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- Issue #20

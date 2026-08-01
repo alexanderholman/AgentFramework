@@ -100,6 +100,11 @@ def test_queue_manager_dispatches_sync_jobs_inline() -> None:
         (_job("job-backoff", backoff=timedelta(seconds=5)), QueueFeature.RETRY),
         (_job("job-timeout", timeout=timedelta(seconds=30)), QueueFeature.TIMEOUT),
         (_job("job-unique", unique_key="job-unique"), QueueFeature.UNIQUENESS),
+        (_job("job-fifo", fifo_group="orders"), QueueFeature.FIFO),
+        (
+            _job("job-transaction", requires_transaction=True),
+            QueueFeature.TRANSACTIONAL_DISPATCH,
+        ),
     ],
 )
 def test_queue_manager_fails_closed_for_unverified_job_features(
@@ -311,6 +316,8 @@ def test_queue_contracts_validate_and_redact_payload_content() -> None:
         backoff=timedelta(seconds=5),
         timeout=timedelta(seconds=30),
         unique_key="unique.job-contracts",
+        fifo_group="tenant.orders",
+        requires_transaction=True,
     )
     receipt = QueueDispatchReceipt(
         message_id="job-contracts",
@@ -326,6 +333,8 @@ def test_queue_contracts_validate_and_redact_payload_content() -> None:
     assert job.backoff == timedelta(seconds=5)
     assert job.timeout == timedelta(seconds=30)
     assert job.unique_key == "unique.job-contracts"
+    assert job.fifo_group == "tenant.orders"
+    assert job.requires_transaction is True
     assert "not-for-repr" not in repr(job)
     assert receipt.disposition is QueueDispatchDisposition.ENQUEUED
     assert reservation.attempt == 2
@@ -342,6 +351,8 @@ def test_queue_contracts_validate_and_redact_payload_content() -> None:
         ({"backoff": timedelta(0)}, "backoff"),
         ({"timeout": timedelta(0)}, "timeout"),
         ({"unique_key": "NOT VALID"}, "unique key"),
+        ({"fifo_group": "NOT VALID"}, "fifo group"),
+        ({"requires_transaction": "yes"}, "requires transaction"),
     ],
 )
 def test_queue_job_rejects_invalid_optional_values(

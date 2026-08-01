@@ -59,6 +59,27 @@ def test_sync_driver_rejects_unsupported_dispatch_features_directly() -> None:
 
     assert captured.value.feature == QueueFeature.DELAY.value
 
+    with pytest.raises(UnsupportedQueueFeature) as fifo:
+        driver.dispatch(_job("job-fifo", fifo_group="orders"))
+    assert fifo.value.feature == QueueFeature.FIFO.value
+
+    with pytest.raises(UnsupportedQueueFeature) as transactional:
+        driver.dispatch(_job("job-transaction", requires_transaction=True))
+    assert transactional.value.feature == QueueFeature.TRANSACTIONAL_DISPATCH.value
+
+
+def test_sync_driver_preserves_direct_dispatch_order() -> None:
+    observed: list[str] = []
+    driver = SyncQueueDriver(
+        lambda job: observed.append(job.envelope.metadata.message_id),
+        clock=lambda: _NOW,
+    )
+
+    driver.dispatch(_job("job-first"))
+    driver.dispatch(_job("job-second"))
+
+    assert observed == ["job-first", "job-second"]
+
 
 def test_database_queue_passes_shared_conformance_suite(tmp_path: Path) -> None:
     database = tmp_path / "queue-conformance.sqlite3"
@@ -227,3 +248,89 @@ def test_database_queue_driver_reports_terminal_rejections_and_shutdown(tmp_path
     with pytest.raises(Exception) as captured:
         driver.dispatch(_job("job-after-close"))
     assert getattr(captured.value, "reason", None) is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_database_queue_rejects_unsupported_fifo_and_transaction_requests(tmp_path: Path) -> None:
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-unsupported.sqlite3"),
+        clock=FakeClock(_NOW),
+    )
+
+    try:
+        with pytest.raises(UnsupportedQueueFeature) as fifo:
+            driver.dispatch(_job("job-fifo", fifo_group="orders"))
+        assert fifo.value.feature == QueueFeature.FIFO.value
+
+        with pytest.raises(UnsupportedQueueFeature) as transactional:
+            driver.dispatch(_job("job-transaction", requires_transaction=True))
+        assert transactional.value.feature == QueueFeature.TRANSACTIONAL_DISPATCH.value
+    finally:
+        driver.close()
+
+
+def test_database_queue_reserves_jobs_in_available_then_occurred_then_id_order(
+    tmp_path: Path,
+) -> None:
+    base = datetime(2026, 8, 1, 15, tzinfo=UTC)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-ordering.sqlite3"),
+        clock=FakeClock(base + timedelta(minutes=5)),
+    )
+
+    first = _job(
+        "job-b",
+        envelope=MessageEnvelope.create(
+            metadata=MessageMetadata(
+                message_id="job-b",
+                message_type="jobs.example",
+                schema_version=1,
+                kind=EnvelopeKind.JOB,
+                occurred_at=base + timedelta(seconds=2),
+            ),
+            payload={"message_id": "job-b", "secret": "queue-payload"},
+        ),
+    )
+    second = _job(
+        "job-a",
+        envelope=MessageEnvelope.create(
+            metadata=MessageMetadata(
+                message_id="job-a",
+                message_type="jobs.example",
+                schema_version=1,
+                kind=EnvelopeKind.JOB,
+                occurred_at=base + timedelta(seconds=2),
+            ),
+            payload={"message_id": "job-a", "secret": "queue-payload"},
+        ),
+    )
+    third = _job(
+        "job-earliest",
+        envelope=MessageEnvelope.create(
+            metadata=MessageMetadata(
+                message_id="job-earliest",
+                message_type="jobs.example",
+                schema_version=1,
+                kind=EnvelopeKind.JOB,
+                occurred_at=base + timedelta(seconds=1),
+            ),
+            payload={"message_id": "job-earliest", "secret": "queue-payload"},
+        ),
+    )
+
+    try:
+        driver.dispatch(first)
+        driver.dispatch(second)
+        driver.dispatch(third)
+
+        reservation_one = driver.reserve()
+        reservation_two = driver.reserve()
+        reservation_three = driver.reserve()
+
+        assert reservation_one is not None
+        assert reservation_two is not None
+        assert reservation_three is not None
+        assert reservation_one.job.envelope.metadata.message_id == "job-earliest"
+        assert reservation_two.job.envelope.metadata.message_id == "job-a"
+        assert reservation_three.job.envelope.metadata.message_id == "job-b"
+    finally:
+        driver.close()

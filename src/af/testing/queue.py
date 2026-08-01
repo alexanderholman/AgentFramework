@@ -29,6 +29,8 @@ def _job(
     backoff: timedelta | None = None,
     timeout: timedelta | None = None,
     unique_key: str | None = None,
+    fifo_group: str | None = None,
+    requires_transaction: bool = False,
 ) -> QueueJob:
     return QueueJob(
         envelope=MessageEnvelope.create(
@@ -48,6 +50,8 @@ def _job(
         backoff=backoff,
         timeout=timeout,
         unique_key=unique_key,
+        fifo_group=fifo_group,
+        requires_transaction=requires_transaction,
     )
 
 
@@ -117,6 +121,8 @@ def _assert_unsupported_features(driver: QueueDriver) -> None:
         _job("job-priority", priority=10),
         _job("job-timeout", timeout=timedelta(seconds=30)),
         _job("job-unique", unique_key="job-unique"),
+        _job("job-fifo", fifo_group="orders"),
+        _job("job-transaction", requires_transaction=True),
     ):
         captured = None
         try:

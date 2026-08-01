@@ -123,6 +123,8 @@ The Laravel-inspired provider, lifecycle, manager, driver, scope, data, and deli
 contracts are defined in [Application Platform Contracts](docs/application-platform.md).
 Testing hosts, deterministic fakes, provider suites, driver suites, and their non-certifying
 boundary are defined in [Testing and Conformance](docs/testing-conformance.md).
+Queue delivery, ordering, and unsupported-capability semantics are defined in
+[Queue contracts](docs/queue.md).
 
 ## Prime Language / Ideon reference
 

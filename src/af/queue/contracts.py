@@ -80,6 +80,8 @@ class QueueJob:
     backoff: timedelta | None = None
     timeout: timedelta | None = None
     unique_key: str | None = None
+    fifo_group: str | None = None
+    requires_transaction: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.envelope, MessageEnvelope):
@@ -99,6 +101,10 @@ class QueueJob:
             object.__setattr__(self, "timeout", _duration(self.timeout, "timeout"))
         if self.unique_key is not None:
             object.__setattr__(self, "unique_key", _identifier(self.unique_key, "unique key"))
+        if self.fifo_group is not None:
+            object.__setattr__(self, "fifo_group", _identifier(self.fifo_group, "fifo group"))
+        if type(self.requires_transaction) is not bool:
+            raise ValueError("queue requires transaction must be a boolean")
 
     def __repr__(self) -> str:
         return (

@@ -58,6 +58,10 @@ def _unsupported_feature(job: QueueJob) -> QueueFeature | None:
         return QueueFeature.TIMEOUT
     if job.unique_key is not None:
         return QueueFeature.UNIQUENESS
+    if job.fifo_group is not None:
+        return QueueFeature.FIFO
+    if job.requires_transaction:
+        return QueueFeature.TRANSACTIONAL_DISPATCH
     return None
 
 
