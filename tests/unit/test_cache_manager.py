@@ -725,6 +725,202 @@ def test_cache_manager_stale_while_revalidate_validates_policy() -> None:
     manager.close()
 
 
+def test_cache_manager_stale_while_revalidate_releases_lease_when_scheduling_fails() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("swr:schedule-failure")
+    durations = timedelta(seconds=1)
+    scheduled: list[Callable[[], None]] = []
+
+    def reject(_refresh: Callable[[], None]) -> None:
+        raise RuntimeError("scheduler unavailable")
+
+    assert (
+        manager.stale_while_revalidate(
+            namespace,
+            key,
+            lambda: b"stable",
+            fresh_ttl=durations,
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=durations,
+            wait_timeout=durations,
+            schedule=reject,
+        )
+        == b"stable"
+    )
+    clock.now += durations
+    assert (
+        manager.stale_while_revalidate(
+            namespace,
+            key,
+            lambda: b"replacement",
+            fresh_ttl=durations,
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=durations,
+            wait_timeout=durations,
+            schedule=reject,
+        )
+        == b"stable"
+    )
+    assert (
+        manager.stale_while_revalidate(
+            namespace,
+            key,
+            lambda: b"replacement",
+            fresh_ttl=durations,
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=durations,
+            wait_timeout=durations,
+            schedule=scheduled.append,
+        )
+        == b"stable"
+    )
+    assert len(scheduled) == 1
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_rejects_expired_refresh_lease() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("swr:expired-refresh")
+    scheduled: list[Callable[[], None]] = []
+    durations = timedelta(seconds=1)
+
+    def cached() -> bytes:
+        return manager.stale_while_revalidate(
+            namespace,
+            key,
+            lambda: b"replacement",
+            fresh_ttl=durations,
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=durations,
+            wait_timeout=durations,
+            schedule=scheduled.append,
+        )
+
+    assert cached() == b"replacement"
+    manager.set(namespace, key, b"stable", ttl=timedelta(seconds=11))
+    clock.now += durations
+    assert cached() == b"stable"
+    clock.now += durations
+    scheduled.pop()()
+    assert manager.get(namespace, key) == b"stable"
+    assert cached() == b"stable"
+    assert len(scheduled) == 1
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_rejects_cold_fill_after_lease_loss() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("swr:cold-lease-loss")
+
+    def load() -> bytes:
+        clock.now += timedelta(seconds=2)
+        return b"stale-loader"
+
+    with pytest.raises(PlatformError) as captured:
+        manager.stale_while_revalidate(
+            namespace,
+            key,
+            load,
+            fresh_ttl=timedelta(seconds=1),
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=timedelta(seconds=1),
+            wait_timeout=timedelta(seconds=1),
+            schedule=lambda refresh: None,
+        )
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert captured.value.stage == "cache.swr.lease_lost"
+    assert manager.get(namespace, key) is None
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_cold_fill_waits_boundedly() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("swr:cold-busy")
+    lease = manager.acquire_lock(
+        namespace,
+        key,
+        LockOwner("existing-swr-owner"),
+        ttl=timedelta(seconds=10),
+    )
+    assert lease is not None
+
+    with pytest.raises(PlatformError) as captured:
+        manager.stale_while_revalidate(
+            namespace,
+            key,
+            lambda: b"must-not-load",
+            fresh_ttl=timedelta(seconds=1),
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=timedelta(seconds=1),
+            wait_timeout=timedelta(milliseconds=1),
+            schedule=lambda refresh: None,
+        )
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert captured.value.stage == "cache.swr.wait_timeout"
+    assert manager.release_lock(namespace, key, lease)
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_rejects_unbounded_horizon() -> None:
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=Clock(),
+    )
+    manager.install(memory_cache_registration(clock=Clock()))
+
+    with pytest.raises(ValueError, match="stale horizon"):
+        manager.stale_while_revalidate(
+            _namespace(),
+            CacheKey("swr:overflow"),
+            lambda: b"value",
+            fresh_ttl=timedelta.max,
+            stale_ttl=timedelta(days=1),
+            lock_ttl=timedelta(seconds=1),
+            wait_timeout=timedelta(seconds=1),
+            schedule=lambda refresh: None,
+        )
+    manager.close()
+
+
 def test_cache_manager_memoize_wraps_loader_with_cache_lookup() -> None:
     clock = Clock()
     manager = CacheManager(
