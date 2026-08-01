@@ -291,7 +291,7 @@ def test_database_cache_registration_routes_through_verified_manager(tmp_path: P
     manager.close()
 
 
-def test_database_cache_rejects_invalid_runtime_inputs_and_lock_calls(
+def test_database_cache_rejects_invalid_runtime_inputs_and_lock_validation(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(TypeError):
@@ -313,12 +313,24 @@ def test_database_cache_rejects_invalid_runtime_inputs_and_lock_calls(
 
     with pytest.raises(TypeError):
         cache.flush(object())  # type: ignore[arg-type]
-    with pytest.raises(NotImplementedError):
-        cache.acquire_lock()
-    with pytest.raises(NotImplementedError):
-        cache.renew_lock()
-    with pytest.raises(NotImplementedError):
-        cache.release_lock()
+
+    owner = LockOwner("owner-a")
+    with pytest.raises(TypeError):
+        cache.acquire_lock(  # type: ignore[arg-type]
+            object(),
+            key,
+            owner,
+            ttl=timedelta(seconds=1),
+        )
+    with pytest.raises(TypeError):
+        cache.renew_lock(  # type: ignore[arg-type]
+            namespace,
+            key,
+            object(),
+            ttl=timedelta(seconds=1),
+        )
+    with pytest.raises(TypeError):
+        cache.release_lock(namespace, key, object())  # type: ignore[arg-type]
     cache.close()
 
 
