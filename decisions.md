@@ -2804,3 +2804,33 @@ AF now covers the missing Redis driver slice on issue #19 with namespace-safe ke
 network coordination while staying explicit about the runtime's non-authoritative durability model.
 Stale-while-revalidate, request coalescing, stampede protection, and funnels remain later issue #19
 work.
+
+
+---
+
+## [DEC-047] Make Stampede Protection An Explicit Lock-Backed Cache Fill
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 requires request coalescing and stampede protection, while several cache drivers
+intentionally do not advertise locks. Applying coordination implicitly to every `remember` call
+would either reject valid cache-only drivers or claim guarantees they cannot provide.
+
+### Decision
+1. Keep ordinary `remember` and `memoize` behavior unchanged unless callers supply a positive
+   lock TTL.
+2. Treat a supplied lock TTL as an explicit request for the selected driver's verified lock
+   capability and use a bounded wait timeout for contenders.
+3. Permit one lease owner to run the loader, double-check the cache after acquisition, and let
+   contenders reuse the published value instead of running duplicate loaders.
+4. Renew the lease after loading and before publication; if ownership was lost, reject the stale
+   write and return a value only when another owner has already published one.
+5. Surface contention timeout and lease loss as sanitized transient failures, never as an
+   unbounded wait or an unfenced cache write.
+
+### Consequences
+AF gains opt-in, backend-independent request coalescing over verified lock drivers without
+breaking cache-only stores. Callers must choose lock and wait durations appropriate to their
+loader; stale-while-revalidate remains a separate issue #19 slice.
