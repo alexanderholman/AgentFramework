@@ -1816,3 +1816,45 @@ and funnels are still outside this incremental slice.
 - DEC-046
 - SPEC-033
 - Script: `[SCRIPT:af-dev]`
+
+
+---
+
+## Run #033 - Bounded Cache-Fill Funnel
+**Date**: 2026-08-01
+**Agent**: Codex / GPT-5
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache drivers and owner-fenced lock contracts
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added red-phase concurrency, timeout, lease-loss, validation, and memoize regressions
+- Added opt-in lock-backed request coalescing to `remember` and `memoize`
+- Appended DEC-047 and SPEC-034 for the bounded funnel slice
+
+### Result Summary
+The manager now permits one loader to fill a contended key while bounded waiters reuse the
+published value. Lease loss rejects stale publication, and cache-only callers retain the existing
+non-locking behavior unless they explicitly request coalescing.
+
+### Issues Encountered
+- The repository checkout was unavailable with authenticated Git credentials, so guarded GitHub
+  connector writes were used against the exact PR head
+- The test-only workflow was superseded after the implementation commit; the separate test commit
+  still preserves red-before-green ordering
+
+### Actions Taken
+- Added a one-winner eight-thread behavior test and bounded failure regressions
+- Implemented explicit lock/wait duration validation, double-checked cache fill, lease renewal, and
+  sanitized transient failure stages
+- Ran formatting, lint, compilation, and the hosted Python quality gate before append-only history
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-047
+- SPEC-034
+- Script: `[SCRIPT:af-dev]`
