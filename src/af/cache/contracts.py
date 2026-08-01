@@ -106,4 +106,3 @@ def _validated_ttl(value: object) -> timedelta | None:
     if not isinstance(value, timedelta) or value <= timedelta(0):
         raise ValueError("cache TTL must be a positive duration")
     return value
-
