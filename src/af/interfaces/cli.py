@@ -21,7 +21,13 @@ from af.domain.ideons.records import ContextGraph
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 from af.framework.version_control import VersionControlRequest
-from af.interfaces.presenters import agent_route_to_dict, delete_to_dict, task_to_dict
+from af.interfaces.presenters import (
+    agent_route_to_dict,
+    delete_to_dict,
+    search_index_result_to_dict,
+    search_result_to_dict,
+    task_to_dict,
+)
 
 _APPLICATION_FACTORY = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
@@ -73,6 +79,11 @@ def create_cli(
         name="ideon",
         no_args_is_help=True,
         help="Deterministic Prime Language / Ideon reference",
+    )
+    search_commands = typer.Typer(
+        name="search",
+        no_args_is_help=True,
+        help="Index and query persisted AF history",
     )
     migration_commands = typer.Typer(
         name="migrations",
@@ -212,6 +223,26 @@ def create_cli(
         """Return AF's deterministic agent-role routing decision as JSON."""
         try:
             typer.echo(json.dumps(agent_route_to_dict(current().agent_routes.route(prompt))))
+        except AFError as error:
+            fail(error)
+
+    @search_commands.command("index")
+    def index_search(
+        limit: Annotated[int, typer.Option(min=1, max=1_000)] = 100,
+    ) -> None:
+        try:
+            typer.echo(json.dumps(search_index_result_to_dict(current().search.index(limit=limit))))
+        except AFError as error:
+            fail(error)
+
+    @search_commands.command("query")
+    def query_search(
+        text: Annotated[str, typer.Argument(help="Bounded full-text query")],
+        limit: Annotated[int, typer.Option(min=1, max=1_000)] = 20,
+    ) -> None:
+        try:
+            result = current().search.search(text, limit=limit)
+            typer.echo(json.dumps(search_result_to_dict(result)))
         except AFError as error:
             fail(error)
 
@@ -429,6 +460,7 @@ def create_cli(
 
     initialization_commands.add_typer(version_commands, name="version")
     cli.add_typer(initialization_commands, name="init")
+    cli.add_typer(search_commands, name="search")
     cli.add_typer(task_commands, name="tasks")
     cli.add_typer(migration_commands, name="migrations")
     cli.add_typer(ideon_commands, name="ideon")
