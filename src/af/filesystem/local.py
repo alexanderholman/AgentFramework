@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import platform
+import stat
 import tempfile
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from io import BufferedIOBase
 from pathlib import Path
@@ -58,6 +60,8 @@ _DEPENDENCY_DIGEST = hashlib.sha256(
     f"{platform.python_implementation()}:{platform.python_version()}:local-filesystem:v1".encode()
 ).hexdigest()
 _CHUNK_SIZE = 64 * 1024
+_DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+_DIRECTORY_FLAGS |= getattr(os, "O_NOFOLLOW", 0)
 
 
 def _evidence_digest(
@@ -120,16 +124,21 @@ class LocalFilesystemDriver:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         if isinstance(root, Path):
-            path = root
+            candidate = root
         elif type(root) is str and root:
-            path = Path(root)
+            candidate = Path(root)
         else:
             raise ValueError("local filesystem root is invalid")
-        self._root = path
+        if not candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError("local filesystem root must be an absolute canonical path")
+        candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
+        resolved = candidate.resolve(strict=True)
+        if resolved != candidate or not resolved.is_dir():
+            raise ValueError("local filesystem root must be an absolute canonical directory")
+        self._root = resolved
         self._clock = clock if clock is not None else (lambda: datetime.now(UTC))
         if not callable(self._clock):
             raise TypeError("local filesystem clock must be callable")
-        self._root.mkdir(parents=True, exist_ok=True)
         self._closed = False
 
     def _now(self) -> datetime:
@@ -149,8 +158,7 @@ class LocalFilesystemDriver:
             )
 
     def _root_resolved(self) -> Path:
-        self._root.mkdir(parents=True, exist_ok=True)
-        return self._root.resolve()
+        return self._root
 
     def _path(self, key: FilesystemKey) -> Path:
         root = self._root_resolved()
@@ -170,6 +178,72 @@ class LocalFilesystemDriver:
                 protected_cause=RuntimeError("filesystem path escaped root"),
             )
         return candidate
+
+    def _open_directory(self, path: Path, *, create: bool) -> int:
+        if create:
+            path.mkdir(mode=0o700, exist_ok=True)
+        if path.is_symlink() or not path.is_dir():
+            raise FilesystemOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="filesystem.local.path",
+            )
+        try:
+            descriptor = os.open(path, _DIRECTORY_FLAGS)
+        except OSError as error:
+            raise FilesystemOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="filesystem.local.path",
+                protected_cause=error,
+            ) from error
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISDIR(status.st_mode):
+                raise FilesystemOperationError(
+                    reason=PlatformReason.INTEGRITY_FAILURE,
+                    stage="filesystem.local.path",
+                )
+            return descriptor
+        except Exception:
+            os.close(descriptor)
+            raise
+
+    def _walk_parent_directory(self, key: FilesystemKey, *, create: bool) -> tuple[int, str]:
+        descriptor = self._open_directory(self._root, create=False)
+        parts = key.value.split("/")
+        try:
+            for part in parts[:-1]:
+                try:
+                    next_descriptor = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        os.mkdir(part, 0o700, dir_fd=descriptor)
+                        next_descriptor = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+                    except OSError as error:
+                        raise FilesystemOperationError(
+                            reason=PlatformReason.INTEGRITY_FAILURE,
+                            stage="filesystem.local.path",
+                            protected_cause=error,
+                        ) from error
+                except OSError as error:
+                    raise FilesystemOperationError(
+                        reason=PlatformReason.INTEGRITY_FAILURE,
+                        stage="filesystem.local.path",
+                        protected_cause=error,
+                    ) from error
+                os.close(descriptor)
+                descriptor = next_descriptor
+            return (descriptor, parts[-1])
+        except FileNotFoundError as error:
+            os.close(descriptor)
+            raise FilesystemOperationError(
+                stage="filesystem.local.path",
+                protected_cause=error,
+            ) from error
+        except Exception:
+            os.close(descriptor)
+            raise
 
     @staticmethod
     def _validated_stream(stream: object) -> BufferedIOBase:
@@ -223,10 +297,19 @@ class LocalFilesystemDriver:
             ) from error
         if byte_range is None:
             return handle
-        size = path.stat().st_size
-        start, end = byte_range.bounds(size)
-        handle.seek(start)
-        return _BoundedFileStream(handle, end - start)
+        try:
+            size = os.fstat(handle.fileno()).st_size
+            start, end = byte_range.bounds(size)
+            handle.seek(start)
+            return _BoundedFileStream(handle, end - start)
+        except Exception as error:
+            handle.close()
+            if isinstance(error, FilesystemOperationError):
+                raise
+            raise FilesystemOperationError(
+                stage="filesystem.local.read",
+                protected_cause=error,
+            ) from error
 
     def write(
         self,
@@ -241,7 +324,7 @@ class LocalFilesystemDriver:
         self._assert_open()
         validated = self._validated_stream(stream)
         path = self._path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        parent_descriptor, leaf_name = self._walk_parent_directory(key, create=True)
         temp_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temp_handle:
@@ -253,7 +336,13 @@ class LocalFilesystemDriver:
                     if type(chunk) is not bytes:
                         raise ValueError("filesystem stream must yield bytes")
                     temp_handle.write(chunk)
-            os.replace(temp_name, path)
+            replacement_name = Path(temp_name).name
+            os.replace(
+                replacement_name,
+                leaf_name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
         except FilesystemOperationError:
             if temp_name is not None:
                 Path(temp_name).unlink(missing_ok=True)
@@ -261,10 +350,21 @@ class LocalFilesystemDriver:
         except Exception as error:
             if temp_name is not None:
                 Path(temp_name).unlink(missing_ok=True)
+            reason = (
+                PlatformReason.PERMANENT_FAILURE
+                if isinstance(error, ValueError)
+                else PlatformReason.INTEGRITY_FAILURE
+            )
             raise FilesystemOperationError(
+                reason=reason,
                 stage="filesystem.local.write",
                 protected_cause=error,
             ) from error
+        finally:
+            os.close(parent_descriptor)
+            if temp_name is not None:
+                with suppress(OSError):
+                    Path(temp_name).unlink(missing_ok=True)
         return self._metadata(key, path)
 
     def list(self, prefix: FilesystemKey | None = None, /) -> tuple[FilesystemEntry, ...]:

@@ -26,6 +26,7 @@ __all__ = (
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _UPLOAD_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
+_MAX_KEY_LENGTH = 2048
 
 
 def _aware_utc(value: object, field_name: str) -> datetime:
@@ -111,7 +112,10 @@ class FilesystemKey:
             parts.append(part)
         if not parts:
             raise ValueError("filesystem key must identify a file or prefix")
-        object.__setattr__(self, "value", "/".join(parts))
+        canonical = "/".join(parts)
+        if len(canonical) > _MAX_KEY_LENGTH:
+            raise ValueError("filesystem key is too long")
+        object.__setattr__(self, "value", canonical)
 
 
 @dataclass(frozen=True, slots=True)

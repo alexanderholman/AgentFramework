@@ -87,6 +87,8 @@ def test_filesystem_contracts_fail_closed_for_invalid_types_and_bounds() -> None
     with pytest.raises(ValueError):
         ByteRange(start=0).bounds(-1)
     with pytest.raises(ValueError):
+        FilesystemKey("/".join(["a" * 255] * 9))
+    with pytest.raises(ValueError):
         FilesystemKey("a" * 256)
     with pytest.raises(ValueError):
         FilesystemKey(123)  # type: ignore[arg-type]

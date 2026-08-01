@@ -217,6 +217,9 @@ class MemoryFilesystemDriver:
     def move(self, source: FilesystemKey, destination: FilesystemKey, /) -> None:
         with self._lock:
             self._assert_open()
+            if source == destination:
+                self._required_entry(source)
+                return
             entry = self._required_entry(source)
             self._entries[destination] = self._entry(
                 destination,

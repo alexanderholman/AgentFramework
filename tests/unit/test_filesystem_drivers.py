@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import UTC, datetime
 from io import BufferedIOBase, BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from af.filesystem.contracts import (
+    ByteRange,
     FilesystemKey,
     FilesystemOperationError,
     FileVisibility,
@@ -105,6 +108,12 @@ def test_local_filesystem_driver_covers_listing_metadata_copy_move_delete_and_sh
 ) -> None:
     with pytest.raises(ValueError):
         LocalFilesystemDriver("")
+    with pytest.raises(ValueError):
+        LocalFilesystemDriver("relative-root")
+    symlink_root = tmp_path / "storage-link"
+    symlink_root.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError):
+        LocalFilesystemDriver(symlink_root)
     with pytest.raises(TypeError):
         LocalFilesystemDriver(tmp_path / "storage", clock="bad")  # type: ignore[arg-type]
 
@@ -174,6 +183,8 @@ def test_local_filesystem_driver_reports_invalid_clock_and_registration_validati
     with pytest.raises(ValueError):
         registration.factory(ref, {"driver": "local"})
     with pytest.raises(ValueError):
+        registration.factory(ref, {"driver": "local", "root": "relative-root"})
+    with pytest.raises(ValueError):
         registration.verifier(ref, object(), _binding())  # type: ignore[arg-type]
 
     invalid_clock_registration = local_filesystem_registration(
@@ -182,3 +193,63 @@ def test_local_filesystem_driver_reports_invalid_clock_and_registration_validati
     valid_driver = LocalFilesystemDriver(tmp_path / "valid", clock=lambda: _NOW)
     with pytest.raises(ValueError):
         invalid_clock_registration.verifier(ref, valid_driver, _binding())
+
+
+def test_local_filesystem_driver_closes_ranged_handle_when_fstat_fails(tmp_path: Path) -> None:
+    driver = LocalFilesystemDriver(tmp_path / "storage", clock=lambda: _NOW)
+    key = FilesystemKey("docs/report.txt")
+    driver.write(key, BytesIO(b"content"))
+    opened = driver._path(key).open("rb")
+
+    with (
+        patch("pathlib.Path.open", return_value=opened),
+        patch.object(ByteRange, "bounds", side_effect=ValueError("boom")),
+        pytest.raises(FilesystemOperationError),
+    ):
+        driver.read(key, byte_range=ByteRange(start=0))
+
+    assert opened.closed
+
+
+def test_local_filesystem_driver_rejects_symlink_swap_during_write(tmp_path: Path) -> None:
+    root = tmp_path / "storage"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    driver = LocalFilesystemDriver(root, clock=lambda: _NOW)
+    key = FilesystemKey("nested/report.txt")
+
+    original_mkdir = os.mkdir
+
+    def attack_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        original_mkdir(path, mode, dir_fd=dir_fd)
+        if path == "nested" and dir_fd is not None:
+            parent = Path(os.readlink(f"/proc/self/fd/{dir_fd}"))
+            if parent == root:
+                nested = root / "nested"
+                nested.rmdir()
+                nested.symlink_to(outside, target_is_directory=True)
+
+    with (
+        patch("os.mkdir", side_effect=attack_mkdir),
+        pytest.raises(FilesystemOperationError) as captured,
+    ):
+        driver.write(key, BytesIO(b"content"))
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert not (outside / "report.txt").exists()
+
+
+def test_memory_filesystem_move_is_a_no_op_when_source_equals_destination() -> None:
+    driver = MemoryFilesystemDriver(clock=lambda: _NOW)
+    key = FilesystemKey("docs/report.txt")
+    driver.write(key, BytesIO(b"content"))
+
+    driver.move(key, key)
+
+    with driver.read(key) as stream:
+        assert stream.read() == b"content"
