@@ -1589,3 +1589,27 @@ common directory without contacting or changing the upstream.
 - SPEC-008 (Script-First Automation and Only Write Once)
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 - Epic #120 and bootstrap issue #123
+
+
+---
+
+## SPEC-025: Verified Memory and Null Cache Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST validate bounded application, tenant, namespace, and key identities.
+- MUST accept only bounded non-empty byte values and positive TTL durations.
+- MUST make expired entries unavailable at or after their expiry instant.
+- MUST scope delete and flush to the exact namespace and preserve unrelated tenant data.
+- MUST verify declared read, write, TTL, namespace, and flush capabilities before dispatch.
+- MUST make the null store retain no value while preserving the same validation contract.
+- MUST fail closed after driver shutdown and dispose manager-owned drivers deterministically.
+
+### Tests
+- **TEST-025-1**: Invalid identities, values, and TTLs are rejected.
+- **TEST-025-2**: Memory entries expire exactly and cannot be deleted after expiry.
+- **TEST-025-3**: Delete and flush preserve another tenant's same-named key.
+- **TEST-025-4**: Named memory/null connections route only after capability verification.
+- **TEST-025-5**: Closed drivers reject new operations with a stable shutdown reason.
