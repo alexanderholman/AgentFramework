@@ -1613,3 +1613,23 @@ common directory without contacting or changing the upstream.
 - **TEST-025-3**: Delete and flush preserve another tenant's same-named key.
 - **TEST-025-4**: Named memory/null connections route only after capability verification.
 - **TEST-025-5**: Closed drivers reject new operations with a stable shutdown reason.
+
+## [SPEC-026] Owner-Fenced Memory Lock Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST scope locks to an exact application, tenant, namespace, and key.
+- MUST issue a positive fencing token that increases for every successive owner.
+- MUST permit at most one unexpired owner under concurrent acquisition.
+- MUST reject renew and release from a different, expired, or superseded lease.
+- MUST retain the fencing token across renewal and fail closed after shutdown.
+- MUST make the null driver validate requests without claiming a lock.
+
+### Tests
+- **TEST-026-1**: Concurrent memory acquisition produces exactly one lease.
+- **TEST-026-2**: A forged owner cannot renew or release another owner's lease.
+- **TEST-026-3**: Expiry permits a new owner with a greater fencing token.
+- **TEST-026-4**: Manager dispatch requires verified lock, namespace, and TTL capabilities.
+- **TEST-026-5**: Memory and null lock operations validate inputs and fail closed.
