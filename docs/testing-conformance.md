@@ -172,3 +172,34 @@ Production support additionally requires governed version and capability declara
 runtime evidence, security and failure testing, supported-service matrices, release-profile
 binding, and deployment approval. Unit fakes and reusable conformance suites are necessary evidence
 inputs, never deployment authority.
+
+## Governed benchmark plugins
+
+`af.testing.benchmarks` defines the first bounded benchmark SPI for executable plugins and governed
+fixture eligibility. It is intentionally narrower than a full benchmark catalogue or evidence store:
+the goal is to make unsupported capability, policy denial, attempted failure, cancellation, and
+inconclusive verification distinguishable before broader routing and certification work lands.
+
+The runner is deterministic and local:
+
+- plugin discovery is an explicit in-process registry, not ambient package scanning;
+- compatibility is checked before setup so missing or incompatible plugins return
+  `BenchmarkOutcome.UNSUPPORTED` without attempted workload execution;
+- fixture manifests are fail-closed: missing licence, provenance, consent/legal basis, access tier,
+  intended use, intended audience, approval class, reviewer authority, retention, deletion, or
+  export policy make the fixture ineligible before setup;
+- authorization is checked both before setup and again before evidence acceptance so expiry,
+  revocation, or scope narrowing cannot silently pass on stale authority;
+- teardown runs after success, failure, timeout, cancellation, crash, and verifier failure.
+
+Each `BenchmarkRunResult` binds evidence to the plugin, procedure, runtime, adapter, verifier,
+fixture manifest/content digests, environment, hardware class, precision, configuration, threshold,
+effective scope, and authorization digest. Changing any of those inputs changes the evidence digest.
+
+The exported view is deliberately minimized. It names only the immutable governed references,
+permitted audiences/uses, score, metrics, and outcome metadata. Raw governed content and detailed
+provenance fields stay out of exports, telemetry, caches, and general evidence summaries.
+
+Like the rest of `af.testing`, this API does not certify production isolation, deletion, domain
+governance, or physical no-egress behavior by itself. Fakes and local contract tests are necessary
+evidence inputs, never sufficient authority.
