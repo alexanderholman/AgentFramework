@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-__all__ = ("CacheKey", "CacheNamespace")
+__all__ = ("CacheKey", "CacheNamespace", "LockLease", "LockOwner")
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.:-]{0,510}[A-Za-z0-9])?$")
 _MAX_VALUE_BYTES = 1_048_576
@@ -52,6 +52,42 @@ class CacheKey:
         return "CacheKey(value='[REDACTED]')"
 
 
+@dataclass(frozen=True, slots=True, order=True, repr=False)
+class LockOwner:
+    """Opaque identity allowed to renew or release one lock lease."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", _identifier(self.value, "lock owner"))
+
+    def __repr__(self) -> str:
+        return "LockOwner(value='[REDACTED]')"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class LockLease:
+    """Owner-fenced lease returned by a lock-capable cache driver."""
+
+    owner: LockOwner
+    fencing_token: int
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.owner, LockOwner):
+            raise TypeError("lock lease requires a validated owner")
+        if type(self.fencing_token) is not int or self.fencing_token <= 0:
+            raise ValueError("lock fencing token must be a positive integer")
+        if not isinstance(self.expires_at, datetime) or self.expires_at.utcoffset() is None:
+            raise ValueError("lock expiry must be timezone-aware")
+
+    def __repr__(self) -> str:
+        return (
+            "LockLease(owner='[REDACTED]', "
+            f"fencing_token={self.fencing_token}, expires_at={self.expires_at!r})"
+        )
+
+
 def _validated_operation(namespace: object, key: object) -> tuple[CacheNamespace, CacheKey]:
     if not isinstance(namespace, CacheNamespace) or not isinstance(key, CacheKey):
         raise TypeError("cache operation requires validated namespace and key")
@@ -70,3 +106,4 @@ def _validated_ttl(value: object) -> timedelta | None:
     if not isinstance(value, timedelta) or value <= timedelta(0):
         raise ValueError("cache TTL must be a positive duration")
     return value
+
