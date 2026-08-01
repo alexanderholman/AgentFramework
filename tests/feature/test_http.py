@@ -338,6 +338,44 @@ def test_html_csrf_cookie_sets_secure_only_over_https(application) -> None:  # t
     assert "Secure" in response.headers["set-cookie"]
 
 
+def test_http_sets_security_headers_on_html_rest_and_graphql_responses(
+    application,
+) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        html = client.get("/")
+        rest = client.post("/api/v1/hello")
+        graphql = client.post("/graphql", json={"query": "mutation { hello }"})
+
+    for response in (html, rest, graphql):
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert "strict-transport-security" not in response.headers
+
+    assert html.headers["content-security-policy"] == (
+        "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    )
+    assert "content-security-policy" not in rest.headers
+    assert "content-security-policy" not in graphql.headers
+
+
+def test_http_security_headers_wrap_early_rejections_and_https_requests(
+    application,
+) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        rejected = client.get("/", headers={"host": "evil.invalid"})
+
+    with _http_client(application, scheme="https") as client:
+        secure = client.get("/")
+
+    assert rejected.status_code == 400
+    assert rejected.headers["x-frame-options"] == "DENY"
+    assert rejected.headers["x-content-type-options"] == "nosniff"
+    assert rejected.headers["referrer-policy"] == "no-referrer"
+    assert "strict-transport-security" not in rejected.headers
+    assert secure.headers["strict-transport-security"] == "max-age=63072000; includeSubDomains"
+
+
 def test_html_rejects_csrf_failures_before_mutation(application) -> None:  # type: ignore[no-untyped-def]
     with _http_client(application) as client_a, _http_client(application) as client_b:
         index_a = client_a.get("/")
