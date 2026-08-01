@@ -106,8 +106,7 @@ class FederationExplanation:
                 not isinstance(contribution, FederationContribution)
                 for contribution in self.contributions
             )
-            or len({item.source_name for item in self.contributions})
-            != len(self.contributions)
+            or len({item.source_name for item in self.contributions}) != len(self.contributions)
         ):
             raise ValueError("federation explanation is invalid")
 
@@ -137,15 +136,11 @@ class FederatedSearchResult:
             )
         ):
             raise ValueError("federation explanations are invalid")
-        searched_sources = frozenset(
-            _validate_sources(self.searched_sources, allow_empty=True)
-        )
+        searched_sources = frozenset(_validate_sources(self.searched_sources, allow_empty=True))
         if (
             type(self.failures) is not tuple
             or len(self.failures) > _MAX_SOURCES
-            or any(
-                not isinstance(failure, FederationFailure) for failure in self.failures
-            )
+            or any(not isinstance(failure, FederationFailure) for failure in self.failures)
         ):
             raise ValueError("federation failures are invalid")
         failure_sources = tuple(failure.source_name for failure in self.failures)
@@ -157,8 +152,7 @@ class FederatedSearchResult:
             raise ValueError("federation source outcomes must be disjoint")
         hit_identities = tuple(_identity(hit) for hit in self.hits)
         explanation_identities = tuple(
-            (item.tenant_id, item.source_id, item.resource_id)
-            for item in self.explanations
+            (item.tenant_id, item.source_id, item.resource_id) for item in self.explanations
         )
         if len(set(hit_identities)) != len(hit_identities):
             raise ValueError("federated hit identities must be unique")
@@ -201,11 +195,7 @@ def _validate_sources(
     *,
     allow_empty: bool = False,
 ) -> tuple[str, ...]:
-    if (
-        type(values) is not tuple
-        or (not values and not allow_empty)
-        or len(values) > _MAX_SOURCES
-    ):
+    if type(values) is not tuple or (not values and not allow_empty) or len(values) > _MAX_SOURCES:
         raise ValueError("federation sources must be a bounded tuple")
     checked = tuple(_validate_source_name(value) for value in values)
     if len(set(checked)) != len(checked):
@@ -276,14 +266,10 @@ class SearchFederator:
                 failures.append(FederationFailure(source_name, error.reason))
                 continue
             except Exception:
-                failures.append(
-                    FederationFailure(source_name, PlatformReason.PERMANENT_FAILURE)
-                )
+                failures.append(FederationFailure(source_name, PlatformReason.PERMANENT_FAILURE))
                 continue
             if self._clock() > deadline:
-                failures.append(
-                    FederationFailure(source_name, PlatformReason.CANCELLED)
-                )
+                failures.append(FederationFailure(source_name, PlatformReason.CANCELLED))
                 failures.extend(
                     FederationFailure(name, PlatformReason.CANCELLED)
                     for name in self._sources[position + 1 :]
@@ -348,9 +334,7 @@ class SearchFederator:
             )
         if tuple(hit.rank for hit in hits) != tuple(range(1, len(hits) + 1)):
             raise FederationIntegrityError(
-                protected_cause=ValueError(
-                    "search source returned noncanonical rank evidence"
-                )
+                protected_cause=ValueError("search source returned noncanonical rank evidence")
             )
         tenant_filter = query.required_filter("tenant_id")
         acl_filter = query.required_filter("acl")
@@ -362,20 +346,14 @@ class SearchFederator:
         allowed_acl = frozenset(acl_filter)
         seen: set[tuple[str, str, str]] = set()
         for hit in hits:
-            if hit.tenant_id not in allowed_tenants or allowed_acl.isdisjoint(
-                hit.acl_evidence
-            ):
+            if hit.tenant_id not in allowed_tenants or allowed_acl.isdisjoint(hit.acl_evidence):
                 raise FederationIntegrityError(
-                    protected_cause=ValueError(
-                        "search source returned a policy-ineligible hit"
-                    )
+                    protected_cause=ValueError("search source returned a policy-ineligible hit")
                 )
             identity = _identity(hit)
             if identity in seen:
                 raise FederationIntegrityError(
-                    protected_cause=ValueError(
-                        "search source returned duplicate resource identity"
-                    )
+                    protected_cause=ValueError("search source returned duplicate resource identity")
                 )
             seen.add(identity)
             contribution_score = 1.0 / (self._rrf_constant + hit.rank)
@@ -402,8 +380,5 @@ class SearchFederator:
             candidate.score += contribution_score
             candidate.contributions.append(contribution)
             for highlight in hit.highlights:
-                if (
-                    highlight not in candidate.highlights
-                    and len(candidate.highlights) < 64
-                ):
+                if highlight not in candidate.highlights and len(candidate.highlights) < 64:
                     candidate.highlights.append(highlight)
