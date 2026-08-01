@@ -202,7 +202,12 @@ def test_local_filesystem_driver_closes_ranged_handle_when_fstat_fails(tmp_path:
     opened = driver._path(key).open("rb")
 
     with (
-        patch("pathlib.Path.open", return_value=opened),
+        patch.object(
+            LocalFilesystemDriver,
+            "_open_key_handle",
+            autospec=True,
+            return_value=opened,
+        ),
         patch.object(ByteRange, "bounds", side_effect=ValueError("boom")),
         pytest.raises(FilesystemOperationError),
     ):
@@ -242,6 +247,47 @@ def test_local_filesystem_driver_rejects_symlink_swap_during_write(tmp_path: Pat
 
     assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
     assert not (outside / "report.txt").exists()
+
+
+def test_local_filesystem_driver_rejects_symlink_swap_after_read_validation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "storage"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    driver = LocalFilesystemDriver(root, clock=lambda: _NOW)
+    key = FilesystemKey("nested/report.txt")
+    driver.write(key, BytesIO(b"inside"))
+    (outside / "report.txt").write_bytes(b"outside")
+
+    original_path = LocalFilesystemDriver._path
+
+    def swap_after_validation(
+        self: LocalFilesystemDriver,
+        requested: FilesystemKey,
+    ) -> Path:
+        path = original_path(self, requested)
+        if requested == key:
+            nested = root / "nested"
+            if nested.exists() and not nested.is_symlink():
+                nested.rename(root / "nested-hidden")
+                nested.symlink_to(outside, target_is_directory=True)
+        return path
+
+    with (
+        patch.object(
+            LocalFilesystemDriver,
+            "_path",
+            autospec=True,
+            side_effect=swap_after_validation,
+        ),
+        pytest.raises(FilesystemOperationError) as captured,
+        driver.read(key) as stream,
+    ):
+        stream.read()
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert (outside / "report.txt").read_bytes() == b"outside"
 
 
 def test_memory_filesystem_move_is_a_no_op_when_source_equals_destination() -> None:

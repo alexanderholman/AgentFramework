@@ -246,36 +246,82 @@ class LocalFilesystemDriver:
             raise
 
     @staticmethod
+    def _close_descriptor(descriptor: int) -> None:
+        with suppress(OSError):
+            os.close(descriptor)
+
+    def _open_key_handle(self, key: FilesystemKey, *, stage: str) -> BufferedIOBase:
+        parent_descriptor, leaf_name = self._walk_parent_directory(key, create=False)
+        try:
+            file_descriptor = os.open(
+                leaf_name,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_descriptor,
+            )
+        except FileNotFoundError as error:
+            self._close_descriptor(parent_descriptor)
+            raise FilesystemOperationError(
+                stage=stage,
+                protected_cause=error,
+            ) from error
+        except OSError as error:
+            self._close_descriptor(parent_descriptor)
+            raise FilesystemOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage=stage,
+                protected_cause=error,
+            ) from error
+        self._close_descriptor(parent_descriptor)
+        try:
+            status = os.fstat(file_descriptor)
+            if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
+                raise FilesystemOperationError(
+                    reason=PlatformReason.INTEGRITY_FAILURE,
+                    stage=stage,
+                )
+            return os.fdopen(file_descriptor, "rb")
+        except Exception:
+            self._close_descriptor(file_descriptor)
+            raise
+
+    @staticmethod
     def _validated_stream(stream: object) -> BufferedIOBase:
         if not isinstance(stream, BufferedIOBase):
             raise ValueError("filesystem write requires a readable binary stream")
         return stream
 
-    def _checksum(self, path: Path) -> tuple[int, str]:
+    def _checksum(self, handle: BufferedIOBase) -> tuple[int, str]:
         digest = hashlib.sha256()
         size = 0
-        with path.open("rb") as handle:
-            while True:
-                chunk = handle.read(_CHUNK_SIZE)
-                if chunk == b"":
-                    break
-                digest.update(chunk)
-                size += len(chunk)
+        while True:
+            chunk = handle.read(_CHUNK_SIZE)
+            if chunk == b"":
+                break
+            digest.update(chunk)
+            size += len(chunk)
         return (size, digest.hexdigest())
 
-    def _metadata(self, key: FilesystemKey, path: Path) -> FilesystemMetadata:
+    def _metadata(self, key: FilesystemKey, handle: BufferedIOBase) -> FilesystemMetadata:
         try:
-            stat = path.stat()
-        except FileNotFoundError as error:
+            stat_result = os.fstat(handle.fileno())
+        except OSError as error:
             raise FilesystemOperationError(
                 stage="filesystem.local.metadata",
                 protected_cause=error,
             ) from error
-        size, checksum = self._checksum(path)
+        try:
+            handle.seek(0)
+            size, checksum = self._checksum(handle)
+        except OSError as error:
+            raise FilesystemOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="filesystem.local.metadata",
+                protected_cause=error,
+            ) from error
         return FilesystemMetadata(
             key=key,
             size=size,
-            updated_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+            updated_at=datetime.fromtimestamp(stat_result.st_mtime, tz=UTC),
             checksum_sha256=checksum,
         )
 
@@ -287,14 +333,8 @@ class LocalFilesystemDriver:
         byte_range: ByteRange | None = None,
     ) -> BufferedIOBase:
         self._assert_open()
-        path = self._path(key)
-        try:
-            handle = path.open("rb")
-        except FileNotFoundError as error:
-            raise FilesystemOperationError(
-                stage="filesystem.local.read",
-                protected_cause=error,
-            ) from error
+        self._path(key)
+        handle = self._open_key_handle(key, stage="filesystem.local.read")
         if byte_range is None:
             return handle
         try:
@@ -365,7 +405,7 @@ class LocalFilesystemDriver:
             if temp_name is not None:
                 with suppress(OSError):
                     Path(temp_name).unlink(missing_ok=True)
-        return self._metadata(key, path)
+        return self.metadata(key)
 
     def list(self, prefix: FilesystemKey | None = None, /) -> tuple[FilesystemEntry, ...]:
         self._assert_open()
@@ -398,36 +438,66 @@ class LocalFilesystemDriver:
 
     def metadata(self, key: FilesystemKey, /) -> FilesystemMetadata:
         self._assert_open()
-        path = self._path(key)
-        return self._metadata(key, path)
+        self._path(key)
+        with self._open_key_handle(key, stage="filesystem.local.metadata") as handle:
+            return self._metadata(key, handle)
 
     def checksum(self, key: FilesystemKey, /) -> str:
         return self.metadata(key).checksum_sha256
 
     def copy(self, source: FilesystemKey, destination: FilesystemKey, /) -> None:
         self._assert_open()
-        source_path = self._path(source)
-        with source_path.open("rb") as stream:
+        self._path(source)
+        self._path(destination)
+        with self._open_key_handle(source, stage="filesystem.local.copy") as stream:
             self.write(destination, stream)
 
     def move(self, source: FilesystemKey, destination: FilesystemKey, /) -> None:
         self._assert_open()
-        source_path = self._path(source)
-        destination_path = self._path(destination)
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        self._path(source)
+        self._path(destination)
+        if source == destination:
+            with self._open_key_handle(source, stage="filesystem.local.move"):
+                return
+        source_descriptor, source_leaf = self._walk_parent_directory(source, create=False)
+        destination_descriptor, destination_leaf = self._walk_parent_directory(
+            destination, create=True
+        )
         try:
-            os.replace(source_path, destination_path)
+            status = os.stat(source_leaf, dir_fd=source_descriptor, follow_symlinks=False)
+            if not stat.S_ISREG(status.st_mode):
+                raise FilesystemOperationError(
+                    reason=PlatformReason.INTEGRITY_FAILURE,
+                    stage="filesystem.local.move",
+                )
+            os.replace(
+                source_leaf,
+                destination_leaf,
+                src_dir_fd=source_descriptor,
+                dst_dir_fd=destination_descriptor,
+            )
+        except FileNotFoundError as error:
+            raise FilesystemOperationError(
+                stage="filesystem.local.move",
+                protected_cause=error,
+            ) from error
+        except FilesystemOperationError:
+            raise
         except Exception as error:
             raise FilesystemOperationError(
                 stage="filesystem.local.move",
                 protected_cause=error,
             ) from error
+        finally:
+            self._close_descriptor(source_descriptor)
+            self._close_descriptor(destination_descriptor)
 
     def delete(self, key: FilesystemKey, /) -> bool:
         self._assert_open()
-        path = self._path(key)
+        self._path(key)
+        parent_descriptor, leaf_name = self._walk_parent_directory(key, create=False)
         try:
-            path.unlink()
+            os.unlink(leaf_name, dir_fd=parent_descriptor)
         except FileNotFoundError:
             return False
         except Exception as error:
@@ -435,6 +505,8 @@ class LocalFilesystemDriver:
                 stage="filesystem.local.delete",
                 protected_cause=error,
             ) from error
+        finally:
+            self._close_descriptor(parent_descriptor)
         return True
 
     def signed_url(
