@@ -31,9 +31,6 @@ def trace_row_to_resource(
     text = _document_text(row.prompt, row.output, row.arguments_json, row.events_json)
     created_at = _timestamp(row.created_at)
     attributes = {
-        "intent": row.intent or "",
-        "route": row.route or "",
-        "tier": row.tier or "",
         "status": row.status,
         "verified": _bool_text(row.verified),
         "reused": _bool_text(row.reused),
@@ -42,6 +39,9 @@ def trace_row_to_resource(
         "created_at": created_at,
         "table_name": _SOURCE_ID,
     }
+    for key, value in (("intent", row.intent), ("route", row.route), ("tier", row.tier)):
+        if value is not None:
+            attributes[key] = value
     provenance = (
         _provenance(
             row=row,

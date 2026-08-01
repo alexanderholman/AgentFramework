@@ -107,6 +107,30 @@ def test_trace_row_adapter_normalizes_unsafe_document_controls() -> None:
     )
 
 
+def test_trace_row_adapter_omits_absent_nullable_metadata() -> None:
+    row = _row()
+    row.intent = None
+    row.route = None
+    row.tier = None
+
+    resource = trace_row_to_resource(
+        row,
+        tenant_id="tenant-a",
+        acl=("group:research",),
+        projection_version=1,
+    )
+
+    assert resource.attributes == {
+        "status": "completed",
+        "verified": "true",
+        "reused": "false",
+        "regression_passed": "true",
+        "promoted": "false",
+        "created_at": "2026-08-01T09:00:00Z",
+        "table_name": "af_run_traces",
+    }
+
+
 def test_trace_row_adapter_rejects_non_trace_rows() -> None:
     with pytest.raises(TypeError):
         trace_row_to_resource(  # type: ignore[arg-type]
