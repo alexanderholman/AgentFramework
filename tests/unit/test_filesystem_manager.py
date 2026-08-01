@@ -15,21 +15,27 @@ from af.filesystem.contracts import (
     MultipartPart,
     MultipartUpload,
 )
+from af.filesystem.decorators import ReadOnlyFilesystemDriver, ScopedFilesystemDriver
 from af.filesystem.local import local_filesystem_registration
 from af.filesystem.manager import (
     FilesystemFeature,
     FilesystemManager,
     bind_filesystem_manager,
 )
-from af.filesystem.memory import memory_filesystem_registration
+from af.filesystem.memory import MemoryFilesystemDriver, memory_filesystem_registration
 from af.framework.application import Application
 from af.framework.container import Container, ProviderRegistrar, ServiceProvider
 from af.framework.errors import PlatformReason
 from af.framework.managers import (
+    CapabilityBinding,
+    CapabilityEvidence,
     CapabilitySet,
     CapabilityValidationError,
+    ConnectionRef,
+    DriverManifest,
     DriverRegistration,
     DriverResolutionError,
+    HealthStatus,
     ManagerConfigurationError,
 )
 
@@ -199,6 +205,107 @@ def test_filesystem_manager_rejects_invalid_capability_requests_and_unsupported_
         manager.upload_part(upload, 1, BytesIO(b"x"))
     with pytest.raises(CapabilityValidationError):
         manager.complete_multipart_upload(upload, (part,))
+
+    manager.close()
+
+
+def test_filesystem_manager_supports_scoped_and_read_only_wrapped_connections() -> None:
+    clock = Clock()
+    base = MemoryFilesystemDriver(clock=clock)
+    manager = FilesystemManager(
+        connections={
+            "tenant-a": {"driver": "tenant-a"},
+            "tenant-a-readonly": {"driver": "tenant-a-readonly"},
+        },
+        default="tenant-a",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+
+    def registration(
+        name: str,
+        driver: object,
+        capabilities: CapabilitySet,
+    ) -> DriverRegistration[object]:
+        manifest = DriverManifest(
+            driver_name=name,
+            version="1",
+            artifact_digest="a" * 64,
+            dependency_graph_digest="b" * 64,
+            capabilities=capabilities,
+        )
+
+        def factory(ref: ConnectionRef, config: object) -> object:
+            if (
+                ref.manager_id != "filesystem"
+                or ref.driver_name != name
+                or config != {"driver": name}
+            ):
+                raise ValueError("wrapped filesystem connection configuration is invalid")
+            return driver
+
+        def verifier(
+            ref: ConnectionRef,
+            candidate: object,
+            expected: CapabilityBinding,
+        ) -> CapabilityEvidence:
+            if ref.manager_id != "filesystem" or ref.driver_name != name or candidate is not driver:
+                raise ValueError("wrapped filesystem runtime capability verification failed")
+            observed_at = clock()
+            return CapabilityEvidence(
+                binding=expected,
+                capabilities=capabilities,
+                health=HealthStatus.HEALTHY,
+                observed_at=observed_at,
+                expires_at=observed_at + timedelta(minutes=1),
+                evidence_digest="c" * 64,
+            )
+
+        return DriverRegistration(
+            manager_id="filesystem",
+            driver_name=name,
+            factory=factory,
+            manifest=manifest,
+            verifier=verifier,
+            disposer=lambda candidate: candidate.close(),
+        )
+
+    manager.install(
+        registration(
+            "tenant-a",
+            ScopedFilesystemDriver(base, FilesystemKey("tenant-a")),
+            CapabilitySet(feature.value for feature in FilesystemFeature),
+        )
+    )
+    manager.install(
+        registration(
+            "tenant-a-readonly",
+            ReadOnlyFilesystemDriver(ScopedFilesystemDriver(base, FilesystemKey("tenant-a"))),
+            CapabilitySet(
+                (
+                    FilesystemFeature.READ.value,
+                    FilesystemFeature.LIST.value,
+                    FilesystemFeature.METADATA.value,
+                    FilesystemFeature.CHECKSUM.value,
+                    FilesystemFeature.RANGE.value,
+                )
+            ),
+        )
+    )
+
+    key = FilesystemKey("docs/report.txt")
+    manager.write(key, BytesIO(b"scoped"), name="tenant-a")
+
+    assert _read_all(manager, key, name="tenant-a") == b"scoped"
+    assert _read_all(manager, key, name="tenant-a-readonly") == b"scoped"
+    assert [entry.key.value for entry in manager.list(name="tenant-a-readonly")] == [
+        "docs/report.txt"
+    ]
+
+    with pytest.raises(CapabilityValidationError) as captured:
+        manager.delete(key, name="tenant-a-readonly")
+    assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
 
     manager.close()
 
