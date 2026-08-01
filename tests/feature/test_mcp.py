@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import anyio
 import pytest
@@ -14,6 +15,8 @@ from af.framework.application import ApplicationState
 from af.framework.container import Container, ProviderRegistrar, ServiceProvider
 from af.framework.errors import InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
+from af.framework.self_design import DesignCandidate, DesignPolicy, DesignSnapshot, DesignUnitKind
+from af.framework.self_design_operation import SelfDesignOperation
 from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
@@ -33,6 +36,8 @@ EXPECTED_TOOLS = {
     "af_route_agent",
 }
 
+_SELF_DESIGN_CAPTURED_AT = datetime(2026, 7, 24, 19, 0, tzinfo=UTC)
+
 INITIALIZE_REQUEST = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -43,6 +48,55 @@ INITIALIZE_REQUEST = {
         "clientInfo": {"name": "pytest", "version": "1.0"},
     },
 }
+
+
+def _self_design_snapshot() -> DesignSnapshot:
+    return DesignSnapshot(
+        source_id="test.evidence",
+        repository="alexanderholman/AgentFramework",
+        base_ref="master",
+        head_sha="a" * 40,
+        captured_at=_SELF_DESIGN_CAPTURED_AT,
+        candidates=(
+            DesignCandidate(
+                candidate_id="issue:124",
+                revision="sha256:" + "b" * 64,
+                kind=DesignUnitKind.CHILD_TASK,
+                priority=0,
+                blocking_impact=10,
+                risk=1,
+                created_at=_SELF_DESIGN_CAPTURED_AT,
+                objective_id="objective:self-design",
+                acceptance_clause_ids=("acceptance:read-only-command",),
+                dependency_ids=(),
+                active_overlap=False,
+                acceptance_complete=True,
+                append_only_safe=True,
+                authority_granted=True,
+                evidence_complete=True,
+                complete=False,
+            ),
+        ),
+    )
+
+
+class _SelfDesignEvidenceProvider:
+    def capture_snapshot(self) -> DesignSnapshot:
+        return _self_design_snapshot()
+
+
+class SelfDesignProvider(ServiceProvider):
+    provider_id = "test.self-design"
+
+    def register(self, registrar: ProviderRegistrar) -> None:
+        registrar.bind(
+            SelfDesignOperation,
+            lambda _: SelfDesignOperation(
+                _SelfDesignEvidenceProvider(),
+                DesignPolicy(max_snapshot_age_seconds=60, tie_break_by_id=True),
+                lambda: _SELF_DESIGN_CAPTURED_AT,
+            ),
+        )
 
 
 def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: ignore[no-untyped-def]
@@ -164,6 +218,56 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             ]
 
     anyio.run(scenario)
+
+
+def test_mcp_exposes_configured_self_design_tool() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(SelfDesignProvider(),),
+    )
+
+    async def scenario() -> None:
+        server = create_mcp_server(application)
+        async with create_connected_server_and_client_session(server) as session:
+            catalogue = await session.list_tools()
+            tools = {tool.name: tool for tool in catalogue.tools}
+            assert "af_self_design" in tools
+            assert tools["af_self_design"].annotations is not None
+            assert tools["af_self_design"].annotations.readOnlyHint is True
+            assert tools["af_self_design"].annotations.idempotentHint is True
+
+            planned = await session.call_tool("af_self_design", {})
+
+            assert planned.isError is False
+            assert planned.structuredContent == {
+                "acceptance_clause_ids": ["acceptance:read-only-command"],
+                "allowed_writes": [],
+                "decision": {
+                    "assessments": [{"candidate_id": "issue:124", "reason": "eligible"}],
+                    "policy_digest": planned.structuredContent["decision"]["policy_digest"],
+                    "reason": "selected",
+                    "selected_candidate_id": "issue:124",
+                    "snapshot_digest": planned.structuredContent["decision"]["snapshot_digest"],
+                },
+                "objective_id": "objective:self-design",
+                "route": "propose",
+                "selected_candidate_id": "issue:124",
+                "stop_conditions": [
+                    "ambiguity",
+                    "authority_missing",
+                    "cancelled",
+                    "dependency_cycle",
+                    "evidence_missing",
+                    "overlap_detected",
+                    "snapshot_stale",
+                    "unsafe",
+                ],
+                "unit_kind": "child_task",
+            }
+
+    anyio.run(scenario)
+    application.shutdown()
 
 
 class ExplodingSelector:

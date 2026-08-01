@@ -27,6 +27,7 @@ from af.domain.agent_routing import (
 from af.domain.tasks import Task
 from af.framework.errors import AFError, InvalidProviderConfiguration
 from af.framework.routing import ProcedureRegistry
+from af.framework.self_design_operation import SelfDesignOperation
 from af.framework.types import ExecutionOutcome
 from af.interfaces.http_trust import (
     ParsedHost,
@@ -181,6 +182,7 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     agent_routes = resolved.agent_routes
     registry = resolved.container.resolve(ProcedureRegistry)
     transport_security = _transport_security_for(resolved)
+    self_design_operation = _resolve_self_design_operation(resolved)
 
     server: FastMCP[None] = FastMCP(
         name="AF Agent Framework",
@@ -236,6 +238,19 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     )
     def af_route_agent(prompt: str) -> AgentRouteModel:
         return _invoke_mcp_tool(lambda: AgentRouteModel.from_route(agent_routes.route(prompt)))
+
+    if self_design_operation is not None:
+
+        @server.tool(
+            name="af_self_design",
+            description="Emit one canonical read-only self-design plan from configured evidence.",
+            annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+            structured_output=True,
+        )
+        def af_self_design() -> dict[str, object]:
+            return _invoke_mcp_tool(
+                lambda: json.loads(self_design_operation.plan().canonical_json())
+            )
 
     @server.tool(
         name="af_list_tasks",
@@ -344,6 +359,14 @@ def _list_tasks(controller: TaskController) -> TaskListModel:
 def _delete_task(controller: TaskController, task_id: str) -> DeleteResult:
     controller.delete(task_id)
     return DeleteResult(id=task_id, deleted=True)
+
+
+def _resolve_self_design_operation(application: AFApplication) -> SelfDesignOperation | None:
+    try:
+        operation = application.container.resolve(SelfDesignOperation)
+    except AFError:
+        return None
+    return operation if isinstance(operation, SelfDesignOperation) else None
 
 
 def _index_search(search: SearchController, *, limit: int) -> SearchIndexResultModel:
