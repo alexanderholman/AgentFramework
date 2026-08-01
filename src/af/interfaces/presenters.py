@@ -58,6 +58,7 @@ def procedure_descriptor_to_dict(descriptor: ProcedureDescriptor) -> dict[str, o
     return {
         "procedure_id": descriptor.procedure_id,
         "version": descriptor.version,
+        "digest": descriptor.digest,
         "intent": descriptor.intent,
         "arguments": [
             {

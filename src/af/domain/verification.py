@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from af.framework.contracts import Procedure
+from af.framework.procedure_contributors import ProcedureResultVerifier
 from af.framework.types import (
     Classification,
     ProcedureResult,
@@ -14,8 +17,9 @@ from af.framework.types import (
 class DeterministicVerifier:
     """Use an implementation independent of the procedure's explicit loop."""
 
-    def __init__(self) -> None:
+    def __init__(self, verifiers: Iterable[ProcedureResultVerifier] = ()) -> None:
         self.force_failure = False
+        self._verifiers = tuple(verifiers)
 
     def verify(
         self,
@@ -24,15 +28,16 @@ class DeterministicVerifier:
         procedure: Procedure,
         result: ProcedureResult,
     ) -> VerificationResult:
-        del request, procedure
         if self.force_failure:
             return VerificationResult(False, "forced test failure")
         if classification.intent == "system.hello":
+            del request, procedure
             passed = result.output == "Hello, world!"
             return VerificationResult(
                 passed, "static greeting matched" if passed else "greeting mismatch"
             )
         if classification.intent == "text.character_count":
+            del request, procedure
             text = classification.arguments["text"]
             character = classification.arguments["character"].casefold()
             passed = result.output == str(
@@ -42,4 +47,8 @@ class DeterministicVerifier:
                 passed,
                 "independent count matched" if passed else "independent count mismatch",
             )
+        for verifier in self._verifiers:
+            verdict = verifier.verify(request, classification, procedure, result)
+            if verdict is not None:
+                return verdict
         return VerificationResult(False, "no verifier is registered for this intent")

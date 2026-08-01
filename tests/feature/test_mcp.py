@@ -350,6 +350,21 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             manifest = json.loads(manifest_result.contents[0].text)
             assert manifest["version"].endswith("a0")
             assert manifest["routes"] == ["character-count", "hello"]
+            assert manifest["route_identities"] == [
+                {
+                    "procedure_id": "character-count",
+                    "version": "1.0.0",
+                    "digest": manifest["route_identities"][0]["digest"],
+                },
+                {
+                    "procedure_id": "hello",
+                    "version": "1.0.0",
+                    "digest": manifest["route_identities"][1]["digest"],
+                },
+            ]
+            assert all(
+                item["digest"].startswith("sha256:") for item in manifest["route_identities"]
+            )
             assert manifest["tiers"] == ["procedural", "static"]
             assert "generative" not in manifest["tiers"]
             assert manifest["agent_roles"] == [

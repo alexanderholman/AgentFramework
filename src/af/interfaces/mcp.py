@@ -373,6 +373,16 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
                     "routes": sorted(
                         descriptor.procedure_id for descriptor in registry.catalogue()
                     ),
+                    "route_identities": [
+                        {
+                            "procedure_id": descriptor.procedure_id,
+                            "version": descriptor.version,
+                            "digest": descriptor.digest,
+                        }
+                        for descriptor in sorted(
+                            registry.catalogue(), key=lambda item: item.procedure_id
+                        )
+                    ],
                     "tiers": sorted(
                         {descriptor.tier.name.lower() for descriptor in registry.catalogue()}
                     ),

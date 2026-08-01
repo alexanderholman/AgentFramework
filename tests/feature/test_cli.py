@@ -2,18 +2,37 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass
 from types import ModuleType
 
 import typer
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from af.bootstrap import create_application
 from af.config import Settings
+from af.domain.procedures import BaseProcedure
 from af.framework.application import ApplicationState
 from af.framework.container import Container, ProviderRegistrar, Scope, ServiceProvider
 from af.framework.context import current_context
-from af.framework.errors import InvalidPrompt
-from af.framework.types import PROMPT_MAX_LENGTH
+from af.framework.errors import InvalidPrompt, InvalidSelectionProposal
+from af.framework.procedure_contributors import (
+    InstalledProcedureContribution,
+    bind_procedure_contributor,
+)
+from af.framework.types import (
+    PROMPT_MAX_LENGTH,
+    ArgumentValueType,
+    Classification,
+    ProcedureArgumentDescriptor,
+    ProcedureDescriptor,
+    ProcedureEffect,
+    ProcedureResult,
+    ProcedureRisk,
+    RouteMetrics,
+    VerificationResult,
+    WorkTier,
+)
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces import cli as cli_module
@@ -27,6 +46,109 @@ from af.interfaces.cli_commands import bind_cli_command_contributor
 from af.interfaces.cli_interactions import PromptEvent, ScriptedCliInteraction
 
 runner = CliRunner()
+
+
+@dataclass(frozen=True, slots=True)
+class _UppercaseRegistration:
+    procedure: BaseProcedure
+    classifier: object
+
+
+class _UppercaseClassifier:
+    def classify(self, request) -> Classification | None:  # type: ignore[no-untyped-def]
+        text = request.prompt
+        prefix = "uppercase "
+        if not isinstance(text, str) or not text.casefold().startswith(prefix):
+            return None
+        value = text[len(prefix) :].strip()
+        if not value:
+            return None
+        return Classification(
+            intent="text.uppercase",
+            arguments={"text": value},
+            confidence=1.0,
+            classifier=type(self).__name__,
+        )
+
+
+class _UppercaseProcedure(BaseProcedure):
+    id = "uppercase"
+    version = "2.1.0"
+    tier = WorkTier.PROCEDURAL
+    pure = True
+    replay_safe = True
+    metrics = RouteMetrics(cost=2, latency=1, intelligence=1)
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=version,
+        intent="text.uppercase",
+        arguments=(
+            ProcedureArgumentDescriptor(
+                name="text",
+                value_type=ArgumentValueType.TEXT,
+                min_length=1,
+                max_length=PROMPT_MAX_LENGTH,
+                allow_blank=False,
+            ),
+        ),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+
+    def supports(self, classification: Classification) -> bool:
+        return classification.intent == "text.uppercase"
+
+    def execute(self, classification: Classification) -> ProcedureResult:
+        text = classification.arguments["text"]
+        return ProcedureResult(output=text.upper(), evidence={"text": text})
+
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "text.uppercase":
+            raise InvalidSelectionProposal("unsupported intent for uppercase")
+        if set(classification.arguments) != {"text"}:
+            raise InvalidSelectionProposal("invalid arguments for uppercase")
+        if not classification.arguments["text"]:
+            raise InvalidSelectionProposal("invalid arguments for uppercase")
+
+
+class _UppercaseProvider(ServiceProvider):
+    provider_id = "test.procedure.uppercase"
+
+    def register(self, registrar: ProviderRegistrar) -> None:
+        contributor = InstalledProcedureContribution(
+            classifier=_UppercaseClassifier(),
+            procedure=_UppercaseProcedure(),
+            verifier=_UppercaseVerifier(),
+        )
+        registrar.bind(
+            _UppercaseRegistration,
+            lambda _: _UppercaseRegistration(
+                procedure=_UppercaseProcedure(),
+                classifier=_UppercaseClassifier(),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        bind_procedure_contributor(registrar, contributor)
+
+
+class _UppercaseVerifier:
+    def verify(
+        self,
+        request,
+        classification: Classification,
+        procedure,
+        result: ProcedureResult,
+    ) -> VerificationResult | None:  # type: ignore[no-untyped-def]
+        del request, procedure
+        if classification.intent != "text.uppercase":
+            return None
+        expected = classification.arguments["text"].upper()
+        passed = result.output == expected
+        return VerificationResult(
+            passed,
+            "independent uppercase matched" if passed else "independent uppercase mismatch",
+        )
 
 
 def _search_application():  # type: ignore[no-untyped-def]
@@ -79,10 +201,13 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
     result = runner.invoke(create_cli(application), ["routes"])
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == [
+    payload = json.loads(result.stdout)
+
+    assert payload == [
         {
             "procedure_id": "character-count",
             "version": "1.0.0",
+            "digest": payload[0]["digest"],
             "intent": "text.character_count",
             "arguments": [
                 {
@@ -112,6 +237,7 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
         {
             "procedure_id": "hello",
             "version": "1.0.0",
+            "digest": payload[1]["digest"],
             "intent": "system.hello",
             "arguments": [],
             "effect": "read_only",
@@ -124,6 +250,78 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
             "metrics": {"cost": 0, "latency": 0, "intelligence": 0},
         },
     ]
+    assert all(item["digest"].startswith("sha256:") for item in payload)
+    assert all(len(item["digest"]) == len("sha256:") + 64 for item in payload)
+
+
+def test_cli_routes_include_provider_contributed_procedures_with_stable_identity() -> None:
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(_UppercaseProvider(),),
+    )
+    try:
+        result = runner.invoke(create_cli(application), ["routes"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        uppercase = next(item for item in payload if item["procedure_id"] == "uppercase")
+        assert uppercase == {
+            "procedure_id": "uppercase",
+            "version": "2.1.0",
+            "digest": uppercase["digest"],
+            "intent": "text.uppercase",
+            "arguments": [
+                {
+                    "name": "text",
+                    "value_type": "text",
+                    "min_length": 1,
+                    "max_length": 10000,
+                    "allow_blank": False,
+                }
+            ],
+            "effect": "read_only",
+            "risk": "none",
+            "requires_confirmation": False,
+            "tier": "procedural",
+            "pure": True,
+            "replay_safe": True,
+            "has_selection_grounding": False,
+            "metrics": {"cost": 2, "latency": 1, "intelligence": 1},
+        }
+        assert uppercase["digest"].startswith("sha256:")
+        assert len(uppercase["digest"]) == len("sha256:") + 64
+    finally:
+        application.shutdown()
+
+
+def test_provider_contributed_procedure_runs_through_cli_and_rest() -> None:
+    from af.interfaces.http import create_http_app
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(_UppercaseProvider(),),
+    )
+    try:
+        cli_result = runner.invoke(create_cli(application), ["ask", "uppercase hello world"])
+
+        assert cli_result.exit_code == 0
+        assert cli_result.stdout == "HELLO WORLD\n"
+
+        with TestClient(create_http_app(application), base_url="http://127.0.0.1") as client:
+            response = client.post("/api/v1/tasks", json={"prompt": "uppercase hello world"})
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["output"] == "HELLO WORLD"
+        assert payload["intent"] == "text.uppercase"
+        assert payload["route"] == "uppercase"
+        assert payload["verified"] is True
+    finally:
+        application.shutdown()
 
 
 def test_cli_ideon_command_uses_the_composed_reference_service(application) -> None:  # type: ignore[no-untyped-def]
