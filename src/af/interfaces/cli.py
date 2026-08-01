@@ -39,6 +39,7 @@ from af.interfaces.presenters import (
     search_result_to_dict,
     task_to_dict,
 )
+from af.interfaces.procedure_scaffold import scaffold_procedure
 
 _APPLICATION_FACTORY = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
@@ -151,6 +152,11 @@ def create_cli(
         name="migrations",
         no_args_is_help=True,
         help="Plan, inspect, apply, reverse, and verify database migrations",
+    )
+    make_commands = typer.Typer(
+        name="make",
+        no_args_is_help=True,
+        help="Generate bounded AF scaffolds",
     )
     initialization_commands = typer.Typer(
         name="init",
@@ -359,6 +365,32 @@ def create_cli(
             registry = current().container.resolve(ProcedureRegistry)
             catalogue = sorted(registry.catalogue(), key=lambda descriptor: descriptor.procedure_id)
             typer.echo(json.dumps([procedure_descriptor_to_dict(item) for item in catalogue]))
+        except (AFError, TypeError, ValueError) as error:
+            fail(error)
+
+    @make_commands.command("procedure")
+    def make_procedure(
+        context: typer.Context,
+        procedure_id: Annotated[
+            str | None,
+            typer.Option("--procedure-id", help="Stable deterministic procedure identifier"),
+        ] = None,
+        package: Annotated[
+            str | None,
+            typer.Option("--package", help="Python package for the generated example"),
+        ] = None,
+    ) -> None:
+        """Scaffold a runnable provider-based deterministic procedure example."""
+        try:
+            interaction = current_interaction_from_context(context)
+            resolved_procedure_id = procedure_id or interaction.text(message="Procedure ID").strip()
+            resolved_package = package or interaction.text(message="Python package").strip()
+            result = scaffold_procedure(
+                root=Path.cwd(),
+                procedure_id=resolved_procedure_id,
+                package=resolved_package,
+            )
+            typer.echo(json.dumps(result.to_dict()))
         except (AFError, TypeError, ValueError) as error:
             fail(error)
 
@@ -603,6 +635,7 @@ def create_cli(
 
     initialization_commands.add_typer(version_commands, name="version")
     cli.add_typer(initialization_commands, name="init")
+    cli.add_typer(make_commands, name="make")
     cli.add_typer(search_commands, name="search")
     cli.add_typer(task_commands, name="tasks")
     cli.add_typer(migration_commands, name="migrations")

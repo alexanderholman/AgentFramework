@@ -15,12 +15,14 @@ from af.framework.self_analysis_operation import SelfAnalysisOperation
 from af.framework.self_design_operation import SelfDesignOperation
 from af.interfaces.cli import create_cli as create_base_cli
 from af.interfaces.cli import current_application_from_context
+from af.interfaces.cli_interactions import CliInteraction
 
 
 def create_cli(
     application: AFApplication | None = None,
     *,
     application_factory: Callable[[], AFApplication] | None = None,
+    interaction_factory: Callable[[], CliInteraction] | None = None,
     version_control: VersionControlController | None = None,
     self_analysis_operation: SelfAnalysisOperation | None = None,
     self_design_operation: SelfDesignOperation | None = None,
@@ -30,6 +32,7 @@ def create_cli(
     cli = create_base_cli(
         application,
         application_factory=application_factory,
+        interaction_factory=interaction_factory,
         version_control=version_control,
     )
 
