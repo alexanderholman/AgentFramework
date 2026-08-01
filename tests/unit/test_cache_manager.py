@@ -378,7 +378,6 @@ def test_lock_owner_identity_is_bounded_and_redacted() -> None:
     assert "owner-secret" not in repr(LockOwner("owner-secret"))
 
 
-
 def test_memory_lock_validates_inputs_and_fails_closed_after_shutdown() -> None:
     cache = MemoryCacheDriver(clock=Clock())
     namespace = _namespace()
