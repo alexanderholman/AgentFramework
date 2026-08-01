@@ -1534,3 +1534,31 @@ Two merge blockers in the PR's deterministic reference slice:
 - Epic #120
 - Issue #123
 - `[SCRIPT:af-dev]`
+
+
+---
+
+## Run #026 - CacheManager Memory and Null Slice
+**Date**: 2026-08-01
+**Agent**: Codex
+**Status**: In Progress
+
+### Plan
+1. Specify bounded cache identities, TTL behavior, namespace isolation, and manager routing.
+2. Implement verified memory and null registrations behind `CacheManager`.
+3. Run focused tests, strict typing, formatting, lint, packaging, governance, and regression
+   gates; keep the pull request draft until exact-head CI and review are complete.
+
+### Progress
+- Added the failing cache specification first in commit
+  `ac369e68af08c9aac7da4d7c38eefdb226df2def`.
+- Implemented immutable contracts, named capability routing, lazy TTL expiry, exact
+  namespace flush, deterministic shutdown, and an explicit no-storage driver.
+- Issue #18 remains open only for source adapters certified with their owning driver
+  issues; no duplicate search branch was created.
+
+### Related References
+- Issue #19
+- DEC-030
+- SPEC-025
+- Script: `[SCRIPT:af-dev]`
