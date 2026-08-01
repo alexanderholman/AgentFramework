@@ -84,6 +84,19 @@ def test_tags_resolve_services_in_declaration_order() -> None:
     assert container.resolve_tagged("stores") == (first, second)
 
 
+def test_tags_accumulate_across_multiple_registration_calls() -> None:
+    first = Store()
+    second = Store()
+    container = Container()
+    container.instance(Store, first, qualifier="first")
+    container.instance(Store, second, qualifier="second")
+
+    container.tag("stores", container.key(Store, qualifier="first"))
+    container.tag("stores", container.key(Store, qualifier="second"))
+
+    assert container.resolve_tagged("stores") == (first, second)
+
+
 def test_test_overrides_fork_declarations_without_sharing_caches() -> None:
     class OtherStore:
         pass
