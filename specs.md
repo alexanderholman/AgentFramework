@@ -1726,3 +1726,28 @@ common directory without contacting or changing the upstream.
 - **TEST-030-4**: Verified manager routing supports acquire, renew, and release for the database
   driver.
 - **TEST-030-5**: Invalid lock inputs and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-031] Memcached Cache Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `memcached` cache driver that routes through `CacheManager` using the
+  existing read/write/TTL/namespace contracts.
+- MUST scope cache keys to the exact application, tenant, and namespace without relying on a
+  destructive global flush.
+- MUST treat Memcached eviction and non-durable forever entries as normal cache-miss behavior.
+- MUST translate TTLs into Memcached's relative/absolute expiry rules without widening AF's exact
+  positive-duration validation contract.
+- MUST advertise only the capabilities it can verify in this slice and exclude flush and locks.
+
+### Tests
+- **TEST-031-1**: Tenant-scoped keys isolate same-named entries and eviction becomes a normal miss.
+- **TEST-031-2**: Forever, short relative TTL, and absolute Memcached TTL translations stay
+  bounded and deterministic.
+- **TEST-031-3**: Verified manager routing supports get, set, TTL, and delete, but rejects flush.
+- **TEST-031-4**: Unsafe host, port, timeout, or extra configuration values are rejected.
+- **TEST-031-5**: Missing Memcached runtime and post-shutdown operations fail closed.

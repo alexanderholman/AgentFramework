@@ -1,1 +1,1 @@
-"""Cache contracts, managers, and built-in local drivers."""
+"""Cache contracts, managers, and built-in verified drivers."""

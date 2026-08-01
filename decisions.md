@@ -2715,3 +2715,32 @@ is to reuse the same local SQL dependency for owner-fenced lock coordination.
 AF now has one persistent lock-capable cache backend that preserves the fenced-owner rules across
 driver recreation and cross-instance contention. This remains a local deterministic SQL slice and
 does not yet provide Redis or Memcached network semantics, funnels, or stale-while-revalidate.
+
+---
+
+## [DEC-044] Scope Memcached Cache Isolation With Versioned Namespace Keys
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires a Memcached cache driver, but AF's cache contract forbids flush behavior
+that can erase unrelated tenant or application data. Native Memcached `flush_all` semantics would
+violate that boundary on shared infrastructure.
+
+### Decision
+1. Implement the first Memcached slice as a cache-only driver with verified read, write, TTL, and
+   namespace capabilities.
+2. Derive physical keys from validated application, tenant, namespace, and cache-key identities so
+   tenants with the same logical key never collide.
+3. Omit flush and lock capabilities from the first Memcached slice instead of wrapping
+   `flush_all` in an unsafe abstraction.
+4. Treat Memcached eviction and forever-entry loss as normal cache-miss behavior because cache is
+   optimization, never authority.
+5. Translate AF TTLs into Memcached's relative and absolute expiry rules while keeping AF's exact
+   positive-duration validation boundary.
+
+### Consequences
+AF gains a verified network cache backend without violating tenant-safety rules or pretending that
+Memcached offers durable forever retention. Namespace-safe flush, distributed locks, stale-while-
+revalidate, and funnels remain later issue #19 slices.

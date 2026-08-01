@@ -1684,3 +1684,46 @@ flush behavior.
 - DEC-043
 - SPEC-030
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #030 - Memcached Cache Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache-manager, local drivers, and optional-service registration patterns
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for a verified Memcached-backed cache driver
+- Implemented a cache-only `memcached` registration and driver with namespace-scoped physical keys
+  and Memcached TTL translation
+- Appended DEC-044 and SPEC-031 for the bounded Memcached cache slice
+
+### Result Summary
+This run extends the open issue #19 PR with the next smallest network-backed cache slice while
+preserving AF's tenant-safety contract. The Memcached driver treats eviction and non-durable
+forever entries as normal misses, routes through the verified cache manager, and intentionally does
+not advertise flush or lock capability yet.
+
+### Issues Encountered
+- The first red-phase focused test run failed during collection because the Memcached module did
+  not exist yet; implementing the driver and registration closed that gap without widening to lock
+  semantics
+
+### Actions Taken
+- Added red-phase coverage for runtime-identity checks, tenant isolation, eviction tolerance, TTL
+  translation, manager routing, and unsafe configuration rejection
+- Implemented `src/af/cache/memcached.py` using the repository's optional-runtime registration
+  pattern and a namespace-safe key derivation strategy
+- Prepared the branch for focused cache tests, type/lint checks, and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-044
+- SPEC-031
+- Script: `[SCRIPT:af-dev]`
