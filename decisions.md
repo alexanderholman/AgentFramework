@@ -2580,3 +2580,27 @@ never cross application or tenant boundaries.
 The first cache slice is deterministic, testable, and safe for tenant isolation. Higher-level
 remember, stale-while-revalidate, locking, persistent stores, and network stores remain
 separate issue #19 slices.
+
+## [DEC-039] Fence Cache Locks With Owner Identity and Monotonic Tokens
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+DEC-030 introduced non-authoritative namespaced cache stores and deferred coordination.
+Issue #19 next requires one active lock owner while ensuring a stale or different owner cannot
+renew or release the current lease.
+
+### Decision
+1. Bind every lock to the exact application, tenant, namespace, and key identity.
+2. Return an opaque owner identity, positive monotonic fencing token, and timezone-aware expiry
+   as one immutable lease.
+3. Renew or release only when the supplied lease exactly matches the active unexpired lease.
+4. Preserve fencing-token monotonicity across expiry and release for the driver's lifetime.
+5. Let the null driver validate lock requests but never claim ownership.
+6. Treat locks as coordination only; authoritative consumers must reject stale fencing tokens.
+
+### Consequences
+The memory driver can prove single-owner contention and stale-owner rejection deterministically.
+Persistent and network drivers, blocking funnels, and stampede control remain later issue #19
+slices against the same lease contract.
