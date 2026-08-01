@@ -2604,3 +2604,28 @@ renew or release the current lease.
 The memory driver can prove single-owner contention and stale-owner rejection deterministically.
 Persistent and network drivers, blocking funnels, and stampede control remain later issue #19
 slices against the same lease contract.
+
+## [DEC-040] Treat File Cache Frames as Non-Authoritative Atomic Artifacts
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 requires a persistent local store without allowing cache files, corruption, expiry, or
+tenant-controlled identity text to become authoritative filesystem state.
+
+### Decision
+1. Require an explicit absolute canonical root and derive all child paths from SHA-256 digests
+   of already-validated namespace and key identities.
+2. Store the original identities inside a bounded versioned frame and verify them after read.
+3. Replace entries atomically through a private same-directory temporary file, file sync,
+   rename, and directory sync where supported.
+4. Treat malformed, oversized, symlinked, mismatched, or expired entries as cache misses and
+   remove only the exact entry.
+5. Scope flush to one namespace digest directory and never advertise lock capability for the
+   file driver.
+
+### Consequences
+File cache values survive driver recreation without becoming authority. Corruption and eviction
+remain normal misses, tenant identities never become path components, and coordination continues
+to require a driver that honestly advertises locks.
