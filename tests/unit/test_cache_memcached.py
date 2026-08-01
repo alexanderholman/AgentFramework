@@ -383,6 +383,51 @@ def test_memcached_lock_is_owner_fenced_and_renews_only_current_lease() -> None:
     cache.close()
 
 
+def test_memcached_release_claims_a_cas_marker_before_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = Clock()
+    client = RecordingMemcachedClient(clock=clock)
+    cache = MemcachedCacheDriver(client=client, clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:release-race")
+    first = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-a"),
+        ttl=timedelta(seconds=5),
+    )
+    assert first is not None
+    original_delete = client.delete
+    contenders: list[object] = []
+
+    def delete_after_expiry(lock_key: bytes, noreply: bool = False) -> bool:
+        clock.now += timedelta(seconds=6)
+        contenders.append(
+            cache.acquire_lock(
+                namespace,
+                key,
+                LockOwner("owner-b"),
+                ttl=timedelta(seconds=5),
+            )
+        )
+        return original_delete(lock_key, noreply=noreply)
+
+    monkeypatch.setattr(client, "delete", delete_after_expiry)
+
+    assert cache.release_lock(namespace, key, first)
+    assert contenders == [None]
+    replacement = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-b"),
+        ttl=timedelta(seconds=5),
+    )
+    assert replacement is not None
+    assert replacement.fencing_token > first.fencing_token
+    cache.close()
+
+
 def test_memcached_lock_handles_expired_missing_and_unclaimed_paths() -> None:
     clock = Clock()
     client = RecordingMemcachedClient(clock=clock)
