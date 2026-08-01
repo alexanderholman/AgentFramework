@@ -5,11 +5,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from af.cache.contracts import CacheKey, CacheNamespace
-from af.cache.manager import CacheFeature, CacheManager
+from af.cache.manager import CacheFeature, CacheManager, bind_cache_manager
 from af.cache.memory import MemoryCacheDriver, memory_cache_registration
-from af.cache.null import null_cache_registration
+from af.cache.null import NullCacheDriver, null_cache_registration
+from af.framework.application import Application
+from af.framework.container import Container, ProviderRegistrar, ServiceProvider
 from af.framework.errors import PlatformError, PlatformReason
-from af.framework.managers import DriverRegistration, ManagerConfigurationError
+from af.framework.managers import (
+    CapabilitySet,
+    DriverRegistration,
+    DriverResolutionError,
+    ManagerConfigurationError,
+)
 
 _NOW = datetime(2026, 8, 1, 9, tzinfo=UTC)
 
@@ -144,3 +151,103 @@ def test_cache_manager_rejects_registration_for_another_manager() -> None:
     with pytest.raises(ManagerConfigurationError):
         manager.install(untargeted)
     manager.close()
+
+
+def test_cache_manager_preserves_generic_capability_inputs() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+
+    driver = manager.connection(requires=CapabilitySet((CacheFeature.READ.value,)))
+    assert manager.connection(requires=CacheFeature.WRITE.value) is driver
+    with pytest.raises(ValueError):
+        manager.connection(requires=(object(),))  # type: ignore[arg-type]
+    manager.close()
+
+
+def test_cache_manager_is_application_owned_and_snapshots_configuration() -> None:
+    clock = Clock()
+    connections = {"primary": {"driver": "memory"}}
+
+    class CacheProvider(ServiceProvider):
+        provider_id = "cache"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cache_manager(
+                registrar,
+                connections=connections,
+                default="primary",
+                deployment_profile="test",
+                policy_version="policy-v1",
+                registrations=(memory_cache_registration(clock=clock),),
+                clock=clock,
+            )
+
+    application = Application(Container(), (CacheProvider(),))
+    application.register()
+    connections["primary"]["driver"] = "null"
+    application.boot()
+    application.serve()
+
+    manager = application.container.resolve(CacheManager)
+    namespace = _namespace()
+    key = CacheKey("resource")
+    manager.set(namespace, key, b"value")
+    assert manager.get(namespace, key) == b"value"
+
+    application.shutdown()
+    with pytest.raises(DriverResolutionError) as captured:
+        manager.get(namespace, key)
+    assert captured.value.reason is PlatformReason.DEPENDENCY_RESOLUTION_FAILED
+
+
+def test_cache_provider_rejects_missing_or_duplicate_registrations() -> None:
+    class Registrar:
+        def bind(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            del args, kwargs
+
+    clock = Clock()
+    registration = memory_cache_registration(clock=clock)
+    common = {
+        "connections": {"primary": {"driver": "memory"}},
+        "default": "primary",
+        "deployment_profile": "test",
+        "policy_version": "policy-v1",
+        "clock": clock,
+    }
+    with pytest.raises(ManagerConfigurationError):
+        bind_cache_manager(
+            Registrar(),
+            registrations=(),
+            **common,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ManagerConfigurationError):
+        bind_cache_manager(
+            Registrar(),  # type: ignore[arg-type]
+            registrations=(registration, registration),
+            **common,
+        )
+
+
+def test_null_cache_validates_operations_and_fails_closed_after_shutdown() -> None:
+    cache = NullCacheDriver()
+    namespace = _namespace()
+    key = CacheKey("resource")
+
+    with pytest.raises(ValueError):
+        cache.set(namespace, key, b"")
+    with pytest.raises(ValueError):
+        cache.set(namespace, key, b"value", ttl=timedelta(0))
+    assert not cache.delete(namespace, key)
+    assert cache.flush(namespace) == 0
+
+    cache.close()
+    with pytest.raises(PlatformError) as captured:
+        cache.get(namespace, key)
+    assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
