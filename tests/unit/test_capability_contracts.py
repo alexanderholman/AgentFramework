@@ -572,27 +572,45 @@ def test_codecs_and_matcher_fail_closed_for_invalid_payloads_and_policy_mismatch
         matcher.match(requirements, (cast(Any, object()),))
 
     assert matcher.match(requirements, ()).reason is CapabilityReasonCode.UNSUPPORTED
-    assert matcher.match(
-        requirements,
-        (_candidate(_descriptor("model", CapabilityClass.MODEL, procedure_id=None)),),
-    ).reason is CapabilityReasonCode.UNSUPPORTED
-    assert matcher.match(
-        replace(requirements, required_runtime_id="runtime-other"),
-        (candidate,),
-    ).reason is CapabilityReasonCode.UNSUPPORTED
-    assert matcher.match(
-        replace(requirements, accepted_localities=(CapabilityLocality.REMOTE_ALLOWED,)),
-        (candidate,),
-    ).reason is CapabilityReasonCode.PROHIBITED
-    assert matcher.match(
-        replace(requirements, accepted_licenses=("LicenseRef-Other",)),
-        (candidate,),
-    ).reason is CapabilityReasonCode.PROHIBITED
-    assert matcher.match(
-        replace(requirements, max_risk=CapabilityRisk.NONE),
-        (candidate,),
-    ).reason is CapabilityReasonCode.PROHIBITED
-    assert matcher.match(
-        replace(requirements, allowed_effects=(CapabilityEffect.SIDE_EFFECT,)),
-        (candidate,),
-    ).reason is CapabilityReasonCode.PROHIBITED
+    assert (
+        matcher.match(
+            requirements,
+            (_candidate(_descriptor("model", CapabilityClass.MODEL, procedure_id=None)),),
+        ).reason
+        is CapabilityReasonCode.UNSUPPORTED
+    )
+    assert (
+        matcher.match(
+            replace(requirements, required_runtime_id="runtime-other"),
+            (candidate,),
+        ).reason
+        is CapabilityReasonCode.UNSUPPORTED
+    )
+    assert (
+        matcher.match(
+            replace(requirements, accepted_localities=(CapabilityLocality.REMOTE_ALLOWED,)),
+            (candidate,),
+        ).reason
+        is CapabilityReasonCode.PROHIBITED
+    )
+    assert (
+        matcher.match(
+            replace(requirements, accepted_licenses=("LicenseRef-Other",)),
+            (candidate,),
+        ).reason
+        is CapabilityReasonCode.PROHIBITED
+    )
+    assert (
+        matcher.match(
+            replace(requirements, max_risk=CapabilityRisk.NONE),
+            (candidate,),
+        ).reason
+        is CapabilityReasonCode.PROHIBITED
+    )
+    assert (
+        matcher.match(
+            replace(requirements, allowed_effects=(CapabilityEffect.SIDE_EFFECT,)),
+            (candidate,),
+        ).reason
+        is CapabilityReasonCode.PROHIBITED
+    )
