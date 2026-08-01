@@ -24,6 +24,7 @@ from af.framework.container import Container, InvocationKind
 from af.framework.context import AcceptanceScope, ExecutionContext
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
+from af.framework.routing import ProcedureRegistry
 from af.framework.version_control import VersionControlRequest
 from af.interfaces.cli_commands import (
     install_cli_command_contributors,
@@ -33,6 +34,7 @@ from af.interfaces.cli_interactions import CliInteraction, NonInteractiveCliInte
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
+    procedure_descriptor_to_dict,
     search_index_result_to_dict,
     search_result_to_dict,
     task_to_dict,
@@ -348,6 +350,16 @@ def create_cli(
         try:
             typer.echo(json.dumps(agent_route_to_dict(current().agent_routes.route(prompt))))
         except AFError as error:
+            fail(error)
+
+    @cli.command()
+    def routes() -> None:
+        """List installed deterministic procedures as JSON."""
+        try:
+            registry = current().container.resolve(ProcedureRegistry)
+            catalogue = sorted(registry.catalogue(), key=lambda descriptor: descriptor.procedure_id)
+            typer.echo(json.dumps([procedure_descriptor_to_dict(item) for item in catalogue]))
+        except (AFError, TypeError, ValueError) as error:
             fail(error)
 
     @search_commands.command("index")
