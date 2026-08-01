@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -25,7 +25,7 @@ from af.domain.agent_routing import (
     AgentRouteStatus,
 )
 from af.domain.tasks import Task
-from af.framework.errors import AFError, InvalidProviderConfiguration
+from af.framework.errors import AFError, InvalidProviderConfiguration, ServiceNotBound
 from af.framework.routing import ProcedureRegistry
 from af.framework.self_design_operation import SelfDesignOperation
 from af.framework.types import ExecutionOutcome
@@ -249,7 +249,10 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
         )
         def af_self_design() -> dict[str, object]:
             return _invoke_mcp_tool(
-                lambda: json.loads(self_design_operation.plan().canonical_json())
+                lambda: cast(
+                    dict[str, object],
+                    json.loads(self_design_operation.plan().canonical_json()),
+                )
             )
 
     @server.tool(
@@ -364,7 +367,7 @@ def _delete_task(controller: TaskController, task_id: str) -> DeleteResult:
 def _resolve_self_design_operation(application: AFApplication) -> SelfDesignOperation | None:
     try:
         operation = application.container.resolve(SelfDesignOperation)
-    except AFError:
+    except ServiceNotBound:
         return None
     return operation if isinstance(operation, SelfDesignOperation) else None
 

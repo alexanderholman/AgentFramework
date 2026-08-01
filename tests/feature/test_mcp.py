@@ -13,7 +13,7 @@ from af.bootstrap import create_application
 from af.config import Settings
 from af.framework.application import ApplicationState
 from af.framework.container import Container, ProviderRegistrar, ServiceProvider
-from af.framework.errors import InvalidProviderConfiguration
+from af.framework.errors import InvalidProviderConfiguration, PlatformError, PlatformReason
 from af.framework.routing import ProcedureRegistry
 from af.framework.self_design import DesignCandidate, DesignPolicy, DesignSnapshot, DesignUnitKind
 from af.framework.self_design_operation import SelfDesignOperation
@@ -267,6 +267,29 @@ def test_mcp_exposes_configured_self_design_tool() -> None:
             }
 
     anyio.run(scenario)
+    application.shutdown()
+
+
+def test_mcp_self_design_binding_failures_are_not_silently_hidden() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    original_resolve = application.container.resolve
+
+    def resolve(token: object) -> object:
+        if token is SelfDesignOperation:
+            raise PlatformError(
+                PlatformReason.CONFIGURATION_INVALID,
+                stage="mcp.self-design.evidence-provider",
+            )
+        return original_resolve(token)
+
+    application.container.resolve = resolve  # type: ignore[assignment]
+
+    with pytest.raises(PlatformError, match="configuration is invalid"):
+        create_mcp_server(application)
+
     application.shutdown()
 
 

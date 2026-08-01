@@ -75,7 +75,7 @@ def current_application_from_context(context: typer.Context) -> AFApplication:
             PlatformReason.CONTEXT_UNAVAILABLE,
             stage="cli.application-context",
         )
-    application = current()
+    application = cast(AFApplication, current())
     if not isinstance(application, AFApplication):
         raise PlatformError(
             PlatformReason.CONTEXT_UNAVAILABLE,
