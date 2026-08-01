@@ -42,11 +42,15 @@ class LocalDesignPlanRecorder(DesignPlanRecorder):
             record_path = record_root / record_name
             previous = self._read_existing(record_path)
             if previous is not None:
-                if not hmac.compare_digest(previous, content):
+                existing = DesignPlanRecord.from_canonical_bytes(previous, request.prepared)
+                if (
+                    existing.prepared.plan.digest != record.prepared.plan.digest
+                    or existing.prepared.snapshot.digest != record.prepared.snapshot.digest
+                ):
                     raise DesignRecordingError("self-design record conflicts with existing state")
                 return DesignRecordResult(
                     status=DesignRecordStatus.UNCHANGED,
-                    record=record,
+                    record=existing,
                     record_path=str(record_path),
                 )
             self._write_new(record_root, record_path, content)
