@@ -18,6 +18,7 @@ from af.framework.managers import (
     DriverRegistration,
     HealthStatus,
 )
+from af.queue.contracts import QueueJob
 from af.queue.manager import QueueDriver, QueueFeature
 from af.queue.sync import SyncQueueDriver
 
@@ -52,13 +53,15 @@ def _evidence_digest(
 
 def sync_queue_registration(
     *,
-    consumer: Callable[[object], None],
+    consumer: Callable[[QueueJob], None],
     clock: Callable[[], datetime] | None = None,
 ) -> DriverRegistration[QueueDriver]:
     """Return an inert synchronous queue declaration with runtime evidence."""
 
     if not callable(consumer):
         raise TypeError("sync queue consumer must be callable")
+    if clock is not None and not callable(clock):
+        raise TypeError("sync queue clock must be callable")
     evidence_clock = clock if clock is not None else (lambda: datetime.now(UTC))
     manifest = DriverManifest(
         driver_name="sync",

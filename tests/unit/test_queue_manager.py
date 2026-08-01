@@ -65,9 +65,7 @@ def _manager(dispatched: list[str]) -> QueueManager:
     )
     manager.install(
         sync_queue_registration(
-            consumer=lambda job: dispatched.append(
-                cast(QueueJob, job).envelope.metadata.message_id
-            ),
+            consumer=lambda job: dispatched.append(job.envelope.metadata.message_id),
             clock=lambda: _NOW,
         )
     )
@@ -175,9 +173,7 @@ def test_queue_manager_is_application_owned_and_snapshots_configuration() -> Non
                 policy_version="policy-v1",
                 registrations=(
                     sync_queue_registration(
-                        consumer=lambda job: dispatched.append(
-                            cast(QueueJob, job).envelope.metadata.message_id
-                        ),
+                        consumer=lambda job: dispatched.append(job.envelope.metadata.message_id),
                         clock=lambda: _NOW,
                     ),
                 ),
@@ -283,6 +279,8 @@ def test_sync_registration_rejects_invalid_runtime_evidence_time() -> None:
 def test_sync_queue_registration_rejects_invalid_consumer_identity_and_verifier_inputs() -> None:
     with pytest.raises(TypeError, match="consumer"):
         sync_queue_registration(consumer="not callable")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="clock"):
+        sync_queue_registration(consumer=lambda _job: None, clock="not callable")  # type: ignore[arg-type]
 
     registration = sync_queue_registration(consumer=lambda _job: None, clock=lambda: _NOW)
     with pytest.raises(ValueError, match="invalid identity"):
