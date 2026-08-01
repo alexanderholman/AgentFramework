@@ -143,6 +143,37 @@ def test_database_cache_registration_routes_through_verified_manager(tmp_path: P
     manager.close()
 
 
+def test_database_cache_rejects_invalid_runtime_inputs_and_lock_calls(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(TypeError):
+        DatabaseCacheDriver(  # type: ignore[arg-type]
+            url=_url(tmp_path / "invalid-clock.sqlite3"),
+            clock=object(),
+        )
+
+    cache = DatabaseCacheDriver(
+        url=_url(tmp_path / "cache.sqlite3"),
+        clock=lambda: datetime(2026, 8, 1, 11),
+    )
+    namespace = _namespace()
+    key = CacheKey("resource")
+
+    with pytest.raises(PlatformError) as captured:
+        cache.set(namespace, key, b"value", ttl=timedelta(seconds=1))
+    assert captured.value.stage == "cache.database.clock"
+
+    with pytest.raises(TypeError):
+        cache.flush(object())  # type: ignore[arg-type]
+    with pytest.raises(NotImplementedError):
+        cache.acquire_lock()
+    with pytest.raises(NotImplementedError):
+        cache.renew_lock()
+    with pytest.raises(NotImplementedError):
+        cache.release_lock()
+    cache.close()
+
+
 def test_database_cache_validates_url_and_fails_closed_after_shutdown(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         DatabaseCacheDriver(url="", clock=Clock())
