@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from af.cache.contracts import CacheKey, CacheNamespace
 from af.cache.manager import CacheFeature, CacheManager
 from af.cache.memory import MemoryCacheDriver, memory_cache_registration
