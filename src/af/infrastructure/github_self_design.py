@@ -39,7 +39,11 @@ class GitHubIssueStatus(StrEnum):
 
 
 def _aware_utc(value: datetime, field_name: str) -> datetime:
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
         raise ValueError(f"GitHub {field_name} must be timezone aware")
     return value.astimezone(UTC)
 
@@ -66,7 +70,10 @@ class GitHubIssueState:
     latest_comment_id: int | None = None
 
     def __post_init__(self) -> None:
-        if type(self.repository) is not str or _REPOSITORY.fullmatch(self.repository) is None:
+        if (
+            type(self.repository) is not str
+            or _REPOSITORY.fullmatch(self.repository) is None
+        ):
             raise ValueError("GitHub issue repository identity is invalid")
         if type(self.issue_number) is not int or self.issue_number < 1:
             raise ValueError("GitHub issue number is invalid")
@@ -110,9 +117,9 @@ class GitHubIssueState:
                 "repository": self.repository,
                 "status": self.status.value,
                 "title": self.title,
-                "updated_at": self.updated_at.isoformat(timespec="microseconds").replace(
-                    "+00:00", "Z"
-                ),
+                "updated_at": self.updated_at.isoformat(
+                    timespec="microseconds"
+                ).replace("+00:00", "Z"),
             }
         )
 
@@ -133,7 +140,10 @@ class GitHubIssueCreation:
     def __post_init__(self) -> None:
         if not isinstance(self.issue, GitHubIssueState):
             raise TypeError("GitHub issue creation state is invalid")
-        if type(self.draft_digest) is not str or _SHA256.fullmatch(self.draft_digest) is None:
+        if (
+            type(self.draft_digest) is not str
+            or _SHA256.fullmatch(self.draft_digest) is None
+        ):
             raise ValueError("GitHub issue creation draft digest is invalid")
         created_at = _aware_utc(self.created_at, "issue creation time")
         object.__setattr__(self, "created_at", created_at)
@@ -144,9 +154,9 @@ class GitHubIssueCreation:
         """Return deterministic, independently readable creation evidence."""
         return _canonical_json(
             {
-                "created_at": self.created_at.isoformat(timespec="microseconds").replace(
-                    "+00:00", "Z"
-                ),
+                "created_at": self.created_at.isoformat(
+                    timespec="microseconds"
+                ).replace("+00:00", "Z"),
                 "draft_digest": self.draft_digest,
                 "issue_revision": self.issue.revision,
             }
@@ -169,7 +179,10 @@ class GitHubIssueComment:
     updated_at: datetime
 
     def __post_init__(self) -> None:
-        if type(self.repository) is not str or _REPOSITORY.fullmatch(self.repository) is None:
+        if (
+            type(self.repository) is not str
+            or _REPOSITORY.fullmatch(self.repository) is None
+        ):
             raise ValueError("GitHub comment repository identity is invalid")
         if type(self.issue_number) is not int or self.issue_number < 1:
             raise ValueError("GitHub comment issue number is invalid")
@@ -195,9 +208,9 @@ class GitHubIssueComment:
                 "comment_id": self.comment_id,
                 "issue_number": self.issue_number,
                 "repository": self.repository,
-                "updated_at": self.updated_at.isoformat(timespec="microseconds").replace(
-                    "+00:00", "Z"
-                ),
+                "updated_at": self.updated_at.isoformat(
+                    timespec="microseconds"
+                ).replace("+00:00", "Z"),
             }
         )
 
@@ -293,7 +306,9 @@ class GitHubDesignPublisher:
         if not isinstance(request, DesignPublicationRequest):
             raise TypeError("GitHub self-design publication request is invalid")
         if request.draft.repository != self._repository:
-            raise DesignPublicationError("self-design publication repository is not admitted")
+            raise DesignPublicationError(
+                "self-design publication repository is not admitted"
+            )
 
         self._verify_local_record(request)
         draft = request.draft
@@ -329,7 +344,9 @@ class GitHubDesignPublisher:
                 )
                 self._verify_issue_binding(current, draft.target_issue_number)
                 if current.revision != draft.expected_target_revision:
-                    raise DesignPublicationError("self-design publication target revision is stale")
+                    raise DesignPublicationError(
+                        "self-design publication target revision is stale"
+                    )
                 publication = self._client.add_issue_comment(
                     self._repository,
                     draft.target_issue_number,
@@ -338,7 +355,9 @@ class GitHubDesignPublisher:
                     idempotency_key=draft.digest,
                 )
                 if not isinstance(publication, GitHubCommentPublication):
-                    raise TypeError("GitHub self-design comment publication evidence is invalid")
+                    raise TypeError(
+                        "GitHub self-design comment publication evidence is invalid"
+                    )
                 published = publication.issue
                 published_comment = publication.comment
 
@@ -352,7 +371,9 @@ class GitHubDesignPublisher:
                 self._verify_observed_creation(published_creation, observed_creation)
             if published_comment is not None:
                 if current is None:
-                    raise TypeError("GitHub self-design publication target state is missing")
+                    raise TypeError(
+                        "GitHub self-design publication target state is missing"
+                    )
                 self._verify_published_comment(
                     draft,
                     current,
@@ -370,7 +391,9 @@ class GitHubDesignPublisher:
         except DesignPublicationError:
             raise
         except Exception as error:
-            raise DesignPublicationError("GitHub self-design publication failed") from error
+            raise DesignPublicationError(
+                "GitHub self-design publication failed"
+            ) from error
 
         return DesignPublicationReceipt(
             status=DesignPublicationStatus.PUBLISHED,
@@ -392,7 +415,11 @@ class GitHubDesignPublisher:
             raise DesignPublicationError(
                 "GitHub self-design creation evidence is inconsistent"
             )
-        if not request.authority.issued_at <= creation.created_at <= request.authority.expires_at:
+        if (
+            not request.authority.issued_at
+            <= creation.created_at
+            <= request.authority.expires_at
+        ):
             raise DesignPublicationError(
                 "GitHub self-design creation evidence is outside authority"
             )
@@ -405,7 +432,9 @@ class GitHubDesignPublisher:
         if not isinstance(published, GitHubIssueCreation) or not isinstance(
             observed, GitHubIssueCreation
         ):
-            raise TypeError("GitHub self-design creation client returned invalid evidence")
+            raise TypeError(
+                "GitHub self-design creation client returned invalid evidence"
+            )
         self._verify_issue_binding(observed.issue, published.issue.issue_number)
         if observed.revision != published.revision:
             raise DesignPublicationError("GitHub self-design creation readback drifted")
@@ -422,7 +451,9 @@ class GitHubDesignPublisher:
         if published.repository != self._repository or (
             expected_number is not None and published.issue_number != expected_number
         ):
-            raise DesignPublicationError("GitHub self-design publication result is misbound")
+            raise DesignPublicationError(
+                "GitHub self-design publication result is misbound"
+            )
 
         if draft.effect is DesignPublicationEffect.CREATE_ISSUE:
             if (
@@ -450,7 +481,9 @@ class GitHubDesignPublisher:
             )
             or published.updated_at < previous.updated_at
         ):
-            raise DesignPublicationError("GitHub self-design comment result is not append-only")
+            raise DesignPublicationError(
+                "GitHub self-design comment result is not append-only"
+            )
 
     def _verify_published_comment(
         self,
@@ -473,9 +506,16 @@ class GitHubDesignPublisher:
             )
             or comment.body != draft.body
         ):
-            raise DesignPublicationError("GitHub self-design comment result is inconsistent")
-        if comment.updated_at < previous.updated_at or comment.updated_at > published.updated_at:
-            raise DesignPublicationError("GitHub self-design comment transition is inconsistent")
+            raise DesignPublicationError(
+                "GitHub self-design comment result is inconsistent"
+            )
+        if (
+            comment.updated_at < previous.updated_at
+            or comment.updated_at > published.updated_at
+        ):
+            raise DesignPublicationError(
+                "GitHub self-design comment transition is inconsistent"
+            )
 
     def _verify_observed_comment(
         self,
@@ -485,13 +525,17 @@ class GitHubDesignPublisher:
         if not isinstance(published, GitHubIssueComment) or not isinstance(
             observed, GitHubIssueComment
         ):
-            raise TypeError("GitHub self-design comment client returned invalid evidence")
+            raise TypeError(
+                "GitHub self-design comment client returned invalid evidence"
+            )
         if (
             observed.repository != self._repository
             or observed.issue_number != published.issue_number
             or observed.comment_id != published.comment_id
         ):
-            raise DesignPublicationError("GitHub self-design comment readback is misbound")
+            raise DesignPublicationError(
+                "GitHub self-design comment readback is misbound"
+            )
         if observed.revision != published.revision:
             raise DesignPublicationError("GitHub self-design comment readback drifted")
 
@@ -506,7 +550,9 @@ class GitHubDesignPublisher:
             raise TypeError("GitHub self-design issue client returned invalid state")
         self._verify_issue_binding(observed, published.issue_number)
         if observed.revision != published.revision:
-            raise DesignPublicationError("GitHub self-design post-publication state drifted")
+            raise DesignPublicationError(
+                "GitHub self-design post-publication state drifted"
+            )
 
     def _verify_issue_binding(self, issue: GitHubIssueState, issue_number: int) -> None:
         if not isinstance(issue, GitHubIssueState):
@@ -522,7 +568,9 @@ class GitHubDesignPublisher:
         try:
             before = os.lstat(path)
             if stat.S_ISLNK(before.st_mode):
-                raise DesignPublicationError("self-design publication local record is invalid")
+                raise DesignPublicationError(
+                    "self-design publication local record is invalid"
+                )
             descriptor = os.open(path, flags)
         except DesignPublicationError:
             raise
@@ -538,7 +586,9 @@ class GitHubDesignPublisher:
                 or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
                 or opened.st_size > SELF_DESIGN_RECORD_MAX_BYTES
             ):
-                raise DesignPublicationError("self-design publication local record is invalid")
+                raise DesignPublicationError(
+                    "self-design publication local record is invalid"
+                )
             observed = bytearray()
             while len(observed) <= SELF_DESIGN_RECORD_MAX_BYTES:
                 remaining = SELF_DESIGN_RECORD_MAX_BYTES + 1 - len(observed)
@@ -558,7 +608,10 @@ class GitHubDesignPublisher:
                 and (after_path.st_dev, after_path.st_ino) == identity
             )
             stable_metadata = (
-                before.st_size == opened.st_size == after_open.st_size == after_path.st_size
+                before.st_size
+                == opened.st_size
+                == after_open.st_size
+                == after_path.st_size
                 and before.st_mtime_ns
                 == opened.st_mtime_ns
                 == after_open.st_mtime_ns
@@ -582,4 +635,6 @@ class GitHubDesignPublisher:
             os.close(descriptor)
 
         if bytes(observed) != expected:
-            raise DesignPublicationError("self-design publication local record has changed")
+            raise DesignPublicationError(
+                "self-design publication local record has changed"
+            )
