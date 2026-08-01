@@ -435,6 +435,7 @@ def test_cache_manager_remember_and_memoize_validate_loader() -> None:
     manager.install(memory_cache_registration(clock=Clock()))
     namespace = _namespace()
     key = CacheKey("remember:validated")
+    manager.set(namespace, key, b"already-cached")
 
     with pytest.raises(TypeError):
         manager.remember(namespace, key, object())  # type: ignore[arg-type]
