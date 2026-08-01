@@ -163,3 +163,62 @@ def test_make_procedure_refuses_to_overwrite_existing_files(
         result.stderr
         == "refusing to overwrite existing path: generated_procedure_app/__init__.py\n"
     )
+
+
+def test_make_procedure_supports_valid_numeric_leading_procedure_ids(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    package = "generated_procedure_app_2fa"
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "make",
+            "procedure",
+            "--procedure-id",
+            "2fa",
+            "--package",
+            package,
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    generated = import_module(f"{package}.application")
+    application = generated.build_application()
+    try:
+        routes = runner.invoke(
+            create_cli(),
+            [
+                "--application-factory",
+                f"{package}.application:build_application",
+                "routes",
+            ],
+        )
+        invoked = runner.invoke(
+            create_cli(),
+            [
+                "--application-factory",
+                f"{package}.application:build_application",
+                "ask",
+                "2fa hello world",
+            ],
+        )
+
+        assert routes.exit_code == 0
+        route_payload = json.loads(routes.stdout)
+        route = next(item for item in route_payload if item["procedure_id"] == "2fa")
+        assert route["intent"] == "text.procedure_2fa"
+        assert invoked.exit_code == 0
+        assert invoked.stdout == "HELLO WORLD\n"
+
+        with TestClient(create_http_app(application), base_url="http://127.0.0.1") as client:
+            response = client.post("/api/v1/tasks", json={"prompt": "2fa hello world"})
+
+        assert response.status_code == 201
+        assert response.json()["intent"] == "text.procedure_2fa"
+    finally:
+        application.shutdown()

@@ -38,8 +38,8 @@ def scaffold_procedure(*, root: Path, procedure_id: str, package: str) -> Proced
         raise ValueError(f"invalid package name: {package!r}")
 
     slug = procedure_id.replace("-", "_")
-    class_name = "".join(part.capitalize() for part in re.split(r"[-_]", procedure_id) if part)
-    intent = f"text.{slug}"
+    class_name = _class_name_from_procedure_id(procedure_id)
+    intent = f"text.{_intent_segment_from_slug(slug)}"
     provider_id = f"generated.procedure.{procedure_id}"
     application_factory = f"{package}.application:build_application"
     package_directory = root.joinpath(*package.split("."))
@@ -92,6 +92,7 @@ def scaffold_procedure(*, root: Path, procedure_id: str, package: str) -> Proced
         root / "tests" / f"test_{slug}_unit.py": _unit_test(
             package=package,
             class_name=class_name,
+            procedure_id=procedure_id,
             intent=intent,
         ),
     }
@@ -110,6 +111,19 @@ def scaffold_procedure(*, root: Path, procedure_id: str, package: str) -> Proced
 
 def _package_init() -> str:
     return '"""Generated deterministic procedure example package."""\n'
+
+
+def _class_name_from_procedure_id(procedure_id: str) -> str:
+    class_name = "".join(part.capitalize() for part in re.split(r"[-_]", procedure_id) if part)
+    if not class_name or class_name[0].isdigit():
+        return f"Procedure{class_name}"
+    return class_name
+
+
+def _intent_segment_from_slug(slug: str) -> str:
+    if slug and slug[0].isalpha():
+        return slug
+    return f"procedure_{slug}"
 
 
 def _application_module(*, package: str, class_name: str) -> str:
@@ -264,7 +278,7 @@ class {class_name}Verifier:
 '''
 
 
-def _unit_test(*, package: str, class_name: str, intent: str) -> str:
+def _unit_test(*, package: str, class_name: str, procedure_id: str, intent: str) -> str:
     return f'''from __future__ import annotations
 
 from af.framework.types import Classification
@@ -273,7 +287,7 @@ from {package}.procedure import {class_name}Classifier, {class_name}Procedure
 
 
 def test_classifier_extracts_text_argument() -> None:
-    request = type("Request", (), {{"prompt": "uppercase hello world"}})()
+    request = type("Request", (), {{"prompt": "{procedure_id} hello world"}})()
     classification = {class_name}Classifier().classify(request)
 
     assert classification == Classification(
