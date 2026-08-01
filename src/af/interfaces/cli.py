@@ -53,7 +53,7 @@ def _close_interaction(interaction: CliInteraction) -> None:
         interaction.close()
     except KeyboardInterrupt:
         raise
-    except BaseException as error:
+    except Exception as error:
         raise PlatformError(
             PlatformReason.TRANSPORT_FAILED,
             stage="cli.interaction-close",
@@ -334,9 +334,13 @@ def create_cli(
             nonlocal current_interaction
             nonlocal lifecycle_context
             nonlocal selected_factory_path
+            interaction_close_error: AFError | None = None
             try:
                 if current_interaction is not None:
-                    _close_interaction(current_interaction)
+                    try:
+                        _close_interaction(current_interaction)
+                    except AFError as error:
+                        interaction_close_error = error
                 if owns_application and cached_application is not None:
                     cached_application.shutdown()
             finally:
@@ -346,6 +350,8 @@ def create_cli(
                 if owns_application:
                     cached_application = None
                 selected_factory_path = None
+            if interaction_close_error is not None:
+                fail(interaction_close_error)
 
         context.call_on_close(close_owned_application)
 

@@ -570,6 +570,49 @@ def test_provider_command_keyboard_interrupt_returns_cancelled_exit_and_restores
         application.shutdown()
 
 
+def test_cli_sanitizes_interaction_close_failures_and_still_shuts_down_owned_application(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    class ClosingInteraction(ScriptedCliInteraction):
+        def text(self, *, message: str) -> str:
+            self.events.append(PromptEvent(kind="text", message=message))
+            return "Ralph"
+
+        def close(self) -> None:
+            raise RuntimeError("restore failed")
+
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-close-failure"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    monkeypatch.setattr(cli_module, "create_application", lambda: application)
+
+    result = runner.invoke(
+        create_cli(interaction_factory=ClosingInteraction),
+        ["provider-prompt"],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == "Ralph\n"
+    assert result.stderr == "transport operation failed\n"
+    assert application.lifecycle.state is ApplicationState.SHUTDOWN
+
+
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
 
