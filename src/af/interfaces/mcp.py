@@ -16,7 +16,10 @@ from pydantic import BaseModel
 
 from af import __version__
 from af.application.search import SearchController
-from af.application.self_design_execution import SelfDesignExecutionController
+from af.application.self_design_execution import (
+    SelfDesignExecutionController,
+    SelfDesignExecutionResult,
+)
 from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
 from af.domain.agent_routing import (
@@ -131,12 +134,13 @@ def _annotations(
     read_only: bool,
     destructive: bool,
     idempotent: bool,
+    open_world: bool = False,
 ) -> ToolAnnotations:
     return ToolAnnotations(
         readOnlyHint=read_only,
         destructiveHint=destructive,
         idempotentHint=idempotent,
-        openWorldHint=False,
+        openWorldHint=open_world,
     )
 
 
@@ -264,14 +268,19 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
             description=(
                 "Preview or explicitly execute one configured governed self-design cycle."
             ),
-            annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+            annotations=_annotations(
+                read_only=False,
+                destructive=False,
+                idempotent=False,
+                open_world=True,
+            ),
             structured_output=True,
         )
         def af_self_design_execute(execute: bool = False) -> dict[str, object]:
             return _invoke_mcp_tool(
                 lambda: cast(
                     dict[str, object],
-                    self_design_execution.execute().to_dict()
+                    _mcp_self_design_execution_result(self_design_execution.execute())
                     if execute
                     else json.loads(self_design_execution.preview().canonical_json()),
                 )
@@ -402,6 +411,20 @@ def _resolve_self_design_execution(
     except ServiceNotBound:
         return None
     return controller if isinstance(controller, SelfDesignExecutionController) else None
+
+
+def _mcp_self_design_execution_result(
+    result: SelfDesignExecutionResult,
+) -> dict[str, object]:
+    payload = result.to_dict()
+    record = payload.get("record")
+    if isinstance(record, dict):
+        record_payload = record.get("record")
+        if isinstance(record_payload, dict):
+            sanitized = dict(record_payload)
+            sanitized.pop("path", None)
+            record["record"] = sanitized
+    return payload
 
 
 def _index_search(search: SearchController, *, limit: int) -> SearchIndexResultModel:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
@@ -173,7 +173,7 @@ def _self_design_execution_result(tmp_path) -> SelfDesignExecutionResult:  # typ
         plan_digest=prepared.plan.digest,
         version_control_manifest_digest=coordination.manifest.digest(),
         issued_at=_SELF_DESIGN_CAPTURED_AT,
-        expires_at=_SELF_DESIGN_CAPTURED_AT.replace(minute=5),
+        expires_at=_SELF_DESIGN_CAPTURED_AT + timedelta(minutes=5),
         allowed_effects=(DesignRecordingEffect.LOCAL_RECORD,),
     )
     record = DesignPlanRecord.from_request(
@@ -429,6 +429,7 @@ def test_mcp_exposes_configured_self_design_execute_tool(tmp_path) -> None:  # t
             assert tools["af_self_design_execute"].annotations is not None
             assert tools["af_self_design_execute"].annotations.readOnlyHint is False
             assert tools["af_self_design_execute"].annotations.idempotentHint is False
+            assert tools["af_self_design_execute"].annotations.openWorldHint is True
 
             preview = await session.call_tool("af_self_design_execute", {})
 
@@ -465,6 +466,7 @@ def test_mcp_exposes_configured_self_design_execute_tool(tmp_path) -> None:  # t
             assert executed.structuredContent is not None
             assert executed.structuredContent["plan"]["selected_candidate_id"] == "issue:124"
             assert executed.structuredContent["record"]["status"] == "recorded"
+            assert "path" not in executed.structuredContent["record"]["record"]
             assert executed.structuredContent["publication"]["status"] == "published"
             assert executed.structuredContent["publication"]["issue_number"] == 146
 
