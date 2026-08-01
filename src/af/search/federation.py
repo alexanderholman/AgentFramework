@@ -6,6 +6,8 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from math import isfinite
+from queue import Empty, Queue
+from threading import Thread
 from time import monotonic
 from typing import Protocol
 
@@ -180,6 +182,15 @@ class _Candidate:
     highlights: list[str]
 
 
+@dataclass(slots=True)
+class _SourceOutcome:
+    source_name: str
+    query: SearchQuery
+    completed_at: float
+    hits: object | None = None
+    failure_reason: PlatformReason | None = None
+
+
 def _validate_identity(value: object, field_name: str) -> str:
     if type(value) is not str or _SOURCE_NAME.fullmatch(value) is None:
         raise ValueError(f"federation {field_name} must be canonical")
@@ -217,7 +228,7 @@ def _same_authority(left: SearchHit, right: SearchHit) -> bool:
 
 
 class SearchFederator:
-    """Query bounded named sources and fuse trustworthy results deterministically."""
+    """Query bounded named sources concurrently and fuse trustworthy results."""
 
     def __init__(
         self,
@@ -245,6 +256,10 @@ class SearchFederator:
             raise ValueError("federation query is invalid")
         deadline = self._clock() + (query.deadline_ms / 1_000)
         candidates: dict[tuple[str, str, str], _Candidate] = {}
+        outcomes: Queue[_SourceOutcome] = Queue()
+        launched: dict[str, SearchQuery] = {}
+        received: dict[str, _SourceOutcome] = {}
+        pending: set[str] = set()
         searched: list[str] = []
         failures: list[FederationFailure] = []
 
@@ -260,27 +275,48 @@ class SearchFederator:
                 query,
                 deadline_ms=min(query.deadline_ms, remaining_ms),
             )
-            try:
-                hits = self._manager.search(source_query, name=source_name)
-            except PlatformError as error:
-                failures.append(FederationFailure(source_name, error.reason))
-                continue
-            except Exception:
-                failures.append(FederationFailure(source_name, PlatformReason.PERMANENT_FAILURE))
-                continue
-            if self._clock() > deadline:
-                failures.append(FederationFailure(source_name, PlatformReason.CANCELLED))
-                failures.extend(
-                    FederationFailure(name, PlatformReason.CANCELLED)
-                    for name in self._sources[position + 1 :]
-                )
+            launched[source_name] = source_query
+            pending.add(source_name)
+            Thread(
+                target=self._search_source,
+                args=(source_name, source_query, outcomes),
+                daemon=True,
+                name=f"af-search-federation-{source_name}",
+            ).start()
+
+        while pending:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
                 break
+            try:
+                outcome = outcomes.get(timeout=remaining)
+            except Empty:
+                break
+            if outcome.source_name not in pending:
+                continue
+            pending.remove(outcome.source_name)
+            if outcome.completed_at > deadline:
+                failures.append(FederationFailure(outcome.source_name, PlatformReason.CANCELLED))
+                continue
+            received[outcome.source_name] = outcome
+
+        for source_name in self._sources:
+            if source_name not in received:
+                if source_name in launched and source_name not in {
+                    failure.source_name for failure in failures
+                }:
+                    failures.append(FederationFailure(source_name, PlatformReason.CANCELLED))
+                continue
+            outcome = received[source_name]
+            if outcome.failure_reason is not None:
+                failures.append(FederationFailure(source_name, outcome.failure_reason))
+                continue
             searched.append(source_name)
             self._accumulate(
                 candidates,
                 source_name,
-                hits,
-                query=source_query,
+                outcome.hits,
+                query=outcome.query,
             )
 
         ordered = sorted(
@@ -314,6 +350,43 @@ class SearchFederator:
             explanations=tuple(explanations),
             searched_sources=tuple(searched),
             failures=tuple(failures),
+        )
+
+    def _search_source(
+        self,
+        source_name: str,
+        source_query: SearchQuery,
+        outcomes: Queue[_SourceOutcome],
+    ) -> None:
+        try:
+            hits = self._manager.search(source_query, name=source_name)
+        except PlatformError as error:
+            outcomes.put(
+                _SourceOutcome(
+                    source_name=source_name,
+                    query=source_query,
+                    completed_at=self._clock(),
+                    failure_reason=error.reason,
+                )
+            )
+            return
+        except Exception:
+            outcomes.put(
+                _SourceOutcome(
+                    source_name=source_name,
+                    query=source_query,
+                    completed_at=self._clock(),
+                    failure_reason=PlatformReason.PERMANENT_FAILURE,
+                )
+            )
+            return
+        outcomes.put(
+            _SourceOutcome(
+                source_name=source_name,
+                query=source_query,
+                completed_at=self._clock(),
+                hits=hits,
+            )
         )
 
     def _accumulate(
