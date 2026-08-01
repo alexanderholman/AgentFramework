@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from json import JSONDecodeError
 from pathlib import Path
@@ -284,10 +285,8 @@ class FileCacheDriver:
                 except FileNotFoundError:
                     continue
                 removed += 1
-            try:
+            with suppress(OSError):
                 directory.rmdir()
-            except OSError:
-                pass
             return removed
 
     def acquire_lock(self, *args: object, **kwargs: object) -> None:
