@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from collections.abc import Callable
 from dataclasses import replace
@@ -211,6 +212,25 @@ class SelfAlignmentPlannerTests(unittest.TestCase):
         )
         self.assertEqual(first.stage_plan.handoff.source_snapshot_digest, observed.operation.digest)
         self.assertEqual(first.stage_plan.handoff.input_artifact_digest, observed.digest)
+
+    def test_snapshot_embeds_predecessor_plan_as_canonical_object(self) -> None:
+        observed = snapshot(candidate("alignment:126"))
+
+        payload = json.loads(observed.canonical_json())
+
+        self.assertIsInstance(payload["predecessor_plan"], dict)
+        self.assertEqual(payload["predecessor_plan"]["route"], "analyse")
+        self.assertEqual(payload["predecessor_plan"]["stage_plan"]["stage"], "analysis")
+
+    def test_selected_plan_serializes_complete_alignment_output(self) -> None:
+        selected = self.planner.plan(snapshot(candidate("alignment:126")), policy(), now=NOW)
+
+        payload = json.loads(selected.canonical_json())
+
+        self.assertEqual(payload["operator_intent_digest"], INTENT_DIGEST)
+        self.assertEqual(payload["architecture_digest"], ARCHITECTURE_DIGEST)
+        self.assertEqual(payload["commitment_ids"], ["commitment:issue-126"])
+        self.assertEqual(payload["constraint_ids"], ["constraint:read-only"])
 
     def test_input_order_does_not_change_snapshot_or_selection(self) -> None:
         preferred = candidate("alignment:126", priority=0)

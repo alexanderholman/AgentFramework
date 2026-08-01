@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -172,7 +173,7 @@ class AlignmentSnapshot:
             {
                 "candidates": [item._payload() for item in self.candidates],
                 "operation": self.operation.payload(),
-                "predecessor_plan": self.predecessor_plan.canonical_json(),
+                "predecessor_plan": json.loads(self.predecessor_plan.canonical_json()),
             }
         )
 
@@ -337,6 +338,9 @@ class AlignmentPlan:
         return _canonical_json(
             {
                 "assessments": [item._payload() for item in self.assessments],
+                "architecture_digest": self.output.architecture_digest
+                if self.output is not None
+                else None,
                 "commitment_ids": list(self.output.commitment_ids)
                 if self.output is not None
                 else None,
@@ -344,6 +348,9 @@ class AlignmentPlan:
                 if self.output is not None
                 else None,
                 "objective_id": self.objective_id,
+                "operator_intent_digest": self.output.operator_intent_digest
+                if self.output is not None
+                else None,
                 "route": self.route.value,
                 "selected_candidate_id": self.selected_candidate_id,
                 "stage_plan": self.stage_plan.payload(),

@@ -179,6 +179,8 @@ def test_self_align_command_emits_one_canonical_read_only_plan() -> None:
     assert payload["route"] == "align"
     assert payload["selected_candidate_id"] == "alignment:126"
     assert payload["objective_id"] == "objective:self-align"
+    assert payload["operator_intent_digest"] == "sha256:" + "d" * 64
+    assert payload["architecture_digest"] == "sha256:" + "e" * 64
     assert payload["constraint_ids"] == ["constraint:read-only"]
     assert payload["stage_plan"]["stage"] == "alignment"
     assert payload["stage_plan"]["allowed_writes"] == []
