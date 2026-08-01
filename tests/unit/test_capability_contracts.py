@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from itertools import permutations
+from typing import Any, cast
 
 import pytest
 
@@ -374,3 +375,224 @@ def test_matcher_emits_excessive_cost_and_partial_match_reason_codes() -> None:
     assert route.candidates[0].reason is CapabilityReasonCode.EXCESSIVE_COST
     assert partial_route.reason is CapabilityReasonCode.PARTIAL_MATCH
     assert partial_route.candidates[0].reason is CapabilityReasonCode.PARTIAL_MATCH
+
+
+def test_contract_digests_are_stable_sha256_tokens() -> None:
+    descriptor = _descriptor("digest", CapabilityClass.PROCEDURAL, procedure_id="procedure.digest")
+    requirements = _requirements("digest", CapabilityClass.PROCEDURAL)
+    candidate = _candidate(descriptor)
+    route = ExactCapabilityMatcher().match(requirements, (candidate,))
+
+    assert _resources().digest.startswith("sha256:")
+    assert descriptor.digest.startswith("sha256:")
+    assert requirements.digest.startswith("sha256:")
+    assert candidate.digest.startswith("sha256:")
+    assert route.digest.startswith("sha256:")
+
+
+def test_descriptors_requests_candidates_and_routes_fail_closed_for_invalid_shapes() -> None:
+    descriptor = _descriptor(
+        "invalid-shapes",
+        CapabilityClass.PROCEDURAL,
+        procedure_id="procedure.ok",
+    )
+    requirements = _requirements("invalid-shapes", CapabilityClass.PROCEDURAL)
+    candidate = _candidate(descriptor)
+
+    with pytest.raises(ValueError, match="resource schema version"):
+        replace(_resources(), schema_version="2.0.0")
+    with pytest.raises(ValueError, match="estimated cost"):
+        _resources(estimated_cost_micros=-1)
+    with pytest.raises(ValueError, match="must be an object"):
+        CapabilityResourceEnvelope.from_dict([])
+    with pytest.raises(ValueError, match="missing required fields"):
+        CapabilityResourceEnvelope.from_dict({})
+
+    with pytest.raises(ValueError, match="capability class is invalid"):
+        replace(descriptor, capability_class=cast(Any, "procedural"))
+    with pytest.raises(ValueError, match="capability risk is invalid"):
+        replace(descriptor, risk=cast(Any, "low"))
+    with pytest.raises(ValueError, match="capability locality is invalid"):
+        replace(descriptor, locality=cast(Any, "local_only"))
+    with pytest.raises(ValueError, match="capability lifecycle is invalid"):
+        replace(descriptor, declared_state=cast(Any, "declared"))
+    with pytest.raises(ValueError, match="resource envelope is invalid"):
+        replace(descriptor, resource_envelope=cast(Any, {}))
+    with pytest.raises(ValueError, match="must not reference self"):
+        replace(descriptor, dependency_ids=(descriptor.capability_id,))
+    with pytest.raises(ValueError, match="must not overlap"):
+        replace(descriptor, dependency_ids=("capability-a",), fallback_ids=("capability-a",))
+    with pytest.raises(ValueError, match="must be unique"):
+        replace(descriptor, declared_quality_evidence=("dup", "dup"))
+    with pytest.raises(ValueError, match="must not be empty"):
+        replace(descriptor, effects=())
+    with pytest.raises(ValueError, match="procedural capabilities require a procedure"):
+        replace(descriptor, procedure_id=None)
+    with pytest.raises(ValueError, match="workflow capabilities require a workflow"):
+        replace(
+            _descriptor(
+                "workflow-invalid",
+                CapabilityClass.WORKFLOW,
+                procedure_id=None,
+                workflow_id="workflow.valid",
+            ),
+            procedure_id="procedure.invalid",
+        )
+    with pytest.raises(ValueError, match="cannot bind both procedure and workflow"):
+        replace(
+            _descriptor("static-invalid", CapabilityClass.STATIC, procedure_id=None),
+            procedure_id="procedure.invalid",
+            workflow_id="workflow.invalid",
+        )
+
+    with pytest.raises(ValueError, match="request requirements schema version"):
+        replace(requirements, schema_version="2.0.0")
+    with pytest.raises(ValueError, match="must not be empty"):
+        replace(requirements, capability_classes=())
+    with pytest.raises(ValueError, match="request max risk is invalid"):
+        replace(requirements, max_risk=cast(Any, "low"))
+    with pytest.raises(ValueError, match="request max resources are invalid"):
+        replace(requirements, max_resources=cast(Any, {}))
+    with pytest.raises(ValueError, match="request runtime identifier"):
+        replace(requirements, required_runtime_id="not valid")
+
+    with pytest.raises(ValueError, match="candidate schema version"):
+        replace(candidate, schema_version="2.0.0")
+    with pytest.raises(ValueError, match="candidate descriptor is invalid"):
+        replace(candidate, descriptor=cast(Any, {}))
+    with pytest.raises(ValueError, match="measured state is invalid"):
+        replace(candidate, measured_state=cast(Any, "deployed"))
+    with pytest.raises(ValueError, match="resources are invalid"):
+        replace(candidate, estimated_resources=cast(Any, {}))
+    with pytest.raises(ValueError, match="candidate reason is invalid"):
+        replace(candidate, reason=cast(Any, "unsupported"))
+    with pytest.raises(ValueError, match="match reason requires exact match"):
+        replace(candidate, reason=CapabilityReasonCode.MATCH, exact_match=False)
+
+    with pytest.raises(ValueError, match="route requirements are invalid"):
+        CapabilityRoute(
+            requirements=cast(Any, {}),
+            candidates=(),
+            selected_capability_id=None,
+            reason=CapabilityReasonCode.UNSUPPORTED,
+        )
+    with pytest.raises(ValueError, match="route candidates are invalid"):
+        CapabilityRoute(
+            requirements=requirements,
+            candidates=cast(Any, []),
+            selected_capability_id=None,
+            reason=CapabilityReasonCode.UNSUPPORTED,
+        )
+    with pytest.raises(ValueError, match="candidates must be unique"):
+        CapabilityRoute(
+            requirements=requirements,
+            candidates=(candidate, candidate),
+            selected_capability_id=None,
+            reason=CapabilityReasonCode.UNSUPPORTED,
+        )
+    with pytest.raises(ValueError, match="selection must reference a candidate"):
+        CapabilityRoute(
+            requirements=requirements,
+            candidates=(replace(candidate, reason=CapabilityReasonCode.MATCH, exact_match=True),),
+            selected_capability_id="capability-missing",
+            reason=CapabilityReasonCode.MATCH,
+        )
+    with pytest.raises(ValueError, match="route reason is invalid"):
+        CapabilityRoute(
+            requirements=requirements,
+            candidates=(),
+            selected_capability_id=None,
+            reason=cast(Any, "unsupported"),
+        )
+    with pytest.raises(ValueError, match="match requires a selected capability"):
+        CapabilityRoute(
+            requirements=requirements,
+            candidates=(candidate,),
+            selected_capability_id=None,
+            reason=CapabilityReasonCode.MATCH,
+        )
+    with pytest.raises(ValueError, match="ambiguity cannot select a capability"):
+        CapabilityRoute(
+            requirements=requirements,
+            candidates=(candidate,),
+            selected_capability_id=descriptor.capability_id,
+            reason=CapabilityReasonCode.AMBIGUOUS,
+        )
+
+
+def test_codecs_and_matcher_fail_closed_for_invalid_payloads_and_policy_mismatches() -> None:
+    descriptor = _descriptor("codec", CapabilityClass.PROCEDURAL, procedure_id="procedure.codec")
+    requirements = _requirements("codec", CapabilityClass.PROCEDURAL)
+    candidate = _candidate(descriptor)
+    matcher = ExactCapabilityMatcher()
+
+    descriptor_payload = descriptor.to_dict()
+    descriptor_payload["effects"] = ["not-real"]
+    with pytest.raises(ValueError, match="valid CapabilityEffect"):
+        CapabilityDescriptor.from_dict(descriptor_payload)
+
+    descriptor_payload = descriptor.to_dict()
+    descriptor_payload["languages"] = "en"
+    with pytest.raises(ValueError, match="bounded sequence"):
+        CapabilityDescriptor.from_dict(descriptor_payload)
+
+    descriptor_payload = descriptor.to_dict()
+    descriptor_payload["licence"] = ""
+    with pytest.raises(ValueError, match="bounded non-empty text"):
+        CapabilityDescriptor.from_dict(descriptor_payload)
+
+    descriptor_payload = descriptor.to_dict()
+    descriptor_payload["licence"] = "bad\nlicense"
+    with pytest.raises(ValueError, match="control characters"):
+        CapabilityDescriptor.from_dict(descriptor_payload)
+
+    descriptor_payload = descriptor.to_dict()
+    descriptor_payload["locales"] = ["not a locale"]
+    with pytest.raises(ValueError, match="language or locale tag"):
+        CapabilityDescriptor.from_dict(descriptor_payload)
+
+    request_payload = requirements.to_dict()
+    del request_payload["modality"]
+    with pytest.raises(ValueError, match="missing required fields"):
+        RequestRequirements.from_dict(request_payload)
+
+    candidate_payload = candidate.to_dict()
+    candidate_payload["quality_verified"] = "yes"
+    with pytest.raises(ValueError, match="must be boolean"):
+        CapabilityCandidate.from_dict(candidate_payload)
+
+    route_payload = matcher.match(requirements, (candidate,)).to_dict()
+    route_payload["selected_capability_id"] = 3
+    with pytest.raises(ValueError, match="must be text"):
+        CapabilityRoute.from_dict(route_payload)
+
+    with pytest.raises(ValueError, match="typed request requirements"):
+        matcher.match(cast(Any, {}), ())
+    with pytest.raises(ValueError, match="typed candidates"):
+        matcher.match(requirements, (cast(Any, object()),))
+
+    assert matcher.match(requirements, ()).reason is CapabilityReasonCode.UNSUPPORTED
+    assert matcher.match(
+        requirements,
+        (_candidate(_descriptor("model", CapabilityClass.MODEL, procedure_id=None)),),
+    ).reason is CapabilityReasonCode.UNSUPPORTED
+    assert matcher.match(
+        replace(requirements, required_runtime_id="runtime-other"),
+        (candidate,),
+    ).reason is CapabilityReasonCode.UNSUPPORTED
+    assert matcher.match(
+        replace(requirements, accepted_localities=(CapabilityLocality.REMOTE_ALLOWED,)),
+        (candidate,),
+    ).reason is CapabilityReasonCode.PROHIBITED
+    assert matcher.match(
+        replace(requirements, accepted_licenses=("LicenseRef-Other",)),
+        (candidate,),
+    ).reason is CapabilityReasonCode.PROHIBITED
+    assert matcher.match(
+        replace(requirements, max_risk=CapabilityRisk.NONE),
+        (candidate,),
+    ).reason is CapabilityReasonCode.PROHIBITED
+    assert matcher.match(
+        replace(requirements, allowed_effects=(CapabilityEffect.SIDE_EFFECT,)),
+        (candidate,),
+    ).reason is CapabilityReasonCode.PROHIBITED
