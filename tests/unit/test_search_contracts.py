@@ -35,6 +35,28 @@ def test_every_declared_source_enters_one_canonical_resource_envelope(kind: Reso
     assert isinstance(envelope.attributes, MappingProxyType)
 
 
+def test_relational_source_kind_supports_existing_task_rows() -> None:
+    envelope = ResourceEnvelope(
+        resource_id="task-1",
+        kind=ResourceKind.RELATIONAL,
+        source_id="af_tasks",
+        authoritative_locator="af://relational/af_tasks/task-1",
+        tenant_id="tenant-a",
+        projection_version=1,
+        acl=("group:research",),
+        provenance=("sha256:" + "f" * 64,),
+        text="how many rs in strawberry\n\n3",
+        attributes={
+            "table_name": "af_tasks",
+            "route": "character-count",
+            "status": "completed",
+        },
+    )
+
+    assert envelope.kind is ResourceKind.RELATIONAL
+    assert envelope.source_id == "af_tasks"
+
+
 def test_resource_envelope_snapshots_mutable_inputs() -> None:
     attributes = {"language": "en"}
     envelope = ResourceEnvelope(
