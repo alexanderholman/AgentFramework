@@ -209,10 +209,11 @@ class CacheManager(Manager[CacheDriver]):
         ttl: timedelta | None = None,
         name: str | None = None,
     ) -> bytes:
+        resolved = _loader(loader)
         cached = self.get(namespace, key, name=name)
         if cached is not None:
             return cached
-        value = _loader(loader)()
+        value = resolved()
         self.set(namespace, key, value, ttl=ttl, name=name)
         return value
 
