@@ -8,7 +8,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol
 
-from af.cache.contracts import CacheKey, CacheNamespace
+from af.cache.contracts import CacheKey, CacheNamespace, LockLease, LockOwner
 from af.framework.container import ProviderRegistrar, Resolver, Scope
 from af.framework.managers import (
     CapabilitySet,
@@ -34,6 +34,7 @@ class CacheFeature(StrEnum):
     TTL = "ttl"
     NAMESPACES = "namespaces"
     FLUSH = "flush"
+    LOCKS = "locks"
 
 
 class CacheDriver(Protocol):
@@ -54,6 +55,34 @@ class CacheDriver(Protocol):
     def delete(self, namespace: CacheNamespace, key: CacheKey, /) -> bool: ...
 
     def flush(self, namespace: CacheNamespace, /) -> int: ...
+
+    def acquire_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        owner: LockOwner,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None: ...
+
+    def renew_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None: ...
+
+    def release_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+    ) -> bool: ...
 
     def close(self) -> None: ...
 
@@ -175,6 +204,55 @@ class CacheManager(Manager[CacheDriver]):
             name,
             requires=(CacheFeature.FLUSH, CacheFeature.NAMESPACES),
         ).flush(namespace)
+
+    def acquire_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        owner: LockOwner,
+        *,
+        ttl: timedelta,
+        name: str | None = None,
+    ) -> LockLease | None:
+        return self.connection(
+            name,
+            requires=(
+                CacheFeature.LOCKS,
+                CacheFeature.NAMESPACES,
+                CacheFeature.TTL,
+            ),
+        ).acquire_lock(namespace, key, owner, ttl=ttl)
+
+    def renew_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        *,
+        ttl: timedelta,
+        name: str | None = None,
+    ) -> LockLease | None:
+        return self.connection(
+            name,
+            requires=(
+                CacheFeature.LOCKS,
+                CacheFeature.NAMESPACES,
+                CacheFeature.TTL,
+            ),
+        ).renew_lock(namespace, key, lease, ttl=ttl)
+
+    def release_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        *,
+        name: str | None = None,
+    ) -> bool:
+        return self.connection(
+            name,
+            requires=(CacheFeature.LOCKS, CacheFeature.NAMESPACES),
+        ).release_lock(namespace, key, lease)
 
 
 def bind_cache_manager(
