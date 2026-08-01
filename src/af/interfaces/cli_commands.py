@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+import click
 import typer
+from typer.main import get_command as get_typer_command
 
 from af.framework.container import ProviderRegistrar, Scope
 from af.framework.errors import PlatformError, PlatformReason, ServiceNotBound
@@ -36,14 +38,40 @@ def bind_cli_command_contributor(
 def install_cli_command_contributors(cli: typer.Typer, application: AFApplication) -> None:
     """Install every command contributor already present in an AF application."""
 
+    for contributor in _resolve_cli_command_contributors(application):
+        contributor.register(cli)
+
+
+def install_click_group_command_contributors(
+    group: click.Group,
+    application: AFApplication,
+) -> None:
+    """Install provider-contributed commands into one invocation-local Click group."""
+
+    for contributor in _resolve_cli_command_contributors(application):
+        contributed = typer.Typer(add_completion=False)
+        contributor.register(contributed)
+        command = get_typer_command(contributed)
+        if isinstance(command, click.Group):
+            for name, child in command.commands.items():
+                group.add_command(child, name)
+            continue
+        group.add_command(command, command.name)
+
+
+def _resolve_cli_command_contributors(application: AFApplication) -> tuple[CliCommandContributor, ...]:
+    """Return validated CLI contributors from an AF application container."""
+
     try:
         contributors = application.container.resolve_tagged(CLI_COMMAND_CONTRIBUTORS_TAG)
     except ServiceNotBound:
-        return
+        return ()
+    validated: list[CliCommandContributor] = []
     for contributor in contributors:
         if not isinstance(contributor, CliCommandContributor):
             raise PlatformError(
                 PlatformReason.CONFIGURATION_INVALID,
                 stage="cli.command-contributors",
             )
-        contributor.register(cli)
+        validated.append(contributor)
+    return tuple(validated)

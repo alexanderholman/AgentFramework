@@ -11,7 +11,9 @@ from inspect import iscoroutine
 from pathlib import Path
 from typing import Annotated, cast
 
+import click
 import typer
+from typer.core import TyperGroup
 
 from af.application.ideons import InterpretRequest
 from af.application.version_control import VersionControlController
@@ -21,7 +23,10 @@ from af.domain.ideons.records import ContextGraph
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 from af.framework.version_control import VersionControlRequest
-from af.interfaces.cli_commands import install_cli_command_contributors
+from af.interfaces.cli_commands import (
+    install_cli_command_contributors,
+    install_click_group_command_contributors,
+)
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
@@ -91,7 +96,6 @@ def create_cli(
     application_factory: Callable[[], AFApplication] | None = None,
     version_control: VersionControlController | None = None,
 ) -> typer.Typer:
-    cli = typer.Typer(name="af", no_args_is_help=True, help="AF Agent Framework")
     task_commands = typer.Typer(name="tasks", no_args_is_help=True, help="Persisted Task CRUD")
     ideon_commands = typer.Typer(
         name="ideon",
@@ -128,6 +132,24 @@ def create_cli(
     )
     selected_factory_path: str | None = None
     accepts_operator_factory = application is None and application_factory is None
+
+    class _AFRootGroup(TyperGroup):
+        def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
+            nonlocal selected_factory_path
+            command = super().get_command(ctx, name)
+            if command is not None or ctx.resilient_parsing:
+                return command
+            if accepts_operator_factory:
+                selected_factory_path = cast(str | None, ctx.params.get("factory_path"))
+            install_click_group_command_contributors(self, current())
+            return super().get_command(ctx, name)
+
+    cli = typer.Typer(
+        name="af",
+        no_args_is_help=True,
+        help="AF Agent Framework",
+        cls=_AFRootGroup,
+    )
 
     def current() -> AFApplication:
         nonlocal cached_application

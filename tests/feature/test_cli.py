@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import ModuleType
 
 import typer
 from typer.testing import CliRunner
@@ -264,6 +266,60 @@ def test_cli_discovers_provider_contributed_commands_without_central_registratio
         assert settings.registrations == 1
     finally:
         application.shutdown()
+
+
+def test_installed_cli_loads_provider_commands_from_explicit_application_factory(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    class HelloContributor:
+        def __init__(self) -> None:
+            self.registrations = 0
+
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            self.registrations += 1
+
+            @cli.command("provider-hello")
+            def provider_hello(context: typer.Context) -> None:
+                typer.echo(current_application_from_context(context).tasks.execute("hello").output)
+
+    class HelloProvider(ServiceProvider):
+        provider_id = "test.cli-provider.installed"
+
+        def __init__(self, contributor: HelloContributor) -> None:
+            self._contributor = contributor
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, self._contributor)
+
+    module = ModuleType("test_cli_provider_operator_profile")
+    contributor = HelloContributor()
+
+    def build_application():  # type: ignore[no-untyped-def]
+        return create_application(
+            settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+            providers=(HelloProvider(contributor),),
+        )
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    cli = create_cli()
+
+    loaded = runner.invoke(
+        cli,
+        [
+            "--application-factory",
+            "test_cli_provider_operator_profile:build_application",
+            "provider-hello",
+        ],
+    )
+    unloaded = runner.invoke(cli, ["provider-hello"])
+
+    assert loaded.exit_code == 0
+    assert loaded.stdout == "Hello, world!\n"
+    assert unloaded.exit_code == 2
+    assert contributor.registrations == 1
 
 
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
