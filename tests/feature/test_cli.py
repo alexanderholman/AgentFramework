@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import typer
 from typer.testing import CliRunner
 
 from af.bootstrap import create_application
@@ -13,7 +14,8 @@ from af.framework.types import PROMPT_MAX_LENGTH
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces import cli as cli_module
-from af.interfaces.cli import create_cli
+from af.interfaces.cli import create_cli, current_application_from_context
+from af.interfaces.cli_commands import bind_cli_command_contributor
 
 runner = CliRunner()
 
@@ -191,6 +193,75 @@ def test_cli_search_index_limit_includes_trace_history_when_tasks_exceed_limit()
                 {"source": "traces", "indexed": 2},
             ],
         }
+    finally:
+        application.shutdown()
+
+
+def test_cli_discovers_provider_contributed_commands_without_central_registration() -> None:
+    class HelloContributor:
+        def __init__(self) -> None:
+            self.registrations = 0
+
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            self.registrations += 1
+
+            @cli.command("provider-hello")
+            def provider_hello(context: typer.Context) -> None:
+                typer.echo(current_application_from_context(context).tasks.execute("hello").output)
+
+    class SettingsContributor:
+        def __init__(self) -> None:
+            self.registrations = 0
+
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            self.registrations += 1
+
+            @cli.command("provider-settings")
+            def provider_settings(context: typer.Context) -> None:
+                typer.echo(current_application_from_context(context).settings.database_url)
+
+    class HelloProvider(ServiceProvider):
+        provider_id = "test.cli-provider.hello"
+
+        def __init__(self, contributor: HelloContributor) -> None:
+            self._contributor = contributor
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, self._contributor)
+
+    class SettingsProvider(ServiceProvider):
+        provider_id = "test.cli-provider.settings"
+
+        def __init__(self, contributor: SettingsContributor) -> None:
+            self._contributor = contributor
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, self._contributor)
+
+    hello = HelloContributor()
+    settings = SettingsContributor()
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(HelloProvider(hello), SettingsProvider(settings)),
+    )
+    try:
+        cli = create_cli(application)
+
+        help_result = runner.invoke(cli, ["--help"])
+        hello_result = runner.invoke(cli, ["provider-hello"])
+        settings_result = runner.invoke(cli, ["provider-settings"])
+
+        assert help_result.exit_code == 0
+        assert "provider-hello" in help_result.stdout
+        assert "provider-settings" in help_result.stdout
+        assert hello_result.exit_code == 0
+        assert hello_result.stdout == "Hello, world!\n"
+        assert settings_result.exit_code == 0
+        assert settings_result.stdout == "sqlite+pysqlite:///:memory:\n"
+        assert hello.registrations == 1
+        assert settings.registrations == 1
     finally:
         application.shutdown()
 

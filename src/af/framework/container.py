@@ -667,7 +667,7 @@ class Container:
         )
         with self._registry_lock, self._condition:
             self._assert_registry_mutable_locked()
-            self._tags[name] = keys
+            self._tags[name] = (*self._tags.get(name, ()), *keys)
 
     def resolve_tagged(self, name: str) -> tuple[object, ...]:
         self._assert_active()

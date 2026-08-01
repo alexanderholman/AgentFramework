@@ -21,6 +21,7 @@ from af.domain.ideons.records import ContextGraph
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 from af.framework.version_control import VersionControlRequest
+from af.interfaces.cli_commands import install_cli_command_contributors
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
@@ -489,6 +490,8 @@ def create_cli(
     cli.add_typer(task_commands, name="tasks")
     cli.add_typer(migration_commands, name="migrations")
     cli.add_typer(ideon_commands, name="ideon")
+    if isinstance(application, AFApplication):
+        install_cli_command_contributors(cli, application)
     return cli
 
 
