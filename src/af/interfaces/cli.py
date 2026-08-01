@@ -48,6 +48,19 @@ _CURRENT_CONTAINER_META_KEY = "af.current_container"
 _CURRENT_INTERACTION_META_KEY = "af.current_interaction"
 
 
+def _close_interaction(interaction: CliInteraction) -> None:
+    try:
+        interaction.close()
+    except KeyboardInterrupt:
+        raise
+    except BaseException as error:
+        raise PlatformError(
+            PlatformReason.TRANSPORT_FAILED,
+            stage="cli.interaction-close",
+            protected_cause=error,
+        ) from None
+
+
 def _validate_application_factory(value: str) -> None:
     if (
         type(value) is not str
@@ -185,6 +198,16 @@ def create_cli(
             install_click_group_command_contributors(self, current())
             return super().get_command(ctx, name)
 
+        def invoke(self, ctx: Context) -> object:
+            try:
+                return super().invoke(ctx)
+            except KeyboardInterrupt:
+                typer.echo(
+                    str(PlatformError(PlatformReason.CANCELLED, stage="cli.cancelled")),
+                    err=True,
+                )
+                raise typer.Exit(code=130) from None
+
     cli = typer.Typer(
         name="af",
         no_args_is_help=True,
@@ -312,6 +335,8 @@ def create_cli(
             nonlocal lifecycle_context
             nonlocal selected_factory_path
             try:
+                if current_interaction is not None:
+                    _close_interaction(current_interaction)
                 if owns_application and cached_application is not None:
                     cached_application.shutdown()
             finally:

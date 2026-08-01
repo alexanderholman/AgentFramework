@@ -514,6 +514,62 @@ def test_provider_commands_refuse_interaction_without_a_scripted_adapter() -> No
         application.shutdown()
 
 
+def test_provider_command_keyboard_interrupt_returns_cancelled_exit_and_restores_interaction() -> (
+    None
+):
+    class InterruptingInteraction(ScriptedCliInteraction):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        def text(self, *, message: str) -> str:
+            self.events.append(PromptEvent(kind="text", message=message))
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-cancel"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    interactions: list[InterruptingInteraction] = []
+
+    def build_interaction() -> InterruptingInteraction:
+        interaction = InterruptingInteraction()
+        interactions.append(interaction)
+        return interaction
+
+    try:
+        result = runner.invoke(
+            create_cli(application, interaction_factory=build_interaction),
+            ["provider-prompt"],
+        )
+
+        assert result.exit_code == 130
+        assert result.stdout == ""
+        assert result.stderr == "operation was cancelled\n"
+        assert tuple(interactions[0].events) == (PromptEvent(kind="text", message="Name"),)
+        assert interactions[0].closed is True
+    finally:
+        application.shutdown()
+
+
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
 
