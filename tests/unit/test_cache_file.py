@@ -63,6 +63,26 @@ def test_file_cache_honours_exact_expiry_and_discards_corruption(tmp_path: Path)
     cache.close()
 
 
+def test_file_cache_never_follows_entry_symlinks(tmp_path: Path) -> None:
+    cache = FileCacheDriver(root=tmp_path, clock=Clock())
+    namespace = _namespace()
+    key = CacheKey("resource:symlink")
+    cache.set(namespace, key, b"value")
+    (entry_path,) = tuple(tmp_path.rglob("*.afc"))
+    entry_path.unlink()
+    external = tmp_path / "external-frame"
+    external.write_bytes(b"outside")
+    try:
+        entry_path.symlink_to(external)
+    except OSError:
+        pytest.skip("host does not permit symlink creation")
+
+    assert cache.get(namespace, key) is None
+    assert external.read_bytes() == b"outside"
+    assert not entry_path.exists()
+    cache.close()
+
+
 def test_file_cache_flush_is_exactly_namespace_and_tenant_scoped(tmp_path: Path) -> None:
     cache = FileCacheDriver(root=tmp_path, clock=Clock())
     tenant_a = _namespace("tenant-a")
