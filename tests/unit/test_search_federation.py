@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from threading import Event
+from threading import Event, Lock, current_thread
 from time import monotonic
 
 import pytest
@@ -112,11 +112,20 @@ def test_federator_deduplicates_with_rrf_and_deterministic_explanations() -> Non
 
 def test_federator_preserves_policy_filters_and_shrinks_absolute_deadline() -> None:
     router = Router({"alpha": (), "beta": ()})
-    times = _clock(10.0, 10.1, 10.2, 10.3, 10.4)
+
+    class DeterministicClock:
+        def __init__(self) -> None:
+            self._main_values = iter((10.0, 10.1, 10.2, 10.3, 10.4))
+
+        def __call__(self) -> float:
+            if current_thread().name.startswith("af-search-federation-"):
+                return 10.15
+            return next(self._main_values)
+
     federator = SearchFederator(
         router,
         sources=("alpha", "beta"),
-        clock=lambda: next(times),
+        clock=DeterministicClock(),
     )
 
     result = federator.search(_query(deadline_ms=1_000))
@@ -197,6 +206,47 @@ def test_federator_returns_fast_hits_while_stalled_sources_time_out() -> None:
     assert [(item.source_name, item.reason) for item in result.failures] == [
         ("slow", PlatformReason.CANCELLED),
     ]
+
+
+def test_federator_keeps_timely_queued_outcomes_after_deadline_expires() -> None:
+    class CoordinatedRouter:
+        def __init__(self) -> None:
+            self._started = 0
+            self._lock = Lock()
+            self._release = Event()
+
+        def search(
+            self,
+            query: SearchQuery,
+            *,
+            name: str | None = None,
+        ) -> tuple[SearchHit, ...]:
+            assert name is not None
+            with self._lock:
+                self._started += 1
+                if self._started == 2:
+                    self._release.set()
+            assert self._release.wait(0.1)
+            return (_hit(name, rank=1),)
+
+    class DeterministicClock:
+        def __init__(self) -> None:
+            self._values = iter((10.0, 10.01, 10.02, 10.03, 10.04, 10.11))
+
+        def __call__(self) -> float:
+            if current_thread().name.startswith("af-search-federation-"):
+                return 10.05
+            return next(self._values)
+
+    result = SearchFederator(
+        CoordinatedRouter(),
+        sources=("alpha", "beta"),
+        clock=DeterministicClock(),
+    ).search(_query(deadline_ms=100))
+
+    assert [hit.resource_id for hit in result.hits] == ["alpha", "beta"]
+    assert result.searched_sources == ("alpha", "beta")
+    assert result.failures == ()
 
 
 @pytest.mark.parametrize(

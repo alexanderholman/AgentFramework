@@ -186,6 +186,7 @@ class _Candidate:
 class _SourceOutcome:
     source_name: str
     query: SearchQuery
+    completed_at: float
     hits: object | None = None
     failure_reason: PlatformReason | None = None
 
@@ -294,7 +295,7 @@ class SearchFederator:
             if outcome.source_name not in pending:
                 continue
             pending.remove(outcome.source_name)
-            if self._clock() > deadline:
+            if outcome.completed_at > deadline:
                 failures.append(FederationFailure(outcome.source_name, PlatformReason.CANCELLED))
                 continue
             received[outcome.source_name] = outcome
@@ -364,6 +365,7 @@ class SearchFederator:
                 _SourceOutcome(
                     source_name=source_name,
                     query=source_query,
+                    completed_at=self._clock(),
                     failure_reason=error.reason,
                 )
             )
@@ -373,11 +375,19 @@ class SearchFederator:
                 _SourceOutcome(
                     source_name=source_name,
                     query=source_query,
+                    completed_at=self._clock(),
                     failure_reason=PlatformReason.PERMANENT_FAILURE,
                 )
             )
             return
-        outcomes.put(_SourceOutcome(source_name=source_name, query=source_query, hits=hits))
+        outcomes.put(
+            _SourceOutcome(
+                source_name=source_name,
+                query=source_query,
+                completed_at=self._clock(),
+                hits=hits,
+            )
+        )
 
     def _accumulate(
         self,
