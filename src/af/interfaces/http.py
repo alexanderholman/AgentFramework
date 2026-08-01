@@ -9,7 +9,8 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from af import __version__
 from af.bootstrap import AFApplication, create_application
@@ -197,6 +198,39 @@ class _RequestContextMiddleware:
             await self._app(scope, receive, send)
 
 
+class _SecurityHeadersMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        async def send_with_security_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["X-Frame-Options"] = "DENY"
+                headers["X-Content-Type-Options"] = "nosniff"
+                headers["Referrer-Policy"] = "no-referrer"
+                if scope.get("scheme") == "https":
+                    headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+                elif "strict-transport-security" in headers:
+                    del headers["strict-transport-security"]
+
+                content_type = headers.get("content-type", "").split(";", maxsplit=1)[0].strip()
+                if content_type == "text/html":
+                    headers["Content-Security-Policy"] = (
+                        "default-src 'self'; base-uri 'none'; form-action 'self'; "
+                        "frame-ancestors 'none'"
+                    )
+                elif "content-security-policy" in headers:
+                    del headers["content-security-policy"]
+            await send(message)
+
+        await self._app(scope, receive, send_with_security_headers)
+
+
 class _TrustedHostMiddleware:
     def __init__(self, app: ASGIApp, *, allowed_hosts: Sequence[str]) -> None:
         self._app = app
@@ -298,6 +332,7 @@ def _assemble_http_app(
         _TrustedHostMiddleware,
         allowed_hosts=_trusted_hosts_for(bind_host, allowed_hosts),
     )
+    app.add_middleware(_SecurityHeadersMiddleware)
     app.include_router(
         create_web_router(
             resolved.tasks,
