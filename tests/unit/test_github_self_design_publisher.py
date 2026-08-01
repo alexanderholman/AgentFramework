@@ -36,6 +36,7 @@ from af.framework.version_control import (
     VersionControlInitialization,
     VersionControlManifest,
 )
+
 from af.infrastructure.github_self_design import (
     GitHubCommentPublication,
     GitHubDesignPublisher,
