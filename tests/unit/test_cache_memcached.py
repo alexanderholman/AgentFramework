@@ -113,9 +113,7 @@ class BrokenMemcachedClient(RecordingMemcachedClient):
         del key, value, expire, noreply
         if self._stage == "set":
             raise RuntimeError("simulated memcached set failure")
-        if self._stage == "nack":
-            return False
-        return True
+        return self._stage != "nack"
 
     def delete(self, key: bytes, noreply: bool = False) -> bool:
         del key, noreply
