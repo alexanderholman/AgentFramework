@@ -2834,3 +2834,33 @@ would either reject valid cache-only drivers or claim guarantees they cannot pro
 AF gains opt-in, backend-independent request coalescing over verified lock drivers without
 breaking cache-only stores. Callers must choose lock and wait durations appropriate to their
 loader; stale-while-revalidate remains a separate issue #19 slice.
+
+---
+
+## [DEC-048] Retain Raw Values Behind Explicit Freshness Markers
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 requires stale-while-revalidate across drivers whose ordinary `get` operation never
+returns expired entries. SWR must preserve the shared raw-bytes cache contract, avoid making cache
+authoritative, and use only capabilities the selected driver has verified.
+
+### Decision
+1. Add an explicit `stale_while_revalidate` manager operation requiring positive fresh, stale,
+   lock, and bounded-wait durations plus a caller-owned revalidation scheduler.
+2. Store payload bytes under the caller's key for the combined fresh-plus-stale hard TTL and store
+   a bounded digest-derived freshness marker for only the fresh TTL.
+3. Return retained stale bytes immediately after freshness expires; allow one owner-fenced lease to
+   schedule refresh while contenders continue receiving stale bytes.
+4. Renew ownership before publishing refreshed bytes. Expired refresh leases and loader or
+   scheduler failures preserve stale data and release ownership without claiming success.
+5. After the hard stale horizon expires, use a bounded one-owner cold fill and reject stale writes
+   or unbounded contention with sanitized transient failures.
+
+### Consequences
+SWR works uniformly over verified lock-capable cache drivers without changing ordinary raw cache
+values or requiring backend-specific expiry introspection. Callers retain responsibility for the
+scheduler and must not reuse AF's reserved digest-derived freshness-marker keys.
+
