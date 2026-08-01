@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from threading import Event
+from time import monotonic
 
 import pytest
 
@@ -120,7 +122,7 @@ def test_federator_preserves_policy_filters_and_shrinks_absolute_deadline() -> N
     result = federator.search(_query(deadline_ms=1_000))
 
     assert result.complete
-    assert [call[1].deadline_ms for call in router.calls] == [900, 699]
+    assert [call[1].deadline_ms for call in router.calls] == [900, 800]
     assert all(
         call[1].filters
         == (
@@ -158,44 +160,42 @@ def test_federator_reports_sanitized_partial_failures_and_keeps_safe_hits() -> N
     assert "secret" not in repr(result)
 
 
-def test_federator_stops_at_deadline_and_marks_unqueried_sources_cancelled() -> None:
-    router = Router({"alpha": (), "beta": (), "gamma": ()})
-    times = _clock(10.0, 10.1, 10.2, 11.1)
+def test_federator_returns_fast_hits_while_stalled_sources_time_out() -> None:
+    slow_started = Event()
+    release_slow = Event()
 
-    result = SearchFederator(
-        router,
-        sources=("alpha", "beta", "gamma"),
-        clock=lambda: next(times),
-    ).search(_query(deadline_ms=1_000))
+    class BlockingRouter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str | None, SearchQuery]] = []
 
-    assert [name for name, _query_value in router.calls] == ["alpha"]
-    assert result.searched_sources == ("alpha",)
+        def search(
+            self,
+            query: SearchQuery,
+            *,
+            name: str | None = None,
+        ) -> tuple[SearchHit, ...]:
+            if name == "slow":
+                slow_started.set()
+                self.calls.append((name, query))
+                release_slow.wait(0.2)
+                return (_hit("late", rank=1),)
+            assert slow_started.wait(0.05)
+            self.calls.append((name, query))
+            return (_hit("fast", rank=1),)
+
+    router = BlockingRouter()
+    started_at = monotonic()
+    try:
+        result = SearchFederator(router, sources=("slow", "fast")).search(_query(deadline_ms=50))
+    finally:
+        release_slow.set()
+
+    assert monotonic() - started_at < 0.15
+    assert [name for name, _query_value in router.calls] == ["slow", "fast"]
+    assert [hit.resource_id for hit in result.hits] == ["fast"]
+    assert result.searched_sources == ("fast",)
     assert [(item.source_name, item.reason) for item in result.failures] == [
-        ("beta", PlatformReason.CANCELLED),
-        ("gamma", PlatformReason.CANCELLED),
-    ]
-
-
-def test_federator_discards_a_source_that_returns_after_the_deadline() -> None:
-    router = Router(
-        {
-            "alpha": (_hit("late", rank=1),),
-            "beta": (_hit("unqueried", rank=1),),
-        }
-    )
-    times = _clock(10.0, 10.1, 11.1)
-
-    result = SearchFederator(
-        router,
-        sources=("alpha", "beta"),
-        clock=lambda: next(times),
-    ).search(_query(deadline_ms=1_000))
-
-    assert result.hits == ()
-    assert result.searched_sources == ()
-    assert [(item.source_name, item.reason) for item in result.failures] == [
-        ("alpha", PlatformReason.CANCELLED),
-        ("beta", PlatformReason.CANCELLED),
+        ("slow", PlatformReason.CANCELLED),
     ]
 
 
