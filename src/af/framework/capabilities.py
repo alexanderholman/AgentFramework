@@ -571,9 +571,7 @@ class CapabilityDescriptor:
             deployment_id=_optional_string(data["deployment_id"], "deployment identifier"),
             procedure_id=_optional_string(data["procedure_id"], "procedure identifier"),
             workflow_id=_optional_string(data["workflow_id"], "workflow identifier"),
-            capability_class=CapabilityClass(
-                _string(data["capability_class"], "capability class")
-            ),
+            capability_class=CapabilityClass(_string(data["capability_class"], "capability class")),
             modality=_string(data["modality"], "capability modality"),
             domain=_string(data["domain"], "capability domain"),
             intent=_string(data["intent"], "capability intent"),
@@ -1155,10 +1153,14 @@ class ExactCapabilityMatcher:
             )
         ):
             return replace(candidate, reason=CapabilityReasonCode.UNSUPPORTED, exact_match=False)
-        if candidate.measured_state in {
-            CapabilityLifecycle.UNAVAILABLE,
-            CapabilityLifecycle.REVOKED,
-        } or candidate.measured_state not in requirements.accepted_lifecycles:
+        if (
+            candidate.measured_state
+            in {
+                CapabilityLifecycle.UNAVAILABLE,
+                CapabilityLifecycle.REVOKED,
+            }
+            or candidate.measured_state not in requirements.accepted_lifecycles
+        ):
             return replace(candidate, reason=CapabilityReasonCode.UNAVAILABLE, exact_match=False)
         if requirements.require_authorized and not candidate.authorized:
             return replace(candidate, reason=CapabilityReasonCode.PROHIBITED, exact_match=False)
