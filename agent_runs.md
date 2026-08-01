@@ -1562,3 +1562,41 @@ Two merge blockers in the PR's deterministic reference slice:
 - DEC-030
 - SPEC-025
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #027 - CacheManager Remember and Memoize Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing `agent/cache-manager-memory` worktree and verified cache manager branch
+- Required TDD workflow and `[SCRIPT:af-dev]` gate
+
+### Outputs
+- Added failing unit coverage for manager-level `remember` and `memoize`
+- Implemented synchronous compute-on-miss cache fill on `CacheManager`
+- Appended DEC-041 and SPEC-028 for the new bounded cache-fill slice
+
+### Result Summary
+This run extends the existing issue #19 pull request with the smallest remaining application-
+level cache semantic that does not require a new backend driver contract. `remember` and
+`memoize` now reuse the verified manager routing and current store validation.
+
+### Issues Encountered
+- The worktree initially lacked the dev toolchain, so the first red-phase test attempt failed
+  before `pytest` execution and required a locked `uv sync --extra dev` through `[SCRIPT:af-dev]`
+
+### Actions Taken
+- Added three failing tests covering cache-fill reuse and loader validation
+- Implemented manager-only loader validation and cache-fill helpers without changing drivers
+- Prepared the branch for focused cache tests and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-041
+- SPEC-028
+- Script: `[SCRIPT:af-dev]`

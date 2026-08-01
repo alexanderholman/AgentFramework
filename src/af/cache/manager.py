@@ -26,6 +26,12 @@ __all__ = (
 )
 
 
+def _loader(loader: object) -> Callable[[], bytes]:
+    if not callable(loader):
+        raise TypeError("cache loader must be callable")
+    return loader
+
+
 class CacheFeature(StrEnum):
     """Cache capabilities verified independently before use."""
 
@@ -193,6 +199,44 @@ class CacheManager(Manager[CacheDriver]):
             name,
             requires=(CacheFeature.WRITE, CacheFeature.NAMESPACES),
         ).delete(namespace, key)
+
+    def remember(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        loader: Callable[[], bytes],
+        *,
+        ttl: timedelta | None = None,
+        name: str | None = None,
+    ) -> bytes:
+        cached = self.get(namespace, key, name=name)
+        if cached is not None:
+            return cached
+        value = _loader(loader)()
+        self.set(namespace, key, value, ttl=ttl, name=name)
+        return value
+
+    def memoize(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        loader: Callable[[], bytes],
+        *,
+        ttl: timedelta | None = None,
+        name: str | None = None,
+    ) -> Callable[[], bytes]:
+        resolved = _loader(loader)
+
+        def cached() -> bytes:
+            return self.remember(
+                namespace,
+                key,
+                resolved,
+                ttl=ttl,
+                name=name,
+            )
+
+        return cached
 
     def flush(
         self,

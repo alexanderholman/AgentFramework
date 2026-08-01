@@ -2629,3 +2629,32 @@ tenant-controlled identity text to become authoritative filesystem state.
 File cache values survive driver recreation without becoming authority. Corruption and eviction
 remain normal misses, tenant identities never become path components, and coordination continues
 to require a driver that honestly advertises locks.
+
+---
+
+## [DEC-041] Keep Remember and Memoize as Manager-Level Cache Fill Semantics
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still lacks higher-level cache fill semantics after the first local cache, lock, and
+ file slices. The next smallest acceptance increment is to let application code reuse the
+ verified cache manager and existing store contracts for compute-on-miss behavior without yet
+ introducing stale-while-revalidate or new backend-specific primitives.
+
+### Decision
+1. Implement `remember` on `CacheManager` as a synchronous manager-owned cache fill that reads
+   first, executes one provided loader on a miss, stores the returned bytes through the same
+   verified connection, and returns the stored value.
+2. Implement `memoize` as a thin wrapper that returns a zero-argument callable delegating to
+   `remember`.
+3. Keep the first slice backend-agnostic by reusing existing `get` and `set` driver contracts
+   instead of expanding every driver interface.
+4. Require the supplied loader to be callable and preserve the existing bounded-bytes write
+   validation at the store boundary.
+
+### Consequences
+Application code can opt into deterministic cache fills immediately on top of memory, null, and
+ file drivers. The slice stays small and testable, but it does not yet provide stale
+ revalidation, contention collapse, or distributed single-flight guarantees.

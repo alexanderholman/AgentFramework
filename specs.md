@@ -1654,3 +1654,25 @@ common directory without contacting or changing the upstream.
 - **TEST-027-3**: Flush removes only the selected tenant namespace.
 - **TEST-027-4**: Verified manager routing supports get, set, TTL, and delete.
 - **TEST-027-5**: Non-canonical roots and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-028] Manager-Level Remember and Memoize Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST let `CacheManager.remember` return an existing cached value without rerunning its loader.
+- MUST call the supplied loader exactly once for a miss in the covered single-threaded path,
+  then persist the returned bytes through the selected verified connection.
+- MUST let `CacheManager.memoize` expose the same behavior behind a reusable zero-argument
+  callable.
+- MUST validate that remember and memoize loaders are callable.
+- MUST reuse the existing driver read/write contracts instead of expanding backend contracts in
+  this slice.
+
+### Tests
+- **TEST-028-1**: `remember` stores and reuses the first loaded bytes for the same key.
+- **TEST-028-2**: `memoize` wraps a loader and returns cached bytes on subsequent calls.
+- **TEST-028-3**: Non-callable loaders are rejected before cache-fill execution.

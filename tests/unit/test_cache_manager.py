@@ -370,6 +370,79 @@ def test_cache_manager_routes_verified_lock_capability() -> None:
     manager.close()
 
 
+def test_cache_manager_remember_populates_cache_once_per_key() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("remember:resource")
+    calls = 0
+
+    def load() -> bytes:
+        nonlocal calls
+        calls += 1
+        return b"remembered"
+
+    assert manager.remember(namespace, key, load, ttl=timedelta(seconds=30)) == b"remembered"
+    assert manager.remember(namespace, key, load, ttl=timedelta(seconds=30)) == b"remembered"
+    assert manager.get(namespace, key) == b"remembered"
+    assert calls == 1
+    manager.close()
+
+
+def test_cache_manager_memoize_wraps_loader_with_cache_lookup() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("memoize:resource")
+    calls = 0
+
+    def load() -> bytes:
+        nonlocal calls
+        calls += 1
+        return b"memoized"
+
+    memoized = manager.memoize(namespace, key, load, ttl=timedelta(seconds=30))
+
+    assert memoized() == b"memoized"
+    assert memoized() == b"memoized"
+    assert manager.get(namespace, key) == b"memoized"
+    assert calls == 1
+    manager.close()
+
+
+def test_cache_manager_remember_and_memoize_validate_loader() -> None:
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=Clock(),
+    )
+    manager.install(memory_cache_registration(clock=Clock()))
+    namespace = _namespace()
+    key = CacheKey("remember:validated")
+
+    with pytest.raises(TypeError):
+        manager.remember(namespace, key, object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        manager.memoize(namespace, key, object())  # type: ignore[arg-type]
+    manager.close()
+
+
 def test_lock_owner_identity_is_bounded_and_redacted() -> None:
     with pytest.raises(ValueError):
         LockOwner("")
