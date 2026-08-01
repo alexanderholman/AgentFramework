@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from af.cache.contracts import CacheKey, CacheNamespace
 from af.cache.database import DatabaseCacheDriver, database_cache_registration
@@ -75,6 +76,27 @@ def test_database_cache_honours_exact_expiry_and_discards_invalid_rows(tmp_path:
     with sqlite3.connect(path) as connection:
         remaining = connection.execute("SELECT COUNT(*) FROM af_cache_entries").fetchone()
     assert remaining == (0,)
+    cache.close()
+
+
+def test_database_cache_read_failures_keep_the_get_failure_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenEngine:
+        def begin(self) -> object:
+            raise SQLAlchemyError("simulated read failure")
+
+        def dispose(self) -> None:
+            pass
+
+    cache = DatabaseCacheDriver(url=_url(tmp_path / "cache.sqlite3"), clock=Clock())
+    monkeypatch.setattr(cache, "_engine", BrokenEngine())
+
+    with pytest.raises(PlatformError) as captured:
+        cache.get(_namespace(), CacheKey("resource"))
+
+    assert captured.value.stage == "cache.database.get"
     cache.close()
 
 
