@@ -27,6 +27,20 @@ def _aware_utc(value: object, field: str) -> datetime:
     return value.astimezone(UTC)
 
 
+def _unsupported_feature(job: QueueJob) -> QueueFeature | None:
+    if job.delay is not None:
+        return QueueFeature.DELAY
+    if job.priority is not None:
+        return QueueFeature.PRIORITY
+    if job.max_attempts > 1 or job.backoff is not None:
+        return QueueFeature.RETRY
+    if job.timeout is not None:
+        return QueueFeature.TIMEOUT
+    if job.unique_key is not None:
+        return QueueFeature.UNIQUENESS
+    return None
+
+
 class SyncQueueDriver:
     """Inline driver that executes accepted jobs immediately in-process."""
 
@@ -61,6 +75,9 @@ class SyncQueueDriver:
         self._assert_open()
         if not isinstance(job, QueueJob):
             raise TypeError("sync queue dispatch requires a QueueJob")
+        unsupported = _unsupported_feature(job)
+        if unsupported is not None:
+            raise UnsupportedQueueFeature(unsupported.value)
         dispatched_at = _aware_utc(self._clock(), "dispatch time")
         try:
             self._consumer(job)

@@ -32,6 +32,7 @@ from af.testing.isolation import (
     assert_test_application_clean,
     inspect_test_application,
 )
+from af.testing.queue import QueueDriverConformanceSuite, queue_driver_cases
 from af.testing.relational import RelationalDriverConformanceSuite, relational_driver_cases
 from af.testing.search import SearchDriverConformanceSuite, search_driver_cases
 
@@ -59,6 +60,7 @@ __all__ = (
     "ProcessStateGuard",
     "ProcessStateLeak",
     "ProviderConformanceSuite",
+    "QueueDriverConformanceSuite",
     "RealServiceHook",
     "RelationalDriverConformanceSuite",
     "SearchDriverConformanceSuite",
@@ -66,6 +68,7 @@ __all__ = (
     "TestApplicationBuilder",
     "assert_test_application_clean",
     "inspect_test_application",
+    "queue_driver_cases",
     "relational_driver_cases",
     "search_driver_cases",
 )
