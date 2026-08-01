@@ -18,6 +18,8 @@ from sqlalchemy.pool import StaticPool
 from af.cache.contracts import (
     CacheKey,
     CacheNamespace,
+    LockLease,
+    LockOwner,
     _validated_operation,
     _validated_ttl,
     _validated_value,
@@ -43,6 +45,7 @@ _CAPABILITIES = CapabilitySet(
         CacheFeature.TTL.value,
         CacheFeature.NAMESPACES.value,
         CacheFeature.FLUSH.value,
+        CacheFeature.LOCKS.value,
     )
 )
 _ARTIFACT_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -103,10 +106,28 @@ class DatabaseCacheDriver:
             "CREATE INDEX IF NOT EXISTS af_cache_entries_expiry_idx "
             "ON af_cache_entries (application_id, tenant_id, namespace, expires_at)"
         )
+        lock_table = text(
+            "CREATE TABLE IF NOT EXISTS af_cache_locks ("
+            "application_id TEXT NOT NULL, "
+            "tenant_id TEXT NOT NULL, "
+            "namespace TEXT NOT NULL, "
+            "key TEXT NOT NULL, "
+            "owner TEXT NOT NULL, "
+            "fencing_token INTEGER NOT NULL, "
+            "expires_at TEXT NOT NULL, "
+            "PRIMARY KEY (application_id, tenant_id, namespace, key)"
+            ")"
+        )
+        lock_index = text(
+            "CREATE INDEX IF NOT EXISTS af_cache_locks_expiry_idx "
+            "ON af_cache_locks (application_id, tenant_id, namespace, expires_at)"
+        )
         try:
             with self._engine.begin() as connection:
                 connection.execute(statement)
                 connection.execute(index)
+                connection.execute(lock_table)
+                connection.execute(lock_index)
         except SQLAlchemyError as error:
             raise _failure(error, stage="cache.database.schema") from None
 
@@ -134,6 +155,24 @@ class DatabaseCacheDriver:
         if expiry.utcoffset() is None:
             raise ValueError("database cache expiry must be timezone-aware")
         return expiry.astimezone(UTC)
+
+    @staticmethod
+    def _lease(
+        *,
+        owner: object,
+        fencing_token: object,
+        expires_at: object,
+    ) -> LockLease:
+        if type(owner) is not str or type(fencing_token) is not int or type(expires_at) is not str:
+            raise ValueError("database lock row is invalid")
+        expiry = DatabaseCacheDriver._expiry(expires_at)
+        if expiry is None:
+            raise ValueError("database lock expiry is required")
+        return LockLease(
+            owner=LockOwner(owner),
+            fencing_token=fencing_token,
+            expires_at=expiry,
+        )
 
     def get(self, namespace: CacheNamespace, key: CacheKey, /) -> bytes | None:
         namespace, key = _validated_operation(namespace, key)
@@ -269,17 +308,203 @@ class DatabaseCacheDriver:
             except SQLAlchemyError as error:
                 raise _failure(error, stage="cache.database.flush") from None
 
-    def acquire_lock(self, *args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise NotImplementedError("database cache does not advertise lock capability")
+    def acquire_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        owner: LockOwner,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(owner, LockOwner):
+            raise TypeError("lock acquire requires a validated owner")
+        validated_ttl = _validated_ttl(ttl)
+        if validated_ttl is None:
+            raise ValueError("lock TTL is required")
+        with self._lock:
+            self._assert_open()
+            now = self._now()
+            expires_at = now + validated_ttl
+            try:
+                with self._engine.begin() as connection:
+                    row = (
+                        connection.execute(
+                            text(
+                                "SELECT owner, fencing_token, expires_at FROM af_cache_locks "
+                                "WHERE application_id = :application_id AND tenant_id = :tenant_id "
+                                "AND namespace = :namespace AND key = :key"
+                            ),
+                            {
+                                "application_id": namespace.application_id,
+                                "tenant_id": namespace.tenant_id,
+                                "namespace": namespace.name,
+                                "key": key.value,
+                            },
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                    if row is None:
+                        created = connection.execute(
+                            text(
+                                "INSERT INTO af_cache_locks "
+                                "(application_id, tenant_id, namespace, key, owner, "
+                                "fencing_token, expires_at) "
+                                "VALUES ("
+                                ":application_id, :tenant_id, :namespace, :key, "
+                                ":owner, 1, :expires_at"
+                                ") "
+                                "ON CONFLICT(application_id, tenant_id, namespace, key) DO NOTHING"
+                            ),
+                            {
+                                "application_id": namespace.application_id,
+                                "tenant_id": namespace.tenant_id,
+                                "namespace": namespace.name,
+                                "key": key.value,
+                                "owner": owner.value,
+                                "expires_at": expires_at.isoformat(),
+                            },
+                        )
+                        if created.rowcount == 0:
+                            return None
+                        return LockLease(
+                            owner=owner,
+                            fencing_token=1,
+                            expires_at=expires_at,
+                        )
 
-    def renew_lock(self, *args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise NotImplementedError("database cache does not advertise lock capability")
+                    current = self._lease(
+                        owner=row["owner"],
+                        fencing_token=row["fencing_token"],
+                        expires_at=row["expires_at"],
+                    )
+                    if current.expires_at > now:
+                        return None
+                    next_token = current.fencing_token + 1
+                    claimed = connection.execute(
+                        text(
+                            "UPDATE af_cache_locks SET owner = :owner, "
+                            "fencing_token = :next_token, "
+                            "expires_at = :next_expires_at "
+                            "WHERE application_id = :application_id AND tenant_id = :tenant_id "
+                            "AND namespace = :namespace AND key = :key "
+                            "AND owner = :current_owner AND fencing_token = :current_token "
+                            "AND expires_at = :current_expires_at"
+                        ),
+                        {
+                            "application_id": namespace.application_id,
+                            "tenant_id": namespace.tenant_id,
+                            "namespace": namespace.name,
+                            "key": key.value,
+                            "owner": owner.value,
+                            "next_token": next_token,
+                            "next_expires_at": expires_at.isoformat(),
+                            "current_owner": current.owner.value,
+                            "current_token": current.fencing_token,
+                            "current_expires_at": current.expires_at.isoformat(),
+                        },
+                    )
+                    if claimed.rowcount == 0:
+                        return None
+                    return LockLease(
+                        owner=owner,
+                        fencing_token=next_token,
+                        expires_at=expires_at,
+                    )
+            except SQLAlchemyError as error:
+                raise _failure(error, stage="cache.database.lock.acquire") from None
 
-    def release_lock(self, *args: object, **kwargs: object) -> bool:
-        del args, kwargs
-        raise NotImplementedError("database cache does not advertise lock capability")
+    def renew_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock renewal requires a validated lease")
+        validated_ttl = _validated_ttl(ttl)
+        if validated_ttl is None:
+            raise ValueError("lock TTL is required")
+        with self._lock:
+            self._assert_open()
+            now = self._now()
+            if lease.expires_at <= now:
+                return None
+            expires_at = now + validated_ttl
+            try:
+                with self._engine.begin() as connection:
+                    renewed = connection.execute(
+                        text(
+                            "UPDATE af_cache_locks SET expires_at = :next_expires_at "
+                            "WHERE application_id = :application_id AND tenant_id = :tenant_id "
+                            "AND namespace = :namespace AND key = :key AND owner = :owner "
+                            "AND fencing_token = :fencing_token "
+                            "AND expires_at = :current_expires_at"
+                        ),
+                        {
+                            "application_id": namespace.application_id,
+                            "tenant_id": namespace.tenant_id,
+                            "namespace": namespace.name,
+                            "key": key.value,
+                            "owner": lease.owner.value,
+                            "fencing_token": lease.fencing_token,
+                            "current_expires_at": lease.expires_at.isoformat(),
+                            "next_expires_at": expires_at.isoformat(),
+                        },
+                    )
+                    if renewed.rowcount == 0:
+                        return None
+                    return LockLease(
+                        owner=lease.owner,
+                        fencing_token=lease.fencing_token,
+                        expires_at=expires_at,
+                    )
+            except SQLAlchemyError as error:
+                raise _failure(error, stage="cache.database.lock.renew") from None
+
+    def release_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+    ) -> bool:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock release requires a validated lease")
+        with self._lock:
+            self._assert_open()
+            now = self._now()
+            if lease.expires_at <= now:
+                return False
+            try:
+                with self._engine.begin() as connection:
+                    deleted = connection.execute(
+                        text(
+                            "DELETE FROM af_cache_locks WHERE application_id = :application_id "
+                            "AND tenant_id = :tenant_id AND namespace = :namespace AND key = :key "
+                            "AND owner = :owner AND fencing_token = :fencing_token "
+                            "AND expires_at = :expires_at"
+                        ),
+                        {
+                            "application_id": namespace.application_id,
+                            "tenant_id": namespace.tenant_id,
+                            "namespace": namespace.name,
+                            "key": key.value,
+                            "owner": lease.owner.value,
+                            "fencing_token": lease.fencing_token,
+                            "expires_at": lease.expires_at.isoformat(),
+                        },
+                    )
+                    return deleted.rowcount > 0
+            except SQLAlchemyError as error:
+                raise _failure(error, stage="cache.database.lock.release") from None
 
     def close(self) -> None:
         with self._lock:
