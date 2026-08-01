@@ -173,6 +173,28 @@ def test_cli_search_index_limit_bounds_total_backfill() -> None:
         application.shutdown()
 
 
+def test_cli_search_index_limit_includes_trace_history_when_tasks_exceed_limit() -> None:
+    application = _search_application()
+    try:
+        application.tasks.create("hello")
+        application.tasks.create("how many qs in qqqq")
+        application.tasks.create("how many rs in strawberry")
+        application.tasks.execute("hello")
+
+        result = runner.invoke(create_cli(application), ["search", "index", "--limit", "4"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {
+            "indexed": 4,
+            "sources": [
+                {"source": "tasks", "indexed": 2},
+                {"source": "traces", "indexed": 2},
+            ],
+        }
+    finally:
+        application.shutdown()
+
+
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
 

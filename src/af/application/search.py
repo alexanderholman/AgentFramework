@@ -60,13 +60,11 @@ class SearchService:
 
     def index(self, *, limit: int = _INDEX_LIMIT_DEFAULT) -> SearchIndexResult:
         normalized_limit = _normalize_limit(limit, maximum=_INDEX_LIMIT_MAX)
-        task_resources = tuple(
-            _task_to_resource(task) for task in self._tasks.list(limit=normalized_limit, offset=0)
-        )
-        remaining_limit = normalized_limit - len(task_resources)
-        trace_resources = tuple(
-            _trace_to_resource(trace) for trace in self._traces.list()[:remaining_limit]
-        )
+        tasks = self._tasks.list(limit=normalized_limit, offset=0)[:normalized_limit]
+        traces = self._traces.list()[:normalized_limit]
+        indexed_tasks, indexed_traces = _select_index_history(tasks, traces, limit=normalized_limit)
+        task_resources = tuple(_task_to_resource(task) for task in indexed_tasks)
+        trace_resources = tuple(_trace_to_resource(trace) for trace in indexed_traces)
         task_count = self._manager.upsert(task_resources) if task_resources else 0
         trace_count = self._manager.upsert(trace_resources) if trace_resources else 0
         sources = (
@@ -109,6 +107,49 @@ def _normalize_limit(value: int, *, maximum: int) -> int:
     if value < 1 or value > maximum:
         raise InvalidPagination(f"limit must be between 1 and {maximum}")
     return value
+
+
+def _select_index_history(
+    tasks: list[Task],
+    traces: list[RunTrace],
+    *,
+    limit: int,
+) -> tuple[tuple[Task, ...], tuple[RunTrace, ...]]:
+    if not tasks or not traces:
+        return tuple(tasks[:limit]), tuple(traces[:limit])
+
+    selected_tasks: list[Task] = []
+    selected_traces: list[RunTrace] = []
+    task_index = 0
+    trace_index = 0
+    take_task = tasks[0].created_at <= traces[0].created_at
+
+    while len(selected_tasks) + len(selected_traces) < limit:
+        if take_task and task_index < len(tasks):
+            selected_tasks.append(tasks[task_index])
+            task_index += 1
+        elif not take_task and trace_index < len(traces):
+            selected_traces.append(traces[trace_index])
+            trace_index += 1
+        elif task_index < len(tasks):
+            remaining = limit - len(selected_tasks) - len(selected_traces)
+            selected_tasks.extend(tasks[task_index : task_index + remaining])
+            break
+        elif trace_index < len(traces):
+            remaining = limit - len(selected_tasks) - len(selected_traces)
+            selected_traces.extend(traces[trace_index : trace_index + remaining])
+            break
+        else:
+            break
+
+        if task_index >= len(tasks):
+            take_task = False
+        elif trace_index >= len(traces):
+            take_task = True
+        else:
+            take_task = not take_task
+
+    return tuple(selected_tasks), tuple(selected_traces)
 
 
 def _task_to_resource(task: Task) -> ResourceEnvelope:
