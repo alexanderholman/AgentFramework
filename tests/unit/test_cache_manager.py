@@ -573,23 +573,28 @@ def test_cache_manager_stale_while_revalidate_serves_stale_and_refreshes_once() 
     def schedule(refresh: Callable[[], None]) -> None:
         scheduled.append(refresh)
 
-    options = {
-        "fresh_ttl": timedelta(seconds=5),
-        "stale_ttl": timedelta(seconds=10),
-        "lock_ttl": timedelta(seconds=5),
-        "wait_timeout": timedelta(seconds=1),
-        "schedule": schedule,
-    }
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
+    def cached() -> bytes:
+        return manager.stale_while_revalidate(
+            namespace,
+            key,
+            load,
+            fresh_ttl=timedelta(seconds=5),
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=timedelta(seconds=5),
+            wait_timeout=timedelta(seconds=1),
+            schedule=schedule,
+        )
+
+    assert cached() == b"value-1"
     clock.now += timedelta(seconds=5)
 
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
+    assert cached() == b"value-1"
+    assert cached() == b"value-1"
     assert calls == 1
     assert len(scheduled) == 1
 
     scheduled.pop()()
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-2"
+    assert cached() == b"value-2"
     assert calls == 2
     manager.close()
 
@@ -614,22 +619,27 @@ def test_cache_manager_stale_while_revalidate_preserves_stale_on_refresh_failure
             raise RuntimeError("refresh unavailable")
         return b"stable"
 
-    options = {
-        "fresh_ttl": timedelta(seconds=1),
-        "stale_ttl": timedelta(seconds=10),
-        "lock_ttl": timedelta(seconds=5),
-        "wait_timeout": timedelta(seconds=1),
-        "schedule": scheduled.append,
-    }
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"stable"
+    def cached() -> bytes:
+        return manager.stale_while_revalidate(
+            namespace,
+            key,
+            load,
+            fresh_ttl=timedelta(seconds=1),
+            stale_ttl=timedelta(seconds=10),
+            lock_ttl=timedelta(seconds=5),
+            wait_timeout=timedelta(seconds=1),
+            schedule=scheduled.append,
+        )
+
+    assert cached() == b"stable"
     clock.now += timedelta(seconds=1)
     failing = True
 
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"stable"
+    assert cached() == b"stable"
     scheduled.pop()()
     assert manager.get(namespace, key) == b"stable"
 
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"stable"
+    assert cached() == b"stable"
     assert len(scheduled) == 1
     manager.close()
 
@@ -653,16 +663,21 @@ def test_cache_manager_stale_while_revalidate_cold_fills_after_hard_expiry() -> 
         calls += 1
         return f"value-{calls}".encode()
 
-    options = {
-        "fresh_ttl": timedelta(seconds=2),
-        "stale_ttl": timedelta(seconds=3),
-        "lock_ttl": timedelta(seconds=1),
-        "wait_timeout": timedelta(seconds=1),
-        "schedule": lambda refresh: None,
-    }
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
+    def cached() -> bytes:
+        return manager.stale_while_revalidate(
+            namespace,
+            key,
+            load,
+            fresh_ttl=timedelta(seconds=2),
+            stale_ttl=timedelta(seconds=3),
+            lock_ttl=timedelta(seconds=1),
+            wait_timeout=timedelta(seconds=1),
+            schedule=lambda refresh: None,
+        )
+
+    assert cached() == b"value-1"
     clock.now += timedelta(seconds=5)
-    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-2"
+    assert cached() == b"value-2"
     assert calls == 2
     manager.close()
 
@@ -678,24 +693,34 @@ def test_cache_manager_stale_while_revalidate_validates_policy() -> None:
     manager.install(memory_cache_registration(clock=Clock()))
     namespace = _namespace()
     key = CacheKey("swr:validation")
-    common = {
-        "fresh_ttl": timedelta(seconds=1),
-        "stale_ttl": timedelta(seconds=1),
-        "lock_ttl": timedelta(seconds=1),
-        "wait_timeout": timedelta(seconds=1),
-        "schedule": lambda refresh: None,
-    }
-
-    for field in ("fresh_ttl", "stale_ttl", "lock_ttl", "wait_timeout"):
-        invalid = {**common, field: timedelta(0)}
+    durations = timedelta(seconds=1)
+    for fresh_ttl, stale_ttl, lock_ttl, wait_timeout in (
+        (timedelta(0), durations, durations, durations),
+        (durations, timedelta(0), durations, durations),
+        (durations, durations, timedelta(0), durations),
+        (durations, durations, durations, timedelta(0)),
+    ):
         with pytest.raises(ValueError):
-            manager.stale_while_revalidate(namespace, key, lambda: b"value", **invalid)
+            manager.stale_while_revalidate(
+                namespace,
+                key,
+                lambda: b"value",
+                fresh_ttl=fresh_ttl,
+                stale_ttl=stale_ttl,
+                lock_ttl=lock_ttl,
+                wait_timeout=wait_timeout,
+                schedule=lambda refresh: None,
+            )
     with pytest.raises(TypeError, match="scheduler"):
         manager.stale_while_revalidate(
             namespace,
             key,
             lambda: b"value",
-            **{**common, "schedule": object()},
+            fresh_ttl=durations,
+            stale_ttl=durations,
+            lock_ttl=durations,
+            wait_timeout=durations,
+            schedule=object(),  # type: ignore[arg-type]
         )
     manager.close()
 
