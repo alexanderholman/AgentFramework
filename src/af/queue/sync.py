@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -45,6 +46,23 @@ def _unsupported_feature(job: QueueJob) -> QueueFeature | None:
     return None
 
 
+def _is_async_callable(value: object) -> bool:
+    if inspect.iscoroutinefunction(value) or inspect.isasyncgenfunction(value):
+        return True
+    call = inspect.getattr_static(value, "__call__", None)
+    return inspect.iscoroutinefunction(call) or inspect.isasyncgenfunction(call)
+
+
+def _validate_sync_result(result: object) -> None:
+    if inspect.iscoroutine(result):
+        result.close()
+        raise TypeError("sync queue consumer returned an asynchronous result")
+    if inspect.isawaitable(result) or inspect.isasyncgen(result):
+        raise TypeError("sync queue consumer returned an asynchronous result")
+    if result is not None:
+        raise TypeError("sync queue consumer must return None")
+
+
 class SyncQueueDriver:
     """Inline driver that executes accepted jobs immediately in-process."""
 
@@ -54,8 +72,8 @@ class SyncQueueDriver:
         *,
         clock: Callable[[], datetime],
     ) -> None:
-        if not callable(consumer):
-            raise TypeError("sync queue consumer must be callable")
+        if not callable(consumer) or _is_async_callable(consumer):
+            raise TypeError("sync queue consumer must be a synchronous callable")
         if not callable(clock):
             raise TypeError("sync queue clock must be callable")
         self._consumer = consumer
@@ -83,9 +101,18 @@ class SyncQueueDriver:
         if unsupported is not None:
             raise UnsupportedQueueFeature(unsupported.value)
         dispatched_at = _aware_utc(self._clock(), "dispatch time")
+        receipt = QueueDispatchReceipt(
+            message_id=job.envelope.metadata.message_id,
+            lane=job.lane,
+            disposition=QueueDispatchDisposition.INLINE,
+            dispatched_at=dispatched_at,
+        )
         try:
-            self._consumer(job)
+            result = self._consumer(job)
+            _validate_sync_result(result)
         except QueueOperationError:
+            raise
+        except TypeError:
             raise
         except Exception as error:
             raise QueueOperationError(
@@ -93,12 +120,7 @@ class SyncQueueDriver:
                 stage="queue.dispatch",
                 protected_cause=error,
             ) from None
-        return QueueDispatchReceipt(
-            message_id=job.envelope.metadata.message_id,
-            lane=job.lane,
-            disposition=QueueDispatchDisposition.INLINE,
-            dispatched_at=dispatched_at,
-        )
+        return receipt
 
     def reserve(self, *, lane: str | None = None) -> QueueReservation | None:
         del lane

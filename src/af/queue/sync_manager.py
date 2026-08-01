@@ -58,11 +58,10 @@ def sync_queue_registration(
 ) -> DriverRegistration[QueueDriver]:
     """Return an inert synchronous queue declaration with runtime evidence."""
 
-    if not callable(consumer):
-        raise TypeError("sync queue consumer must be callable")
     if clock is not None and not callable(clock):
         raise TypeError("sync queue clock must be callable")
     evidence_clock = clock if clock is not None else (lambda: datetime.now(UTC))
+    SyncQueueDriver(consumer, clock=evidence_clock)
     manifest = DriverManifest(
         driver_name="sync",
         version="1.0.0",

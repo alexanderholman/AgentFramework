@@ -282,8 +282,13 @@ def test_sync_registration_rejects_invalid_runtime_evidence_time() -> None:
 
 
 def test_sync_queue_registration_rejects_invalid_consumer_identity_and_verifier_inputs() -> None:
+    async def async_consumer(_job: QueueJob) -> None:
+        return None
+
     with pytest.raises(TypeError, match="consumer"):
         sync_queue_registration(consumer="not callable")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="synchronous"):
+        sync_queue_registration(consumer=async_consumer)
     with pytest.raises(TypeError, match="clock"):
         sync_queue_registration(consumer=lambda _job: None, clock="not callable")  # type: ignore[arg-type]
 
@@ -433,6 +438,12 @@ def test_sync_driver_rejects_invalid_inputs_and_surfaces_consumer_failures() -> 
     with pytest.raises(TypeError, match="clock"):
         SyncQueueDriver(lambda _job: None, clock="not callable")  # type: ignore[arg-type]
 
+    async def async_consumer(_job: QueueJob) -> None:
+        return None
+
+    with pytest.raises(TypeError, match="synchronous"):
+        SyncQueueDriver(async_consumer, clock=lambda: _NOW)
+
     typed = SyncQueueDriver(
         lambda _job: (_ for _ in ()).throw(
             QueueOperationError(reason=PlatformReason.CANCELLED, stage="queue.consumer")
@@ -453,6 +464,16 @@ def test_sync_driver_rejects_invalid_inputs_and_surfaces_consumer_failures() -> 
     assert captured.value.stage == "queue.dispatch"
     assert "secret consumer detail" not in str(captured.value)
 
+    def awaitable_consumer(_job: QueueJob) -> object:
+        async def _pending() -> None:
+            return None
+
+        return _pending()
+
+    awaitable = SyncQueueDriver(awaitable_consumer, clock=lambda: _NOW)
+    with pytest.raises(TypeError, match="asynchronous result"):
+        awaitable.dispatch(_job("job-awaitable"))
+
     bad_clock = SyncQueueDriver(lambda _job: None, clock=lambda: datetime(2026, 8, 1, 12))
     with pytest.raises(ValueError, match="dispatch time"):
         bad_clock.dispatch(_job("job-bad-clock"))
@@ -463,6 +484,30 @@ def test_sync_driver_rejects_invalid_inputs_and_surfaces_consumer_failures() -> 
     with pytest.raises(QueueOperationError) as shutdown:
         typed.dispatch(_job("job-after-close"))
     assert shutdown.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_queue_job_rejects_non_canonical_message_id_before_inline_dispatch_side_effects() -> None:
+    observed: list[str] = []
+    SyncQueueDriver(
+        lambda job: observed.append(job.envelope.metadata.message_id),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(ValueError, match="message id"):
+        QueueJob(
+            envelope=MessageEnvelope.create(
+                metadata=MessageMetadata(
+                    message_id="Job Invalid",
+                    message_type="jobs.example",
+                    schema_version=1,
+                    kind=EnvelopeKind.JOB,
+                    occurred_at=_NOW,
+                ),
+                payload={"message_id": "Job Invalid", "secret": "not-for-repr"},
+            )
+        )
+
+    assert observed == []
 
 
 def test_queue_manager_routes_ack_reject_and_retry_to_driver() -> None:

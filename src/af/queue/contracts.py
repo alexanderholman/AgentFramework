@@ -88,6 +88,7 @@ class QueueJob:
             raise ValueError("queue job envelope is invalid")
         if self.envelope.metadata.kind is not EnvelopeKind.JOB:
             raise ValueError("queue job envelope must use the job kind")
+        _identifier(self.envelope.metadata.message_id, "message id")
         object.__setattr__(self, "lane", _identifier(self.lane, "lane"))
         if self.delay is not None:
             object.__setattr__(self, "delay", _duration(self.delay, "delay"))
