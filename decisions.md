@@ -2686,3 +2686,32 @@ store without yet expanding into distributed locks or network-specific behavior.
 AF gains a verified persistent cache backend that survives process restarts and preserves tenant
 flush boundaries without taking on distributed coordination semantics. Redis, Memcached, and
 database-backed lock coordination remain later issue #19 slices.
+
+---
+
+## [DEC-043] Extend Database Cache Rows With Persistent Owner-Fenced Locks
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires one lock-capable persistent store after the memory-only coordination
+slice. The open PR already ships a bounded database cache driver, so the next smallest increment
+is to reuse the same local SQL dependency for owner-fenced lock coordination.
+
+### Decision
+1. Add one `af_cache_locks` table keyed by validated application, tenant, namespace, and cache
+   key identities.
+2. Reuse the existing immutable `LockLease` contract with owner identity, monotonic fencing token,
+   and timezone-aware expiry.
+3. Acquire by inserting a first lease or atomically replacing only one expired matching row with a
+   greater fencing token.
+4. Renew and release only when the supplied lease exactly matches the persisted owner, token, and
+   expiry.
+5. Keep cache-entry storage and lock coordination in separate tables so flush operations cannot
+   erase unrelated tenant or application state.
+
+### Consequences
+AF now has one persistent lock-capable cache backend that preserves the fenced-owner rules across
+driver recreation and cross-instance contention. This remains a local deterministic SQL slice and
+does not yet provide Redis or Memcached network semantics, funnels, or stale-while-revalidate.

@@ -1701,3 +1701,28 @@ common directory without contacting or changing the upstream.
 - **TEST-029-4**: Verified manager routing supports get, set, TTL, and delete, but rejects lock
   capability requests.
 - **TEST-029-5**: Invalid URLs and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-030] Database Lock Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `database` lock-capable cache driver through the existing `CacheManager`
+  lock routing.
+- MUST scope every lease to the exact application, tenant, namespace, and key identity.
+- MUST permit at most one unexpired owner across driver instances using a monotonic fencing token.
+- MUST reject renew and release from a different, expired, or superseded lease.
+- MUST preserve cache flush boundaries so deleting one namespace never erases unrelated lock state.
+- MUST fail closed after shutdown and validate owner and TTL inputs before lock mutation.
+
+### Tests
+- **TEST-030-1**: Two driver instances contend for one database-backed lease and only one active
+  owner succeeds at a time.
+- **TEST-030-2**: A forged owner cannot renew or release another owner's persisted lease.
+- **TEST-030-3**: Expiry permits a new owner with a greater fencing token.
+- **TEST-030-4**: Verified manager routing supports acquire, renew, and release for the database
+  driver.
+- **TEST-030-5**: Invalid lock inputs and post-shutdown operations fail closed.
