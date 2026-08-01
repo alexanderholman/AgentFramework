@@ -1772,3 +1772,47 @@ can still erase Memcached lock state because cache is not authority.
 - DEC-045
 - SPEC-032
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #032 - Redis Cache And Lock Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache-manager, memory/database/memcached driver patterns, and append-only cache
+  history
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for Redis runtime identity, namespace-safe cache keys, millisecond
+  TTLs, owner-fenced locks, and Redis-specific failure boundaries
+- Implemented a verified `redis` cache driver and inert registration with namespace-scoped physical
+  keys, millisecond TTL translation, and compare-by-value renew/release scripts
+- Appended DEC-046 and SPEC-033 for the bounded Redis cache and lock slice
+
+### Result Summary
+This run advances the open issue #19 PR with the remaining named driver backend: Redis. The driver
+routes through the shared `CacheManager`, preserves tenant-safe key isolation, permits one active
+lock owner at a time, and stays explicit that flush, stale-while-revalidate, stampede protection,
+and funnels are still outside this incremental slice.
+
+### Issues Encountered
+- The red-phase focused test run initially failed at collection because `af.cache.redis` did not
+  exist yet; implementation added only the minimum runtime surface needed by the new tests
+
+### Actions Taken
+- Added red-phase coverage in `tests/unit/test_cache_redis.py` for runtime identity, key isolation,
+  TTL behavior, owner-fenced lease mutation, manager routing, and failure stages
+- Implemented `src/af/cache/redis.py` using the existing optional-runtime evidence pattern and
+  namespace-scoped key derivation used by other network cache drivers
+- Ran the focused cache suite before the repository-wide `[SCRIPT:af-dev]` gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-046
+- SPEC-033
+- Script: `[SCRIPT:af-dev]`

@@ -1779,3 +1779,36 @@ common directory without contacting or changing the upstream.
   capability.
 - **TEST-032-4**: Invalid lock entries, lock-key derivation failures, client-operation failures,
   and post-shutdown lock operations fail closed with lock-specific stages.
+
+---
+
+## [SPEC-033] Redis Cache And Lock Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `redis` cache driver that routes through `CacheManager` using the
+  existing read/write/TTL/namespace/lock contracts.
+- MUST scope cache keys, lock keys, and fencing-token keys to the exact application, tenant,
+  namespace, and logical key identities.
+- MUST translate AF TTLs into Redis millisecond expiry without widening AF's exact
+  positive-duration validation contract.
+- MUST permit at most one active Redis lock owner per namespace/key at a time and reject renew or
+  release from a different or stale lease.
+- MUST treat eviction or restart loss as normal cache or lock misses and MUST continue to omit
+  flush capability.
+- MUST fail closed on invalid runtime identity, unsafe configuration, client-operation failures,
+  and post-shutdown access.
+
+### Tests
+- **TEST-033-1**: Tenant-scoped keys isolate same-named entries and eviction becomes a normal miss.
+- **TEST-033-2**: Redis cache writes use millisecond TTLs and expire at the exact boundary.
+- **TEST-033-3**: One Redis lock owner acquires the lease, a contending owner is rejected, and a
+  later claim after expiry advances the fencing token.
+- **TEST-033-4**: Renew and release succeed only for the current matching lease and fail for forged
+  or stale owners.
+- **TEST-033-5**: Verified manager routing supports get, set, delete, acquire, renew, and release,
+  but still rejects flush.
+- **TEST-033-6**: Missing Redis runtime, unsafe host/port/db/timeout settings, client failures,
+  invalid namespace versions, and post-shutdown access fail closed with Redis-specific stages.

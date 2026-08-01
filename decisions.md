@@ -2773,3 +2773,34 @@ Issue #19 still requires Memcached lock drivers. AF's lock contract requires one
 AF now covers the Memcached lock-driver acceptance slice for one active owner and owner-fenced
  mutation while staying explicit that Memcached coordination is ephemeral. Redis, stale-while-
 revalidate, stampede protection, and funnels remain later issue #19 work.
+
+---
+
+## [DEC-046] Scope Redis Coordination To Verified Namespace-Scoped Cache And Locks
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires Redis cache and lock drivers on the open PR after memory, file, database,
+and Memcached slices landed. AF's cache contract forbids tenant-unsafe flush behavior, and the
+smallest remaining driver slice is one verified Redis backend that reuses the existing cache and
+owner-fenced lock contracts without widening into stale-while-revalidate or funnel orchestration.
+
+### Decision
+1. Implement a verified `redis` cache driver that advertises only read, write, TTL, namespace, and
+   lock capabilities.
+2. Derive physical cache, namespace-version, lock, and lock-token keys from validated application,
+   tenant, namespace, and logical key identities so same-named tenant data never collides.
+3. Translate AF TTLs into Redis millisecond expiry and treat eviction or restart loss as normal
+   cache or lock miss behavior because cache is optimization, never authority.
+4. Use Redis `SET ... NX PX`, `INCR`, and compare-by-value scripts for acquire, renew, and release
+   so only one active owner holds a lease and only the current lease can mutate it.
+5. Keep flush unsupported in this slice instead of wrapping unsafe whole-database deletion in a
+   tenant-safe abstraction.
+
+### Consequences
+AF now covers the missing Redis driver slice on issue #19 with namespace-safe keys and owner-fenced
+network coordination while staying explicit about the runtime's non-authoritative durability model.
+Stale-while-revalidate, request coalescing, stampede protection, and funnels remain later issue #19
+work.
