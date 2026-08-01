@@ -110,6 +110,7 @@ def policy(*, tie_break_by_id: bool = False) -> AnalysisPolicy:
         max_snapshot_age_seconds=300,
         tie_break_by_id=tie_break_by_id,
         entry_authority_id="authority:entry-point",
+        entry_scope_id="scope:read-only-analysis",
     )
 
 
@@ -191,6 +192,27 @@ class SelfAnalysisPlannerTests(unittest.TestCase):
             {StageReason.MISSING_AUTHORITY},
         )
 
+    def test_entry_authority_scope_must_match_policy(self) -> None:
+        observed = AnalysisSnapshot(
+            operation=replace(
+                operation_snapshot(),
+                authorities=(
+                    AuthorityRecord(
+                        authority_id="authority:entry-point",
+                        scope_id="scope:other",
+                        granted=True,
+                    ),
+                ),
+            ),
+            candidates=(candidate("issue:126"),),
+        )
+
+        stopped = self.planner.plan(observed, policy(), now=NOW)
+
+        self.assertEqual(stopped.route, AnalysisRoute.STOP)
+        self.assertEqual(stopped.stage_plan.result.reason, StageReason.MISSING_AUTHORITY)
+        self.assertEqual(stopped.assessments[0].reason, StageReason.MISSING_AUTHORITY)
+
     def test_exact_tie_fails_closed_without_explicit_tie_break(self) -> None:
         observed = snapshot(candidate("issue:125"), candidate("issue:126"))
 
@@ -203,7 +225,14 @@ class SelfAnalysisPlannerTests(unittest.TestCase):
 
         self.assertEqual(stopped.route, AnalysisRoute.STOP)
         self.assertEqual(stopped.stage_plan.result.reason, StageReason.AMBIGUOUS_SELECTION)
+        self.assertEqual(
+            {item.reason for item in stopped.assessments},
+            {StageReason.ELIGIBLE},
+        )
         self.assertEqual(selected.selected_candidate_id, "issue:125")
+        selected_reasons = {item.candidate_id: item.reason for item in selected.assessments}
+        self.assertEqual(selected_reasons["issue:125"], StageReason.SELECTED)
+        self.assertEqual(selected_reasons["issue:126"], StageReason.ELIGIBLE)
 
     def test_priority_urgency_risk_and_age_order_selection(self) -> None:
         observed = snapshot(
@@ -238,6 +267,8 @@ class SelfAnalysisPlannerTests(unittest.TestCase):
             replace(candidate("issue:126"), facts=())
         with self.assertRaisesRegex(ValueError, "entry authority"):
             replace(policy(), entry_authority_id="")
+        with self.assertRaisesRegex(ValueError, "entry scope"):
+            replace(policy(), entry_scope_id="")
 
     def test_planning_time_must_not_precede_observation(self) -> None:
         with self.assertRaisesRegex(ValueError, "precedes snapshot"):
@@ -332,6 +363,15 @@ class SelfAnalysisPlannerTests(unittest.TestCase):
                 route=AnalysisRoute.ANALYSE,
                 selected_candidate_id="issue:126",
                 focus_kind=AnalysisFocusKind.GAP,
+                output=output,
+                assessments=(AnalysisAssessment("issue:126", StageReason.SELECTED),),
+            )
+        with self.assertRaisesRegex(ValueError, "active plan is inconsistent"):
+            AnalysisPlan(
+                stage_plan=stage_plan,
+                route=AnalysisRoute.ANALYSE,
+                selected_candidate_id="issue:126",
+                focus_kind=AnalysisFocusKind.CONFLICT,
                 output=output,
                 assessments=(AnalysisAssessment("issue:126", StageReason.SELECTED),),
             )

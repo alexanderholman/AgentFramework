@@ -43,6 +43,7 @@ class SelfOperationStage(StrEnum):
 class StageReason(StrEnum):
     """Stable stage result and stop reasons."""
 
+    ELIGIBLE = "eligible"
     SELECTED = "selected"
     STALE_SNAPSHOT = "stale_snapshot"
     ACTIVE_OVERLAP = "active_overlap"

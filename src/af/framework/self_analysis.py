@@ -204,6 +204,7 @@ class AnalysisPolicy:
     max_snapshot_age_seconds: int
     tie_break_by_id: bool
     entry_authority_id: str
+    entry_scope_id: str
 
     def __post_init__(self) -> None:
         if (
@@ -215,12 +216,15 @@ class AnalysisPolicy:
             raise ValueError("self-analysis tie-break policy is invalid")
         if not _is_trace_id(self.entry_authority_id):
             raise ValueError("self-analysis entry authority is invalid")
+        if not _is_trace_id(self.entry_scope_id):
+            raise ValueError("self-analysis entry scope is invalid")
 
     def canonical_json(self) -> str:
         """Return the byte-stable policy representation bound into the plan."""
         return _canonical_json(
             {
                 "entry_authority_id": self.entry_authority_id,
+                "entry_scope_id": self.entry_scope_id,
                 "max_snapshot_age_seconds": self.max_snapshot_age_seconds,
                 "tie_break_by_id": self.tie_break_by_id,
             }
@@ -351,6 +355,7 @@ class AnalysisPlan:
                 self.selected_candidate_id is None
                 or self.focus_kind is None
                 or self.output is None
+                or self.focus_kind is not self.output.focus_kind
                 or self.stage_plan.route != "analyse"
                 or self.stage_plan.result.output_digest != self.output.digest
             ):
@@ -414,6 +419,7 @@ class SelfAnalysisPlanner:
         entry_authority = self._entry_authority(
             snapshot.operation,
             policy.entry_authority_id,
+            policy.entry_scope_id,
         )
         if entry_authority is None or not entry_authority.granted:
             assessments = tuple(
@@ -448,7 +454,7 @@ class SelfAnalysisPlanner:
         eligible = tuple(
             item
             for item in snapshot.candidates
-            if reasons[item.candidate_id] is StageReason.SELECTED
+            if reasons[item.candidate_id] is StageReason.ELIGIBLE
         )
         if not eligible:
             return self._stop_plan(
@@ -497,22 +503,34 @@ class SelfAnalysisPlanner:
             allowed_writes=(),
             stop_conditions=self._STOP_CONDITIONS,
         )
+        selected_assessments = tuple(
+            AnalysisAssessment(
+                item.candidate_id,
+                StageReason.SELECTED if item.candidate_id == selected.candidate_id else item.reason,
+            )
+            for item in assessments
+        )
         return AnalysisPlan(
             stage_plan=stage_plan,
             route=AnalysisRoute.ANALYSE,
             selected_candidate_id=selected.candidate_id,
             focus_kind=selected.focus_kind,
             output=output,
-            assessments=assessments,
+            assessments=selected_assessments,
         )
 
     @staticmethod
     def _entry_authority(
         snapshot: SelfOperationSnapshot,
         authority_id: str,
+        scope_id: str,
     ) -> AuthorityRecord | None:
         return next(
-            (item for item in snapshot.authorities if item.authority_id == authority_id),
+            (
+                item
+                for item in snapshot.authorities
+                if item.authority_id == authority_id and item.scope_id == scope_id
+            ),
             None,
         )
 
@@ -526,7 +544,7 @@ class SelfAnalysisPlanner:
             return StageReason.MISSING_EVIDENCE
         if not candidate.authority_granted:
             return StageReason.MISSING_AUTHORITY
-        return StageReason.SELECTED
+        return StageReason.ELIGIBLE
 
     @staticmethod
     def _order_key(candidate: AnalysisCandidate) -> tuple[int, int, int, datetime]:

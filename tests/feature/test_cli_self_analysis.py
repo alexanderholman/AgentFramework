@@ -85,6 +85,7 @@ def _operation(provider: AnalysisEvidenceProvider) -> SelfAnalysisOperation:
             max_snapshot_age_seconds=60,
             tie_break_by_id=True,
             entry_authority_id="authority:entry-point",
+            entry_scope_id="scope:read-only-analysis",
         ),
         lambda: _CAPTURED_AT + timedelta(seconds=1),
     )
