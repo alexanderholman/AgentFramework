@@ -7,7 +7,7 @@ from threading import Barrier
 
 import pytest
 
-from af.cache.contracts import CacheKey, CacheNamespace, LockOwner
+from af.cache.contracts import CacheKey, CacheNamespace, LockLease, LockOwner
 from af.cache.manager import CacheFeature, CacheManager, bind_cache_manager
 from af.cache.memory import MemoryCacheDriver, memory_cache_registration
 from af.cache.null import NullCacheDriver, null_cache_registration
@@ -376,3 +376,85 @@ def test_lock_owner_identity_is_bounded_and_redacted() -> None:
     with pytest.raises(ValueError):
         LockOwner("x" * 513)
     assert "owner-secret" not in repr(LockOwner("owner-secret"))
+
+
+
+def test_memory_lock_validates_inputs_and_fails_closed_after_shutdown() -> None:
+    cache = MemoryCacheDriver(clock=Clock())
+    namespace = _namespace()
+    key = CacheKey("lock:validated")
+    owner = LockOwner("owner-a")
+
+    with pytest.raises(TypeError):
+        cache.acquire_lock(  # type: ignore[arg-type]
+            namespace,
+            key,
+            object(),
+            ttl=timedelta(seconds=1),
+        )
+    with pytest.raises(ValueError):
+        cache.acquire_lock(namespace, key, owner, ttl=timedelta(0))
+
+    lease = cache.acquire_lock(
+        namespace,
+        key,
+        owner,
+        ttl=timedelta(seconds=1),
+    )
+    assert lease is not None
+    cache.close()
+    with pytest.raises(PlatformError) as captured:
+        cache.release_lock(namespace, key, lease)
+    assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_null_lock_operations_validate_and_never_claim_ownership() -> None:
+    cache = NullCacheDriver()
+    namespace = _namespace()
+    key = CacheKey("lock:null")
+    owner = LockOwner("owner-a")
+    lease = LockLease(
+        owner=owner,
+        fencing_token=1,
+        expires_at=_NOW + timedelta(seconds=5),
+    )
+
+    assert (
+        cache.acquire_lock(
+            namespace,
+            key,
+            owner,
+            ttl=timedelta(seconds=5),
+        )
+        is None
+    )
+    assert (
+        cache.renew_lock(
+            namespace,
+            key,
+            lease,
+            ttl=timedelta(seconds=5),
+        )
+        is None
+    )
+    assert not cache.release_lock(namespace, key, lease)
+    cache.close()
+    with pytest.raises(PlatformError):
+        cache.acquire_lock(
+            namespace,
+            key,
+            owner,
+            ttl=timedelta(seconds=5),
+        )
+
+
+def test_lock_lease_rejects_invalid_fence_or_expiry() -> None:
+    owner = LockOwner("owner-a")
+    with pytest.raises(ValueError):
+        LockLease(owner=owner, fencing_token=0, expires_at=_NOW)
+    with pytest.raises(ValueError):
+        LockLease(
+            owner=owner,
+            fencing_token=1,
+            expires_at=datetime(2026, 8, 1, 9),
+        )
