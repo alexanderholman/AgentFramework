@@ -1642,3 +1642,45 @@ advertise lock capability yet.
 - DEC-042
 - SPEC-029
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #029 - Database Lock Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified database cache driver and owner-fenced memory lock contract
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for persistent owner-fenced database locks across driver instances
+- Implemented database-backed acquire, renew, and release semantics with monotonic fencing tokens
+- Appended DEC-043 and SPEC-030 for the bounded database-lock slice
+
+### Result Summary
+This run extends the open issue #19 PR with the smallest remaining persistent coordination slice
+already supported by repository dependencies. The database cache driver now advertises verified
+lock capability, fences renew/release by exact lease identity, and preserves namespace-safe cache
+flush behavior.
+
+### Issues Encountered
+- The first red-phase focused test run failed exactly because the database driver still raised
+  `NotImplementedError` for lock operations; the new slice closed that gap without expanding to
+  Redis or Memcached behavior
+
+### Actions Taken
+- Added red-phase coverage for cross-instance contention, forged-owner rejection, manager routing,
+  and shutdown validation
+- Implemented a dedicated `af_cache_locks` table with atomic acquire/reclaim, renew, and release
+  updates
+- Prepared the branch for focused cache tests and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-043
+- SPEC-030
+- Script: `[SCRIPT:af-dev]`
