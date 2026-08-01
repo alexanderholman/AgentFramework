@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import NoReturn, Protocol, runtime_checkable
 
 import typer
 
@@ -73,6 +73,6 @@ class ScriptedCliInteraction:
         return response
 
 
-def _fail_interaction(error: AFError) -> None:
+def _fail_interaction(error: AFError) -> NoReturn:
     typer.echo(str(error), err=True)
     raise typer.Exit(code=2)
