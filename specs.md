@@ -1589,3 +1589,286 @@ common directory without contacting or changing the upstream.
 - SPEC-008 (Script-First Automation and Only Write Once)
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 - Epic #120 and bootstrap issue #123
+
+
+---
+
+## SPEC-025: Verified Memory and Null Cache Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST validate bounded application, tenant, namespace, and key identities.
+- MUST accept only bounded non-empty byte values and positive TTL durations.
+- MUST make expired entries unavailable at or after their expiry instant.
+- MUST scope delete and flush to the exact namespace and preserve unrelated tenant data.
+- MUST verify declared read, write, TTL, namespace, and flush capabilities before dispatch.
+- MUST make the null store retain no value while preserving the same validation contract.
+- MUST fail closed after driver shutdown and dispose manager-owned drivers deterministically.
+
+### Tests
+- **TEST-025-1**: Invalid identities, values, and TTLs are rejected.
+- **TEST-025-2**: Memory entries expire exactly and cannot be deleted after expiry.
+- **TEST-025-3**: Delete and flush preserve another tenant's same-named key.
+- **TEST-025-4**: Named memory/null connections route only after capability verification.
+- **TEST-025-5**: Closed drivers reject new operations with a stable shutdown reason.
+
+## [SPEC-026] Owner-Fenced Memory Lock Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST scope locks to an exact application, tenant, namespace, and key.
+- MUST issue a positive fencing token that increases for every successive owner.
+- MUST permit at most one unexpired owner under concurrent acquisition.
+- MUST reject renew and release from a different, expired, or superseded lease.
+- MUST retain the fencing token across renewal and fail closed after shutdown.
+- MUST make the null driver validate requests without claiming a lock.
+
+### Tests
+- **TEST-026-1**: Concurrent memory acquisition produces exactly one lease.
+- **TEST-026-2**: A forged owner cannot renew or release another owner's lease.
+- **TEST-026-3**: Expiry permits a new owner with a greater fencing token.
+- **TEST-026-4**: Manager dispatch requires verified lock, namespace, and TTL capabilities.
+- **TEST-026-5**: Memory and null lock operations validate inputs and fail closed.
+
+## [SPEC-027] Persistent File Cache Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST accept only an absolute canonical cache root.
+- MUST derive tenant, namespace, and key paths from validated identity digests.
+- MUST verify bounded frame identity, schema, expiry, and value before returning bytes.
+- MUST publish replacements atomically and leave no successful-operation temporary files.
+- MUST treat expiry and corruption as misses without damaging another namespace.
+- MUST preserve values across driver recreation and fail closed after shutdown.
+- MUST advertise cache capabilities honestly and exclude unsupported locks.
+
+### Tests
+- **TEST-027-1**: Replacement persists the final bytes across driver recreation.
+- **TEST-027-2**: Exact expiry and malformed frames return misses and remove the entry.
+- **TEST-027-3**: Flush removes only the selected tenant namespace.
+- **TEST-027-4**: Verified manager routing supports get, set, TTL, and delete.
+- **TEST-027-5**: Non-canonical roots and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-028] Manager-Level Remember and Memoize Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST let `CacheManager.remember` return an existing cached value without rerunning its loader.
+- MUST call the supplied loader exactly once for a miss in the covered single-threaded path,
+  then persist the returned bytes through the selected verified connection.
+- MUST let `CacheManager.memoize` expose the same behavior behind a reusable zero-argument
+  callable.
+- MUST validate that remember and memoize loaders are callable.
+- MUST reuse the existing driver read/write contracts instead of expanding backend contracts in
+  this slice.
+
+### Tests
+- **TEST-028-1**: `remember` stores and reuses the first loaded bytes for the same key.
+- **TEST-028-2**: `memoize` wraps a loader and returns cached bytes on subsequent calls.
+- **TEST-028-3**: Non-callable loaders are rejected before cache-fill execution.
+
+---
+
+## [SPEC-029] Database Cache Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `database` cache driver that routes through `CacheManager` using the
+  existing cache read/write/TTL/namespace/flush contracts.
+- MUST persist bounded cache bytes across driver recreation when configured with a persistent
+  database URL.
+- MUST treat expiry at the exact TTL boundary as a cache miss and remove only the expired row.
+- MUST scope delete and flush to one exact application, tenant, namespace, and key boundary.
+- MUST treat malformed persisted values as cache misses and remove only the exact invalid row.
+- MUST NOT advertise lock capability in this slice.
+
+### Tests
+- **TEST-029-1**: Replacement persists the final bytes across driver recreation.
+- **TEST-029-2**: Exact expiry and invalid persisted rows return misses and remove the row.
+- **TEST-029-3**: Flush removes only the selected tenant namespace.
+- **TEST-029-4**: Verified manager routing supports get, set, TTL, and delete, but rejects lock
+  capability requests.
+- **TEST-029-5**: Invalid URLs and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-030] Database Lock Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `database` lock-capable cache driver through the existing `CacheManager`
+  lock routing.
+- MUST scope every lease to the exact application, tenant, namespace, and key identity.
+- MUST permit at most one unexpired owner across driver instances using a monotonic fencing token.
+- MUST reject renew and release from a different, expired, or superseded lease.
+- MUST preserve cache flush boundaries so deleting one namespace never erases unrelated lock state.
+- MUST fail closed after shutdown and validate owner and TTL inputs before lock mutation.
+
+### Tests
+- **TEST-030-1**: Two driver instances contend for one database-backed lease and only one active
+  owner succeeds at a time.
+- **TEST-030-2**: A forged owner cannot renew or release another owner's persisted lease.
+- **TEST-030-3**: Expiry permits a new owner with a greater fencing token.
+- **TEST-030-4**: Verified manager routing supports acquire, renew, and release for the database
+  driver.
+- **TEST-030-5**: Invalid lock inputs and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-031] Memcached Cache Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `memcached` cache driver that routes through `CacheManager` using the
+  existing read/write/TTL/namespace contracts.
+- MUST scope cache keys to the exact application, tenant, and namespace without relying on a
+  destructive global flush.
+- MUST treat Memcached eviction and non-durable forever entries as normal cache-miss behavior.
+- MUST translate TTLs into Memcached's relative/absolute expiry rules without widening AF's exact
+  positive-duration validation contract.
+- MUST advertise only the capabilities it can verify in this slice and exclude flush and locks.
+
+### Tests
+- **TEST-031-1**: Tenant-scoped keys isolate same-named entries and eviction becomes a normal miss.
+- **TEST-031-2**: Forever, short relative TTL, and absolute Memcached TTL translations stay
+  bounded and deterministic.
+- **TEST-031-3**: Verified manager routing supports get, set, TTL, and delete, but rejects flush.
+- **TEST-031-4**: Unsafe host, port, timeout, or extra configuration values are rejected.
+- **TEST-031-5**: Missing Memcached runtime and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-032] Memcached Lock Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide Memcached lock acquisition through the verified `memcached` cache driver using the
+  shared `CacheManager` lock contract.
+- MUST permit at most one active lock owner per namespace/key at a time.
+- MUST reject renew and release requests from a different owner or stale lease.
+- MUST advance fencing tokens monotonically for newly claimed Memcached lock leases while the token
+  key remains scoped to the exact application, tenant, namespace, and logical key.
+- MUST fail closed on invalid lock entries, Memcached client failures, and post-shutdown access.
+- MUST continue to omit flush capability and MUST NOT claim durable lock retention across eviction
+  or restart.
+
+### Tests
+- **TEST-032-1**: One Memcached lock owner acquires the lease, a contending owner is rejected, and
+  a later claim after expiry advances the fencing token.
+- **TEST-032-2**: Renew and release succeed only for the current matching lease and fail for forged
+  or stale owners.
+- **TEST-032-3**: Verified manager routing exposes Memcached lock capability without widening flush
+  capability.
+- **TEST-032-4**: Invalid lock entries, lock-key derivation failures, client-operation failures,
+  and post-shutdown lock operations fail closed with lock-specific stages.
+
+---
+
+## [SPEC-033] Redis Cache And Lock Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide a verified `redis` cache driver that routes through `CacheManager` using the
+  existing read/write/TTL/namespace/lock contracts.
+- MUST scope cache keys, lock keys, and fencing-token keys to the exact application, tenant,
+  namespace, and logical key identities.
+- MUST translate AF TTLs into Redis millisecond expiry without widening AF's exact
+  positive-duration validation contract.
+- MUST permit at most one active Redis lock owner per namespace/key at a time and reject renew or
+  release from a different or stale lease.
+- MUST treat eviction or restart loss as normal cache or lock misses and MUST continue to omit
+  flush capability.
+- MUST fail closed on invalid runtime identity, unsafe configuration, client-operation failures,
+  and post-shutdown access.
+
+### Tests
+- **TEST-033-1**: Tenant-scoped keys isolate same-named entries and eviction becomes a normal miss.
+- **TEST-033-2**: Redis cache writes use millisecond TTLs and expire at the exact boundary.
+- **TEST-033-3**: One Redis lock owner acquires the lease, a contending owner is rejected, and a
+  later claim after expiry advances the fencing token.
+- **TEST-033-4**: Renew and release succeed only for the current matching lease and fail for forged
+  or stale owners.
+- **TEST-033-5**: Verified manager routing supports get, set, delete, acquire, renew, and release,
+  but still rejects flush.
+- **TEST-033-6**: Missing Redis runtime, unsafe host/port/db/timeout settings, client failures,
+  invalid namespace versions, and post-shutdown access fail closed with Redis-specific stages.
+
+
+---
+
+## [SPEC-034] Bounded Cache-Fill Funnel
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST preserve existing `remember` and `memoize` behavior when no lock TTL is supplied.
+- MUST require verified read, write, TTL, namespace, and lock capabilities when coalescing is
+  requested.
+- MUST permit one active loader for a contended namespace/key while waiters reuse the published
+  bytes.
+- MUST bound contention by a positive wait timeout and surface expiry as a transient platform
+  failure.
+- MUST double-check the cache after acquiring ownership.
+- MUST renew ownership after loading and MUST NOT publish when the lease was lost.
+- MUST validate lock and wait durations before cache access.
+
+### Tests
+- **TEST-034-1**: Eight concurrent remembers for one key return identical bytes while the loader
+  runs once.
+- **TEST-034-2**: A continuously busy funnel fails with a sanitized transient timeout.
+- **TEST-034-3**: A loader that outlives its lease cannot publish stale bytes.
+- **TEST-034-4**: Missing or non-positive funnel durations fail before cache execution.
+- **TEST-034-5**: `memoize` forwards the same bounded coalescing contract.
+
+---
+
+## [SPEC-035] Stale-While-Revalidate Cache Fill
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST preserve raw payload bytes and distinguish fresh lifetime from the bounded retained-stale
+  lifetime without requiring drivers to return expired entries.
+- MUST require verified read, write, TTL, namespace, and lock capabilities.
+- MUST return stale bytes without waiting for the loader and MUST schedule at most one refresh for
+  a namespace/key while a current lease exists.
+- MUST renew ownership before publishing refreshed bytes and MUST preserve stale data after loader,
+  scheduler, or lease-renewal failure.
+- MUST cold-fill through one owner after hard expiry and MUST bound contention by a positive wait
+  timeout.
+- MUST validate all durations, the loader, and the scheduler before cache mutation.
+- MUST scope freshness markers to the exact namespace and a bounded digest of the logical key.
+
+### Tests
+- **TEST-035-1**: Fresh data is returned directly; after fresh expiry repeated callers receive the
+  same stale bytes while only one refresh is scheduled.
+- **TEST-035-2**: Successful refresh replaces the retained value and restores the fresh interval.
+- **TEST-035-3**: Loader, scheduler, and expired-refresh-lease failures preserve stale bytes and
+  permit a later retry.
+- **TEST-035-4**: Hard expiry performs a new bounded cold fill; cold lease loss and persistent
+  contention fail transiently without publishing.
+- **TEST-035-5**: Non-positive durations, non-callable scheduling, and an overflowing hard horizon
+  fail before cache mutation.
+
