@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import typer
 
+from af.application.self_design_execution import SelfDesignExecutionController
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication
 from af.framework.errors import AFError, PlatformError, PlatformReason, ServiceNotBound
@@ -22,6 +24,7 @@ def create_cli(
     version_control: VersionControlController | None = None,
     self_analysis_operation: SelfAnalysisOperation | None = None,
     self_design_operation: SelfDesignOperation | None = None,
+    self_design_execution: SelfDesignExecutionController | None = None,
 ) -> typer.Typer:
     """Compose the installed CLI without granting self-operation write authority."""
     cli = create_base_cli(
@@ -62,6 +65,38 @@ def create_cli(
                     stage="cli.self-design.evidence-provider",
                 )
             typer.echo(operation.plan().canonical_json())
+        except (AFError, TypeError, ValueError) as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(code=2) from None
+
+    @cli.command("self-design-execute")
+    def execute_self_design(
+        context: typer.Context,
+        execute: bool = typer.Option(
+            False,
+            "--execute",
+            help="Apply one explicitly configured governed self-design cycle.",
+        ),
+    ) -> None:
+        """Preview or apply one explicit governed self-design mutation cycle."""
+        try:
+            controller = self_design_execution
+            if controller is None:
+                try:
+                    controller = current_application_from_context(context).container.resolve(
+                        SelfDesignExecutionController
+                    )
+                except ServiceNotBound:
+                    controller = None
+            if controller is None:
+                raise PlatformError(
+                    PlatformReason.CONFIGURATION_INVALID,
+                    stage="cli.self-design.execution-controller",
+                )
+            if not execute:
+                typer.echo(controller.preview().canonical_json())
+                return
+            typer.echo(json.dumps(controller.execute().to_dict(), sort_keys=True))
         except (AFError, TypeError, ValueError) as error:
             typer.echo(str(error), err=True)
             raise typer.Exit(code=2) from None
