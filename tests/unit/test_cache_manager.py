@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from threading import Barrier
+from threading import Barrier, Event, Lock
 
 import pytest
 
@@ -396,6 +396,159 @@ def test_cache_manager_remember_populates_cache_once_per_key() -> None:
     manager.close()
 
 
+def test_cache_manager_remember_coalesces_contended_loaders() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    manager.connection()
+    namespace = _namespace()
+    key = CacheKey("remember:coalesced")
+    barrier = Barrier(8)
+    loader_started = Event()
+    release_loader = Event()
+    counter_lock = Lock()
+    calls = 0
+
+    def load() -> bytes:
+        nonlocal calls
+        with counter_lock:
+            calls += 1
+        loader_started.set()
+        assert release_loader.wait(timeout=1)
+        return b"coalesced"
+
+    def remember() -> bytes:
+        barrier.wait()
+        return manager.remember(
+            namespace,
+            key,
+            load,
+            ttl=timedelta(seconds=30),
+            lock_ttl=timedelta(seconds=5),
+            wait_timeout=timedelta(seconds=1),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = tuple(executor.submit(remember) for _ in range(8))
+        assert loader_started.wait(timeout=1)
+        release_loader.set()
+        values = tuple(future.result(timeout=2) for future in futures)
+
+    assert values == (b"coalesced",) * 8
+    assert calls == 1
+    manager.close()
+
+
+def test_cache_manager_remember_fails_boundedly_when_funnel_stays_busy() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("remember:busy")
+    lease = manager.acquire_lock(
+        namespace,
+        key,
+        LockOwner("existing-owner"),
+        ttl=timedelta(seconds=30),
+    )
+    assert lease is not None
+
+    with pytest.raises(PlatformError) as captured:
+        manager.remember(
+            namespace,
+            key,
+            lambda: b"must-not-load",
+            lock_ttl=timedelta(seconds=5),
+            wait_timeout=timedelta(milliseconds=1),
+        )
+
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert captured.value.stage == "cache.remember.wait_timeout"
+    assert manager.release_lock(namespace, key, lease)
+    manager.close()
+
+
+def test_cache_manager_remember_rejects_stale_loader_write_after_lease_loss() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("remember:lease-loss")
+
+    def load() -> bytes:
+        clock.now += timedelta(seconds=2)
+        return b"stale"
+
+    with pytest.raises(PlatformError) as captured:
+        manager.remember(
+            namespace,
+            key,
+            load,
+            lock_ttl=timedelta(seconds=1),
+            wait_timeout=timedelta(seconds=1),
+        )
+
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert captured.value.stage == "cache.remember.lease_lost"
+    assert manager.get(namespace, key) is None
+    manager.close()
+
+
+def test_cache_manager_remember_validates_funnel_durations() -> None:
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=Clock(),
+    )
+    manager.install(memory_cache_registration(clock=Clock()))
+    namespace = _namespace()
+    key = CacheKey("remember:funnel-validation")
+
+    with pytest.raises(ValueError, match="lock TTL"):
+        manager.remember(
+            namespace,
+            key,
+            lambda: b"value",
+            lock_ttl=timedelta(0),
+        )
+    with pytest.raises(ValueError, match="requires a lock TTL"):
+        manager.remember(
+            namespace,
+            key,
+            lambda: b"value",
+            wait_timeout=timedelta(seconds=1),
+        )
+    with pytest.raises(ValueError, match="wait timeout"):
+        manager.remember(
+            namespace,
+            key,
+            lambda: b"value",
+            lock_ttl=timedelta(seconds=1),
+            wait_timeout=timedelta(0),
+        )
+    manager.close()
+
+
 def test_cache_manager_memoize_wraps_loader_with_cache_lookup() -> None:
     clock = Clock()
     manager = CacheManager(
@@ -415,7 +568,14 @@ def test_cache_manager_memoize_wraps_loader_with_cache_lookup() -> None:
         calls += 1
         return b"memoized"
 
-    memoized = manager.memoize(namespace, key, load, ttl=timedelta(seconds=30))
+    memoized = manager.memoize(
+        namespace,
+        key,
+        load,
+        ttl=timedelta(seconds=30),
+        lock_ttl=timedelta(seconds=5),
+        wait_timeout=timedelta(seconds=1),
+    )
 
     assert memoized() == b"memoized"
     assert memoized() == b"memoized"
