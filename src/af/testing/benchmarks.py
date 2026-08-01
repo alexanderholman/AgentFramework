@@ -541,6 +541,13 @@ class BenchmarkWorkspace:
             return "workspace-network-egress-declared"
         if fixture.access_tier is not None and self.access_tier != fixture.access_tier:
             return "workspace-access-tier-mismatch"
+        if (
+            fixture.retention_policy is not None
+            and self.retention_policy != fixture.retention_policy
+        ):
+            return "workspace-retention-policy-mismatch"
+        if fixture.deletion_policy is not None and self.deletion_policy != fixture.deletion_policy:
+            return "workspace-deletion-policy-mismatch"
         return None
 
 
