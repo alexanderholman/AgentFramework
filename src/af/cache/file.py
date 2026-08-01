@@ -99,9 +99,7 @@ class FileCacheDriver:
 
     @staticmethod
     def _identity(namespace: CacheNamespace) -> str:
-        canonical = (
-            f"{namespace.application_id}\x00{namespace.tenant_id}\x00{namespace.name}"
-        )
+        canonical = f"{namespace.application_id}\x00{namespace.tenant_id}\x00{namespace.name}"
         return hashlib.sha256(canonical.encode()).hexdigest()
 
     @staticmethod
