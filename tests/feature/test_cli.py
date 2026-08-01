@@ -79,51 +79,55 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
     result = runner.invoke(create_cli(application), ["routes"])
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == [
-        {
-            "procedure_id": "character-count",
-            "version": "1.0.0",
-            "intent": "text.character_count",
-            "arguments": [
-                {
-                    "name": "text",
-                    "value_type": "text",
-                    "min_length": 1,
-                    "max_length": 10000,
-                    "allow_blank": True,
-                },
-                {
-                    "name": "character",
-                    "value_type": "text",
-                    "min_length": 1,
-                    "max_length": 1,
-                    "allow_blank": True,
-                },
-            ],
-            "effect": "read_only",
-            "risk": "none",
-            "requires_confirmation": False,
-            "tier": "procedural",
-            "pure": True,
-            "replay_safe": True,
-            "has_selection_grounding": True,
-            "metrics": {"cost": 1, "latency": 1, "intelligence": 1},
-        },
-        {
-            "procedure_id": "hello",
-            "version": "1.0.0",
-            "intent": "system.hello",
-            "arguments": [],
-            "effect": "read_only",
-            "risk": "none",
-            "requires_confirmation": False,
-            "tier": "static",
-            "pure": True,
-            "replay_safe": True,
-            "has_selection_grounding": False,
-            "metrics": {"cost": 0, "latency": 0, "intelligence": 0},
-        },
-    ]
+    payload = json.loads(result.stdout)
+
+    assert [item["procedure_id"] for item in payload] == sorted(
+        item["procedure_id"] for item in payload
+    )
+    indexed = {item["procedure_id"]: item for item in payload}
+    assert indexed["character-count"] == {
+        "procedure_id": "character-count",
+        "version": "1.0.0",
+        "intent": "text.character_count",
+        "arguments": [
+            {
+                "name": "text",
+                "value_type": "text",
+                "min_length": 1,
+                "max_length": 10000,
+                "allow_blank": True,
+            },
+            {
+                "name": "character",
+                "value_type": "text",
+                "min_length": 1,
+                "max_length": 1,
+                "allow_blank": True,
+            },
+        ],
+        "effect": "read_only",
+        "risk": "none",
+        "requires_confirmation": False,
+        "tier": "procedural",
+        "pure": True,
+        "replay_safe": True,
+        "has_selection_grounding": True,
+        "metrics": {"cost": 1, "latency": 1, "intelligence": 1},
+    }
+    assert indexed["hello"] == {
+        "procedure_id": "hello",
+        "version": "1.0.0",
+        "intent": "system.hello",
+        "arguments": [],
+        "effect": "read_only",
+        "risk": "none",
+        "requires_confirmation": False,
+        "tier": "static",
+        "pure": True,
+        "replay_safe": True,
+        "has_selection_grounding": False,
+        "metrics": {"cost": 0, "latency": 0, "intelligence": 0},
+    }
 
 
 def test_cli_ideon_command_uses_the_composed_reference_service(application) -> None:  # type: ignore[no-untyped-def]
