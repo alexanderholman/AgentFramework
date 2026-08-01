@@ -21,8 +21,10 @@ from af.interfaces.cli import (
     create_cli,
     current_application_from_context,
     current_container_from_context,
+    current_interaction_from_context,
 )
 from af.interfaces.cli_commands import bind_cli_command_contributor
+from af.interfaces.cli_interactions import PromptEvent, ScriptedCliInteraction
 
 runner = CliRunner()
 
@@ -425,6 +427,89 @@ def test_provider_commands_run_inside_a_fresh_cli_invocation_scope() -> None:
             "effective_scope": "deterministic",
             "invocation_kind": "interaction",
         }
+    finally:
+        application.shutdown()
+
+
+def test_provider_commands_can_use_scripted_cli_interactions() -> None:
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(
+                    json.dumps(
+                        {
+                            "name": interaction.text(message="Name"),
+                            "confirmed": interaction.confirm(message="Continue?", default=True),
+                        }
+                    )
+                )
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    interactions: list[ScriptedCliInteraction] = []
+
+    def build_interaction() -> ScriptedCliInteraction:
+        interaction = ScriptedCliInteraction(
+            text_responses=("Ralph",),
+            confirm_responses=(True,),
+        )
+        interactions.append(interaction)
+        return interaction
+
+    try:
+        result = runner.invoke(
+            create_cli(application, interaction_factory=build_interaction),
+            ["provider-prompt"],
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {"name": "Ralph", "confirmed": True}
+        assert tuple(interactions[0].events) == (
+            PromptEvent(kind="text", message="Name"),
+            PromptEvent(kind="confirm", message="Continue?"),
+        )
+    finally:
+        application.shutdown()
+
+
+def test_provider_commands_refuse_interaction_without_a_scripted_adapter() -> None:
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-refusal"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    try:
+        result = runner.invoke(create_cli(application), ["provider-prompt"])
+
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert result.stderr == "interactive input is unavailable for this CLI invocation\n"
     finally:
         application.shutdown()
 

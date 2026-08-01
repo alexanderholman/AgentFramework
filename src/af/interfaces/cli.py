@@ -29,6 +29,7 @@ from af.interfaces.cli_commands import (
     install_cli_command_contributors,
     install_click_group_command_contributors,
 )
+from af.interfaces.cli_interactions import CliInteraction, NonInteractiveCliInteraction
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
@@ -44,6 +45,7 @@ _APPLICATION_FACTORY = re.compile(
 _MAX_APPLICATION_FACTORY_LENGTH = 256
 _CURRENT_APPLICATION_META_KEY = "af.current_application"
 _CURRENT_CONTAINER_META_KEY = "af.current_container"
+_CURRENT_INTERACTION_META_KEY = "af.current_interaction"
 
 
 def _validate_application_factory(value: str) -> None:
@@ -109,10 +111,27 @@ def current_container_from_context(context: typer.Context) -> Container:
     return container
 
 
+def current_interaction_from_context(context: typer.Context) -> CliInteraction:
+    current = context.meta.get(_CURRENT_INTERACTION_META_KEY)
+    if not callable(current):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.interaction-context",
+        )
+    interaction = current()
+    if not isinstance(interaction, CliInteraction):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.interaction-context",
+        )
+    return interaction
+
+
 def create_cli(
     application: AFApplication | None = None,
     *,
     application_factory: Callable[[], AFApplication] | None = None,
+    interaction_factory: Callable[[], CliInteraction] | None = None,
     version_control: VersionControlController | None = None,
 ) -> typer.Typer:
     task_commands = typer.Typer(name="tasks", no_args_is_help=True, help="Persisted Task CRUD")
@@ -152,6 +171,7 @@ def create_cli(
     selected_factory_path: str | None = None
     lifecycle_context: typer.Context | Context | None = None
     current_invocation: Container | None = None
+    current_interaction: CliInteraction | None = None
     accepts_operator_factory = application is None and application_factory is None
 
     class _AFRootGroup(TyperGroup):
@@ -237,6 +257,13 @@ def create_cli(
             )
         return cached_application
 
+    def interaction() -> CliInteraction:
+        nonlocal current_interaction
+        if current_interaction is None:
+            factory = interaction_factory or NonInteractiveCliInteraction
+            current_interaction = factory()
+        return current_interaction
+
     def current_version_control() -> VersionControlController:
         nonlocal cached_version_control
         if cached_version_control is None:
@@ -263,6 +290,7 @@ def create_cli(
         selected_factory_path = None
         context.meta[_CURRENT_APPLICATION_META_KEY] = current
         context.meta[_CURRENT_CONTAINER_META_KEY] = current_container
+        context.meta[_CURRENT_INTERACTION_META_KEY] = interaction
         if factory_path is not None:
             if not accepts_operator_factory:
                 fail(
@@ -280,6 +308,7 @@ def create_cli(
         def close_owned_application() -> None:
             nonlocal cached_application
             nonlocal current_invocation
+            nonlocal current_interaction
             nonlocal lifecycle_context
             nonlocal selected_factory_path
             try:
@@ -287,6 +316,7 @@ def create_cli(
                     cached_application.shutdown()
             finally:
                 current_invocation = None
+                current_interaction = None
                 lifecycle_context = None
                 if owns_application:
                     cached_application = None
