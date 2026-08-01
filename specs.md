@@ -1812,3 +1812,31 @@ common directory without contacting or changing the upstream.
   but still rejects flush.
 - **TEST-033-6**: Missing Redis runtime, unsafe host/port/db/timeout settings, client failures,
   invalid namespace versions, and post-shutdown access fail closed with Redis-specific stages.
+
+
+---
+
+## [SPEC-034] Bounded Cache-Fill Funnel
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST preserve existing `remember` and `memoize` behavior when no lock TTL is supplied.
+- MUST require verified read, write, TTL, namespace, and lock capabilities when coalescing is
+  requested.
+- MUST permit one active loader for a contended namespace/key while waiters reuse the published
+  bytes.
+- MUST bound contention by a positive wait timeout and surface expiry as a transient platform
+  failure.
+- MUST double-check the cache after acquiring ownership.
+- MUST renew ownership after loading and MUST NOT publish when the lease was lost.
+- MUST validate lock and wait durations before cache access.
+
+### Tests
+- **TEST-034-1**: Eight concurrent remembers for one key return identical bytes while the loader
+  runs once.
+- **TEST-034-2**: A continuously busy funnel fails with a sanitized transient timeout.
+- **TEST-034-3**: A loader that outlives its lease cannot publish stale bytes.
+- **TEST-034-4**: Missing or non-positive funnel durations fail before cache execution.
+- **TEST-034-5**: `memoize` forwards the same bounded coalescing contract.
