@@ -11,6 +11,8 @@ from pathlib import Path
 from af.cache.contracts import (
     CacheKey,
     CacheNamespace,
+    LockLease,
+    LockOwner,
     _validated_operation,
     _validated_ttl,
     _validated_value,
@@ -76,6 +78,53 @@ class NullCacheDriver:
             raise TypeError("cache flush requires a validated namespace")
         self._assert_open()
         return 0
+
+    def acquire_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        owner: LockOwner,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        _validated_operation(namespace, key)
+        if not isinstance(owner, LockOwner):
+            raise TypeError("lock acquire requires a validated owner")
+        if _validated_ttl(ttl) is None:
+            raise ValueError("lock TTL is required")
+        self._assert_open()
+        return None
+
+    def renew_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock renewal requires a validated lease")
+        if _validated_ttl(ttl) is None:
+            raise ValueError("lock TTL is required")
+        self._assert_open()
+        return None
+
+    def release_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+    ) -> bool:
+        _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock release requires a validated lease")
+        self._assert_open()
+        return False
 
     def close(self) -> None:
         self._closed = True
