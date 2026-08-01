@@ -85,10 +85,7 @@ class SearchProjectionDelivery:
         object.__setattr__(self, "message_id", _message_id(self.message_id))
         if type(self.position) is not int or not 0 <= self.position <= _MAX_POSITION:
             raise ValueError("search projection position is invalid")
-        if (
-            not isinstance(self.processed_at, datetime)
-            or self.processed_at.utcoffset() is None
-        ):
+        if not isinstance(self.processed_at, datetime) or self.processed_at.utcoffset() is None:
             raise ValueError("search projection processed time must be timezone-aware")
         object.__setattr__(self, "processed_at", self.processed_at.astimezone(UTC))
         if not isinstance(self.kind, SearchProjectionKind):
@@ -100,13 +97,9 @@ class SearchProjectionDelivery:
                 _name(self.target_name, "target name"),
             )
         if self.kind is SearchProjectionKind.UPSERT:
-            valid = (
-                isinstance(self.resource, ResourceEnvelope) and self.identity is None
-            )
+            valid = isinstance(self.resource, ResourceEnvelope) and self.identity is None
         else:
-            valid = self.resource is None and isinstance(
-                self.identity, ResourceIdentity
-            )
+            valid = self.resource is None and isinstance(self.identity, ResourceIdentity)
         if not valid:
             raise ValueError("search projection must carry exactly one matching effect")
 
