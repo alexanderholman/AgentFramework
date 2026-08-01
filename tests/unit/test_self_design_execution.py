@@ -15,6 +15,7 @@ from af.application.self_design_publication import SelfDesignPublicationControll
 from af.application.self_design_recording import SelfDesignRecordingController
 from af.framework.self_design import (
     DesignCandidate,
+    DesignPlan,
     DesignPolicy,
     DesignRoute,
     DesignSnapshot,
