@@ -71,7 +71,7 @@ class FileCacheDriver:
         candidate = Path(root)
         if not candidate.is_absolute() or ".." in candidate.parts:
             raise ValueError("file cache root must be an absolute canonical path")
-        candidate.mkdir(parents=True, exist_ok=True)
+        candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
         resolved = candidate.resolve(strict=True)
         if resolved != candidate or not resolved.is_dir():
             raise ValueError("file cache root must be an absolute canonical directory")
@@ -244,7 +244,6 @@ class FileCacheDriver:
             )
             temporary = Path(temporary_name)
             try:
-                os.fchmod(descriptor, 0o600)
                 with os.fdopen(descriptor, "wb") as stream:
                     stream.write(frame)
                     stream.flush()
