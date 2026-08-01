@@ -194,8 +194,7 @@ def bind_cache_manager(
     if (
         not snapshot
         or any(
-            type(registration) is not DriverRegistration
-            or registration.manager_id != "cache"
+            type(registration) is not DriverRegistration or registration.manager_id != "cache"
             for registration in snapshot
         )
         or len({registration.driver_name for registration in snapshot}) != len(snapshot)
