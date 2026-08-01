@@ -453,7 +453,13 @@ class BenchmarkFixtureAuthorization:
             _sorted_unique_identifiers(self.permitted_audiences, "benchmark permitted audiences"),
         )
 
-    def policy_reason(self, observed_at: datetime, required_scope: AcceptanceScope) -> str | None:
+    def policy_reason(
+        self,
+        observed_at: datetime,
+        required_scope: AcceptanceScope,
+        *,
+        fixture: BenchmarkFixtureManifest,
+    ) -> str | None:
         observed = _aware_utc(observed_at, "benchmark authorization observation")
         if self.decision.effect is GateEffect.DENY:
             return self.decision.reason_code
@@ -464,6 +470,18 @@ class BenchmarkFixtureAuthorization:
         granted = self.decision.effective_scope
         if granted is None or not _scope_satisfies(granted, required_scope):
             return "effective-scope-narrowed"
+        if self.approval_class != fixture.required_approval_class:
+            return "fixture-approval-class-mismatch"
+        if self.reviewer_authority != fixture.reviewer_authority:
+            return "fixture-reviewer-authority-mismatch"
+        permitted_uses = set(self.permitted_uses)
+        if any(use in permitted_uses for use in fixture.prohibited_uses):
+            return "fixture-use-prohibited"
+        if any(use not in permitted_uses for use in fixture.intended_uses):
+            return "fixture-use-not-permitted"
+        permitted_audiences = set(self.permitted_audiences)
+        if any(audience not in permitted_audiences for audience in fixture.intended_audiences):
+            return "fixture-audience-not-permitted"
         return None
 
     def payload(self) -> dict[str, object]:
@@ -546,7 +564,7 @@ class BenchmarkBinding:
     precision: str
     configuration_digest: str
     threshold_digest: str
-    effective_scope: AcceptanceScope
+    effective_scope: AcceptanceScope | None
     authorization_digest: str
 
     def __post_init__(self) -> None:
@@ -570,7 +588,9 @@ class BenchmarkBinding:
         _identifier(self.precision, "benchmark precision")
         _digest(self.configuration_digest, "benchmark configuration digest")
         _digest(self.threshold_digest, "benchmark threshold digest")
-        if not isinstance(self.effective_scope, AcceptanceScope):
+        if self.effective_scope is not None and not isinstance(
+            self.effective_scope, AcceptanceScope
+        ):
             raise ValueError("benchmark effective scope is invalid")
         _digest(self.authorization_digest, "benchmark authorization digest")
 
@@ -581,7 +601,7 @@ class BenchmarkBinding:
             "artifact_digest": self.artifact_digest,
             "authorization_digest": self.authorization_digest,
             "configuration_digest": self.configuration_digest,
-            "effective_scope": self.effective_scope.value,
+            "effective_scope": None if self.effective_scope is None else self.effective_scope.value,
             "environment_digest": self.environment_digest,
             "fixture_content_digest": self.fixture_content_digest,
             "fixture_id": self.fixture_id,
@@ -992,7 +1012,11 @@ class BenchmarkRunner:
         return (
             request.fixture.eligibility_reason(observed_at)
             or request.workspace.policy_reason(request.fixture)
-            or request.authorization.policy_reason(observed_at, request.required_scope)
+            or request.authorization.policy_reason(
+                observed_at,
+                request.required_scope,
+                fixture=request.fixture,
+            )
         )
 
     @staticmethod
@@ -1000,7 +1024,6 @@ class BenchmarkRunner:
         request: BenchmarkRunRequest,
         descriptor: BenchmarkPluginDescriptor | None,
     ) -> BenchmarkBinding:
-        effective_scope = request.authorization.decision.effective_scope or request.required_scope
         return BenchmarkBinding(
             plugin_id=request.plugin_id,
             plugin_version=None if descriptor is None else descriptor.plugin_version,
@@ -1020,7 +1043,7 @@ class BenchmarkRunner:
             precision=request.precision,
             configuration_digest=request.configuration_digest,
             threshold_digest=request.threshold_digest,
-            effective_scope=effective_scope,
+            effective_scope=request.authorization.decision.effective_scope,
             authorization_digest=request.authorization.digest,
         )
 

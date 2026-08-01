@@ -294,6 +294,51 @@ def test_missing_governance_or_narrowed_scope_denies_before_setup() -> None:
     assert narrowed_result.reason_code == "effective-scope-narrowed"
     assert narrowed_result.attempted is False
 
+    mismatched_use = runner.run(
+        _request(
+            authorization=_authorization(permitted_uses=("training",)),
+        )
+    )
+    assert mismatched_use.outcome is BenchmarkOutcome.SKIPPED_BY_POLICY
+    assert mismatched_use.reason_code == "fixture-use-prohibited"
+    assert mismatched_use.attempted is False
+
+    unapproved_use = runner.run(
+        _request(
+            authorization=_authorization(permitted_uses=("reporting",)),
+        )
+    )
+    assert unapproved_use.outcome is BenchmarkOutcome.SKIPPED_BY_POLICY
+    assert unapproved_use.reason_code == "fixture-use-not-permitted"
+    assert unapproved_use.attempted is False
+
+    mismatched_audience = runner.run(
+        _request(
+            authorization=_authorization(permitted_audiences=("operators",)),
+        )
+    )
+    assert mismatched_audience.outcome is BenchmarkOutcome.SKIPPED_BY_POLICY
+    assert mismatched_audience.reason_code == "fixture-audience-not-permitted"
+    assert mismatched_audience.attempted is False
+
+    mismatched_approval = runner.run(
+        _request(
+            authorization=_authorization(approval_class="expedited-review"),
+        )
+    )
+    assert mismatched_approval.outcome is BenchmarkOutcome.SKIPPED_BY_POLICY
+    assert mismatched_approval.reason_code == "fixture-approval-class-mismatch"
+    assert mismatched_approval.attempted is False
+
+    mismatched_reviewer = runner.run(
+        _request(
+            authorization=_authorization(reviewer_authority="other-reviewer"),
+        )
+    )
+    assert mismatched_reviewer.outcome is BenchmarkOutcome.SKIPPED_BY_POLICY
+    assert mismatched_reviewer.reason_code == "fixture-reviewer-authority-mismatch"
+    assert mismatched_reviewer.attempted is False
+
 
 def test_authorization_is_checked_again_before_evidence_acceptance() -> None:
     events: list[str] = []
@@ -515,6 +560,8 @@ def test_runner_fail_closed_edge_cases_and_result_validation() -> None:
     )
     denied_result = BenchmarkRunner((_Plugin(events=[]),)).run(_request(authorization=denied))
     assert denied_result.reason_code == "policy-denied"
+    assert denied_result.binding.effective_scope is None
+    assert denied_result.binding.payload()["effective_scope"] is None
 
     revoked_result = BenchmarkRunner((_Plugin(events=[]),)).run(
         _request(
