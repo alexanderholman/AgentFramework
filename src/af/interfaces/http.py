@@ -14,7 +14,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from af import __version__
 from af.bootstrap import AFApplication, create_application
-from af.framework.context import AcceptanceScope, ExecutionContext, use_context
+from af.framework.container import InvocationKind
+from af.framework.context import AcceptanceScope, ExecutionContext
 from af.framework.errors import (
     InvalidPrompt,
     InvalidProviderConfiguration,
@@ -182,8 +183,9 @@ class _BoundedBodyMiddleware:
 
 
 class _RequestContextMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, *, application: AFApplication) -> None:
         self._app = app
+        self._application = application
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -194,7 +196,12 @@ class _RequestContextMiddleware:
             requested_scope=AcceptanceScope.DETERMINISTIC,
             effective_scope=AcceptanceScope.DETERMINISTIC,
         )
-        with use_context(context):
+        async with self._application.container.invocation_scope(
+            context=context,
+            kind=InvocationKind.REQUEST,
+        ) as invocation:
+            state = scope.setdefault("state", {})
+            state["af_invocation"] = invocation
             await self._app(scope, receive, send)
 
 
@@ -326,7 +333,7 @@ def _assemble_http_app(
         lifespan=lifespan,
     )
     app.state.af = resolved
-    app.add_middleware(_RequestContextMiddleware)
+    app.add_middleware(_RequestContextMiddleware, application=resolved)
     app.add_middleware(_BoundedBodyMiddleware)
     app.add_middleware(
         _TrustedHostMiddleware,

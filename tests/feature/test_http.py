@@ -4,7 +4,7 @@ import re
 from datetime import UTC, datetime
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 import af.interfaces.http as http_module
@@ -12,7 +12,7 @@ from af.bootstrap import AFApplication, create_application
 from af.config import Settings
 from af.domain.tasks import Task
 from af.framework.application import ApplicationState
-from af.framework.container import Container, ProviderRegistrar, ServiceProvider
+from af.framework.container import Container, ProviderRegistrar, Scope, ServiceProvider
 from af.framework.context import maybe_current_context
 from af.framework.errors import InvalidPrompt, InvalidProviderConfiguration
 from af.framework.types import PROMPT_MAX_LENGTH
@@ -178,6 +178,78 @@ def test_http_request_context_is_scoped_per_invocation() -> None:
     assert observed[0][0] != observed[1][0]
     assert observed[0][1:] == [("deterministic", "deterministic")][0]
     assert observed[1][1:] == [("deterministic", "deterministic")][0]
+
+
+def test_http_creates_and_disposes_request_invocation_scope() -> None:
+    class RequestScopedProbe:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        def close(self) -> None:
+            self.disposed = True
+
+    class Provider(ServiceProvider):
+        provider_id = "test.http-request-scope"
+
+        def register(self, container: ProviderRegistrar) -> None:
+            container.bind(
+                RequestScopedProbe,
+                lambda _: RequestScopedProbe(),
+                scope=Scope.INVOCATION,
+            )
+
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(Provider(),),
+    )
+    app = create_http_app(application)
+    observed_probes: list[RequestScopedProbe] = []
+
+    @app.get("/_request-scope")
+    async def request_scope_probe(request: Request) -> dict[str, object]:
+        invocation = request.state.af_invocation
+        probe = invocation.resolve(RequestScopedProbe)
+        observed_probes.append(probe)
+        context = invocation.context
+        return {
+            "probe_id": id(probe),
+            "disposed": probe.disposed,
+            "correlation_id": context.correlation_id,
+            "effective_scope": None
+            if context.effective_scope is None
+            else context.effective_scope.value,
+            "requested_scope": None
+            if context.requested_scope is None
+            else context.requested_scope.value,
+            "kind": invocation.invocation_kind.value,
+        }
+
+    with TestClient(
+        app,
+        base_url=f"http://{TEST_HOST}",
+        raise_server_exceptions=False,
+    ) as client:
+        first = client.get("/_request-scope")
+        second = client.get("/_request-scope")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_payload = first.json()
+    second_payload = second.json()
+    assert first_payload["disposed"] is False
+    assert second_payload["disposed"] is False
+    assert first_payload["kind"] == "request"
+    assert second_payload["kind"] == "request"
+    assert first_payload["effective_scope"] == "deterministic"
+    assert second_payload["effective_scope"] == "deterministic"
+    assert first_payload["requested_scope"] == "deterministic"
+    assert second_payload["requested_scope"] == "deterministic"
+    assert first_payload["probe_id"] != second_payload["probe_id"]
+    assert first_payload["correlation_id"] != second_payload["correlation_id"]
+    assert len(observed_probes) == 2
+    assert observed_probes[0] is not observed_probes[1]
+    assert all(probe.disposed for probe in observed_probes)
 
 
 def test_http_app_exposes_the_composed_ideon_route(application) -> None:  # type: ignore[no-untyped-def]
