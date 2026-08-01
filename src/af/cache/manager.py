@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from enum import StrEnum
+from hashlib import sha256
 from time import monotonic, sleep
 from types import MappingProxyType
 from typing import Protocol
@@ -39,6 +40,24 @@ def _duration(value: object, *, label: str) -> timedelta:
     if not isinstance(value, timedelta) or value <= timedelta(0):
         raise ValueError(f"cache {label} must be a positive duration")
     return value
+
+
+def _scheduler(schedule: object) -> Callable[[Callable[[], None]], None]:
+    if not callable(schedule):
+        raise TypeError("cache revalidation scheduler must be callable")
+    return schedule
+
+
+def _swr_marker(key: CacheKey) -> CacheKey:
+    digest = sha256(key.value.encode("utf-8")).hexdigest()
+    return CacheKey(f"af-swr:{digest}")
+
+
+def _stale_horizon(fresh_ttl: timedelta, stale_ttl: timedelta) -> timedelta:
+    try:
+        return fresh_ttl + stale_ttl
+    except OverflowError as exc:
+        raise ValueError("cache stale horizon must be bounded") from exc
 
 
 class CacheFeature(StrEnum):
@@ -307,6 +326,146 @@ class CacheManager(Manager[CacheDriver]):
                 raise PlatformError(
                     PlatformReason.TRANSIENT_FAILURE,
                     stage="cache.remember.wait_timeout",
+                )
+            sleep(min(0.01, remaining))
+
+    def stale_while_revalidate(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        loader: Callable[[], bytes],
+        *,
+        fresh_ttl: timedelta,
+        stale_ttl: timedelta,
+        lock_ttl: timedelta,
+        schedule: Callable[[Callable[[], None]], None],
+        wait_timeout: timedelta | None = None,
+        name: str | None = None,
+    ) -> bytes:
+        """Serve fresh or retained stale data while one owner schedules refresh."""
+
+        resolved = _loader(loader)
+        fresh_ttl = _duration(fresh_ttl, label="fresh TTL")
+        stale_ttl = _duration(stale_ttl, label="stale TTL")
+        lock_ttl = _duration(lock_ttl, label="lock TTL")
+        wait_timeout = _duration(
+            lock_ttl if wait_timeout is None else wait_timeout,
+            label="wait timeout",
+        )
+        scheduler = _scheduler(schedule)
+        hard_ttl = _stale_horizon(fresh_ttl, stale_ttl)
+        driver = self.connection(
+            name,
+            requires=(
+                CacheFeature.READ,
+                CacheFeature.WRITE,
+                CacheFeature.TTL,
+                CacheFeature.NAMESPACES,
+                CacheFeature.LOCKS,
+            ),
+        )
+        marker = _swr_marker(key)
+        cached = driver.get(namespace, key)
+        if cached is None:
+            return self._swr_cold_fill(
+                driver,
+                namespace,
+                key,
+                marker,
+                resolved,
+                fresh_ttl=fresh_ttl,
+                hard_ttl=hard_ttl,
+                lock_ttl=lock_ttl,
+                wait_timeout=wait_timeout,
+            )
+        if driver.get(namespace, marker) is not None:
+            return cached
+
+        owner = LockOwner(f"swr:{uuid4().hex}")
+        lease = driver.acquire_lock(namespace, key, owner, ttl=lock_ttl)
+        if lease is None:
+            return cached
+
+        def refresh() -> None:
+            active_lease = lease
+            try:
+                try:
+                    value = resolved()
+                except Exception:
+                    return
+                renewed = driver.renew_lock(
+                    namespace,
+                    key,
+                    active_lease,
+                    ttl=lock_ttl,
+                )
+                if renewed is None:
+                    return
+                active_lease = renewed
+                driver.set(namespace, key, value, ttl=hard_ttl)
+                driver.set(namespace, marker, b"fresh", ttl=fresh_ttl)
+            finally:
+                driver.release_lock(namespace, key, active_lease)
+
+        try:
+            scheduler(refresh)
+        except Exception:
+            driver.release_lock(namespace, key, lease)
+        return cached
+
+    def _swr_cold_fill(
+        self,
+        driver: CacheDriver,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        marker: CacheKey,
+        loader: Callable[[], bytes],
+        *,
+        fresh_ttl: timedelta,
+        hard_ttl: timedelta,
+        lock_ttl: timedelta,
+        wait_timeout: timedelta,
+    ) -> bytes:
+        owner = LockOwner(f"swr-cold:{uuid4().hex}")
+        deadline = monotonic() + wait_timeout.total_seconds()
+        while True:
+            lease = driver.acquire_lock(namespace, key, owner, ttl=lock_ttl)
+            if lease is not None:
+                active_lease = lease
+                try:
+                    cached = driver.get(namespace, key)
+                    if cached is not None:
+                        return cached
+                    value = loader()
+                    renewed = driver.renew_lock(
+                        namespace,
+                        key,
+                        active_lease,
+                        ttl=lock_ttl,
+                    )
+                    if renewed is None:
+                        cached = driver.get(namespace, key)
+                        if cached is not None:
+                            return cached
+                        raise PlatformError(
+                            PlatformReason.TRANSIENT_FAILURE,
+                            stage="cache.swr.lease_lost",
+                        )
+                    active_lease = renewed
+                    driver.set(namespace, key, value, ttl=hard_ttl)
+                    driver.set(namespace, marker, b"fresh", ttl=fresh_ttl)
+                    return value
+                finally:
+                    driver.release_lock(namespace, key, active_lease)
+
+            cached = driver.get(namespace, key)
+            if cached is not None:
+                return cached
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise PlatformError(
+                    PlatformReason.TRANSIENT_FAILURE,
+                    stage="cache.swr.wait_timeout",
                 )
             sleep(min(0.01, remaining))
 
