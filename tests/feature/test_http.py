@@ -121,6 +121,22 @@ def test_http_web_profiles_require_explicit_experimental_opt_in(
     assert 'data-af-experimental="enabled"' in experimental.text
 
 
+def test_http_rejects_unknown_web_profile_with_allowed_values() -> None:
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    with pytest.raises(
+        InvalidProviderConfiguration,
+        match=(
+            r"web profile must be one of basic, experimental, pretty; "
+            r"got 'retro-terminal'"
+        ),
+    ):
+        create_http_app(application, web_profile="retro-terminal")
+
+
 def test_http_request_context_is_scoped_per_invocation() -> None:
     application = create_application(
         task_repository=InMemoryTaskRepository(),
@@ -1235,6 +1251,25 @@ def test_http_construction_failure_closes_internally_created_application(
 
     with pytest.raises(InvalidProviderConfiguration):
         create_http_app(bind_host="0.0.0.0", allowed_hosts=())
+
+    assert owned.lifecycle.state is ApplicationState.SHUTDOWN
+
+
+def test_http_invalid_web_profile_closes_internally_created_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owned = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    monkeypatch.setattr(http_module, "create_application", lambda: owned)
+
+    with pytest.raises(
+        InvalidProviderConfiguration,
+        match=(r"web profile must be one of basic, experimental, pretty; got 'invalid'"),
+    ):
+        create_http_app(web_profile="invalid")
 
     assert owned.lifecycle.state is ApplicationState.SHUTDOWN
 

@@ -45,7 +45,7 @@ from af.interfaces.ideons import create_ideon_router
 from af.interfaces.rest import create_rest_router
 from af.interfaces.web import WebProfile, create_web_router
 
-_WEB_PROFILES = frozenset({"basic", "pretty", "experimental"})
+_WEB_PROFILES = ("basic", "experimental", "pretty")
 
 
 def _resolve_web_profile(
@@ -54,7 +54,10 @@ def _resolve_web_profile(
     enable_experimental_web_features: bool,
 ) -> tuple[WebProfile, Literal["disabled", "fallback", "enabled"]]:
     if web_profile not in _WEB_PROFILES:
-        raise InvalidProviderConfiguration("web profile is invalid")
+        allowed_profiles = ", ".join(_WEB_PROFILES)
+        raise InvalidProviderConfiguration(
+            f"web profile must be one of {allowed_profiles}; got {web_profile!r}"
+        )
     if web_profile == "experimental":
         if enable_experimental_web_features:
             return "experimental", "enabled"
@@ -240,15 +243,15 @@ def create_http_app(
 ) -> FastAPI:
     owns_application = application is None
     resolved = application or create_application()
-    resolved_bind_host = bind_host or resolved.settings.host
-    resolved_allowed_hosts = (
-        tuple(allowed_hosts) if allowed_hosts is not None else resolved.settings.allowed_hosts
-    )
-    resolved_web_profile, experimental_state = _resolve_web_profile(
-        web_profile,
-        enable_experimental_web_features=enable_experimental_web_features,
-    )
     try:
+        resolved_bind_host = bind_host or resolved.settings.host
+        resolved_allowed_hosts = (
+            tuple(allowed_hosts) if allowed_hosts is not None else resolved.settings.allowed_hosts
+        )
+        resolved_web_profile, experimental_state = _resolve_web_profile(
+            web_profile,
+            enable_experimental_web_features=enable_experimental_web_features,
+        )
         return _assemble_http_app(
             resolved,
             owns_application=owns_application,
