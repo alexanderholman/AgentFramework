@@ -581,6 +581,14 @@ def test_runner_fail_closed_edge_cases_and_result_validation() -> None:
         == "workspace-access-tier-mismatch"
     )
     assert (
+        _workspace(retention_policy="retain-forever").policy_reason(_manifest())
+        == "workspace-retention-policy-mismatch"
+    )
+    assert (
+        _workspace(deletion_policy="manual-delete").policy_reason(_manifest())
+        == "workspace-deletion-policy-mismatch"
+    )
+    assert (
         _manifest(provenance=()).eligibility_reason(datetime(2026, 7, 22, 22, 0, tzinfo=UTC))
         == "missing-provenance"
     )
