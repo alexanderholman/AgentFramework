@@ -492,10 +492,10 @@ class MemcachedCacheDriver:
             return False
         try:
             lock_key = self._lock_key(namespace, key)
-            current_value, _cas_token = self._client.gets(lock_key, default=None, cas_default=None)
+            current_value, cas_token = self._client.gets(lock_key, default=None, cas_default=None)
         except Exception as error:
             raise _failure(error, stage="cache.memcached.lock.release") from None
-        if current_value is None:
+        if current_value is None or cas_token is None:
             return False
         try:
             current = self._lease(current_value)
@@ -503,11 +503,26 @@ class MemcachedCacheDriver:
             raise _failure(error, stage="cache.memcached.lock.release") from None
         if current != lease or current.expires_at <= now:
             return False
+        release_ttl = timedelta(minutes=1)
+        release_marker = LockLease(
+            owner=lease.owner,
+            fencing_token=lease.fencing_token,
+            expires_at=now + release_ttl,
+        )
         try:
-            deleted = bool(self._client.delete(lock_key, noreply=False))
+            claimed = self._client.cas(
+                lock_key,
+                self._lease_bytes(release_marker),
+                cas_token,
+                expire=self._expire(release_ttl),
+                noreply=False,
+            )
+            if claimed is not True:
+                return False
+            self._client.delete(lock_key, noreply=False)
         except Exception as error:
             raise _failure(error, stage="cache.memcached.lock.release") from None
-        return deleted or current == lease
+        return True
 
     def close(self) -> None:
         if self._closed:
