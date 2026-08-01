@@ -2551,3 +2551,32 @@ remaining deterministic, local, auditable, and authority-neutral.
 - `src/af/infrastructure/git_version_control.py`
 - `src/af/interfaces/cli.py`
 - Version-control unit, integration, and feature tests
+
+
+---
+
+## DEC-030: Keep Cache Non-Authoritative and Namespace Every Mutation
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 introduces local cache stores before persistent and network drivers. Cache misses,
+expiry, eviction, and an explicit null store must remain normal behavior, while a flush must
+never cross application or tenant boundaries.
+
+### Decision
+1. Route cache access through an application-owned `CacheManager` that constructs only
+   registered drivers with current capability evidence.
+2. Require every operation to carry an immutable application, tenant, and namespace
+   identity plus a bounded key.
+3. Store bounded bytes only in this first slice; cache values never become authority.
+4. Make TTL expiry fail as a miss at the expiry boundary and scope flush to one exact
+   namespace.
+5. Provide memory and null drivers as explicit configurations; the null driver validates
+   requests but retains nothing.
+
+### Consequences
+The first cache slice is deterministic, testable, and safe for tenant isolation. Higher-level
+remember, stale-while-revalidate, locking, persistent stores, and network stores remain
+separate issue #19 slices.
