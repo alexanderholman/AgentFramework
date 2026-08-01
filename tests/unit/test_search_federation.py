@@ -218,10 +218,7 @@ def test_federator_rejects_malformed_source_results(hits: object) -> None:
     [
         (_hit("resource-a", rank=1), _hit("resource-b", rank=1)),
         (_hit("resource-a", rank=2), _hit("resource-b", rank=1)),
-        tuple(
-            _hit(f"resource-{index}", rank=index + 1)
-            for index in range(21)
-        ),
+        tuple(_hit(f"resource-{index}", rank=index + 1) for index in range(21)),
     ],
 )
 def test_federator_rejects_noncanonical_or_unbounded_source_ranking(
@@ -409,6 +406,7 @@ def test_federation_value_contracts_reject_invalid_evidence() -> None:
             failures=(),
         )
 
+
 def test_federated_result_rejects_contradictory_source_and_identity_evidence() -> None:
     hit = _hit("resource-a", rank=1)
     alpha = FederationContribution("alpha", 1, 0.5)
@@ -448,9 +446,7 @@ def test_federated_result_rejects_contradictory_source_and_identity_evidence() -
             hits=(),
             explanations=(),
             searched_sources=tuple(f"source-{index}" for index in range(16)),
-            failures=(
-                FederationFailure("overflow", PlatformReason.PERMANENT_FAILURE),
-            ),
+            failures=(FederationFailure("overflow", PlatformReason.PERMANENT_FAILURE),),
         )
     with pytest.raises(ValueError, match="contribution sources"):
         FederatedSearchResult(
@@ -466,4 +462,3 @@ def test_federated_result_rejects_contradictory_source_and_identity_evidence() -
             searched_sources=("alpha",),
             failures=(),
         )
-
