@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
@@ -9,6 +9,10 @@ from fastapi.testclient import TestClient
 from mcp.shared.memory import create_connected_server_and_client_session
 
 import af.interfaces.mcp as mcp_module
+from af.application.self_design_execution import (
+    SelfDesignExecutionController,
+    SelfDesignExecutionResult,
+)
 from af.bootstrap import create_application
 from af.config import Settings
 from af.framework.application import ApplicationState
@@ -17,7 +21,29 @@ from af.framework.errors import InvalidProviderConfiguration, PlatformError, Pla
 from af.framework.routing import ProcedureRegistry
 from af.framework.self_design import DesignCandidate, DesignPolicy, DesignSnapshot, DesignUnitKind
 from af.framework.self_design_operation import SelfDesignOperation
+from af.framework.self_design_publication import (
+    DesignPublicationEffect,
+    DesignPublicationReceipt,
+    DesignPublicationStatus,
+)
+from af.framework.self_design_recording import (
+    DesignPlanRecord,
+    DesignRecordAuthority,
+    DesignRecordingEffect,
+    DesignRecordingRequest,
+    DesignRecordResult,
+    DesignRecordStatus,
+)
 from af.framework.types import PROMPT_MAX_LENGTH
+from af.framework.version_control import (
+    CoordinationObservation,
+    GitObjectFormat,
+    InitializationStatus,
+    RemoteObservation,
+    RepositoryObservation,
+    VersionControlInitialization,
+    VersionControlManifest,
+)
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces.mcp import create_mcp_server
@@ -95,6 +121,123 @@ class SelfDesignProvider(ServiceProvider):
                 _SelfDesignEvidenceProvider(),
                 DesignPolicy(max_snapshot_age_seconds=60, tie_break_by_id=True),
                 lambda: _SELF_DESIGN_CAPTURED_AT,
+            ),
+        )
+
+
+def _coordination(tmp_path) -> VersionControlInitialization:  # type: ignore[no-untyped-def]
+    common_dir = tmp_path / ".git"
+    af_dir = common_dir / "af"
+    af_dir.mkdir(parents=True)
+    manifest = VersionControlManifest(
+        repository=RepositoryObservation(
+            root=str(tmp_path),
+            git_common_dir=str(common_dir),
+            branch="master",
+            head_sha="a" * 40,
+            object_format=GitObjectFormat.SHA1,
+        ),
+        upstream_remote=RemoteObservation(
+            name="origin",
+            fetch_url="https://example.invalid/AgentFramework.git",
+            push_url="https://example.invalid/AgentFramework.git",
+        ),
+        coordination=CoordinationObservation(
+            remote_name="af-local",
+            repository_path=str(af_dir / "remotes" / "coordination.git"),
+            worktree_root=str(af_dir / "worktrees"),
+        ),
+    )
+    manifest_path = af_dir / "version-control.json"
+    manifest_path.write_bytes(manifest.file_bytes())
+    return VersionControlInitialization(
+        status=InitializationStatus.UNCHANGED,
+        manifest=manifest,
+        manifest_path=str(manifest_path),
+    )
+
+
+def _self_design_execution_result(tmp_path) -> SelfDesignExecutionResult:  # type: ignore[no-untyped-def]
+    prepared = SelfDesignOperation(
+        _SelfDesignEvidenceProvider(),
+        DesignPolicy(max_snapshot_age_seconds=60, tie_break_by_id=True),
+        lambda: _SELF_DESIGN_CAPTURED_AT,
+    ).prepare()
+    coordination = _coordination(tmp_path)
+    authority = DesignRecordAuthority(
+        authority_id="test:record-124",
+        repository=prepared.snapshot.repository,
+        base_ref=prepared.snapshot.base_ref,
+        head_sha=prepared.snapshot.head_sha,
+        snapshot_digest=prepared.snapshot.digest,
+        plan_digest=prepared.plan.digest,
+        version_control_manifest_digest=coordination.manifest.digest(),
+        issued_at=_SELF_DESIGN_CAPTURED_AT,
+        expires_at=_SELF_DESIGN_CAPTURED_AT + timedelta(minutes=5),
+        allowed_effects=(DesignRecordingEffect.LOCAL_RECORD,),
+    )
+    record = DesignPlanRecord.from_request(
+        DesignRecordingRequest(
+            prepared=prepared,
+            authority=authority,
+            coordination=coordination,
+            observed_at=_SELF_DESIGN_CAPTURED_AT,
+        )
+    )
+    record_path = (
+        tmp_path
+        / ".git"
+        / "af"
+        / "self-design"
+        / "records"
+        / f"{prepared.plan.digest.removeprefix('sha256:')}.json"
+    )
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_bytes(record.canonical_bytes())
+    return SelfDesignExecutionResult(
+        plan=prepared.plan,
+        record=DesignRecordResult(
+            status=DesignRecordStatus.RECORDED,
+            record=record,
+            record_path=str(record_path),
+        ),
+        publication=DesignPublicationReceipt(
+            status=DesignPublicationStatus.PUBLISHED,
+            effect=DesignPublicationEffect.CREATE_ISSUE,
+            repository=prepared.snapshot.repository,
+            issue_number=146,
+            target_revision="sha256:" + "c" * 64,
+            draft_digest="sha256:" + "d" * 64,
+        ),
+    )
+
+
+class _RecordingSelfDesignExecutor:
+    def __init__(self, result: SelfDesignExecutionResult) -> None:
+        self.result = result
+        self.preview_calls = 0
+        self.execute_calls = 0
+
+    def preview(self):  # type: ignore[no-untyped-def]
+        self.preview_calls += 1
+        return self.result.plan
+
+    def execute(self) -> SelfDesignExecutionResult:
+        self.execute_calls += 1
+        return self.result
+
+
+class SelfDesignExecutionProvider(ServiceProvider):
+    provider_id = "test.self-design.execute"
+
+    def __init__(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        self._tmp_path = tmp_path
+
+    def register(self, registrar: ProviderRegistrar) -> None:
+        registrar.bind(
+            SelfDesignExecutionController,
+            lambda _: SelfDesignExecutionController(
+                _RecordingSelfDesignExecutor(_self_design_execution_result(self._tmp_path))
             ),
         )
 
@@ -265,6 +408,67 @@ def test_mcp_exposes_configured_self_design_tool() -> None:
                 ],
                 "unit_kind": "child_task",
             }
+
+    anyio.run(scenario)
+    application.shutdown()
+
+
+def test_mcp_exposes_configured_self_design_execute_tool(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    application = create_application(
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(SelfDesignExecutionProvider(tmp_path),),
+    )
+
+    async def scenario() -> None:
+        server = create_mcp_server(application)
+        async with create_connected_server_and_client_session(server) as session:
+            catalogue = await session.list_tools()
+            tools = {tool.name: tool for tool in catalogue.tools}
+            assert "af_self_design_execute" in tools
+            assert tools["af_self_design_execute"].annotations is not None
+            assert tools["af_self_design_execute"].annotations.readOnlyHint is False
+            assert tools["af_self_design_execute"].annotations.idempotentHint is False
+            assert tools["af_self_design_execute"].annotations.openWorldHint is True
+
+            preview = await session.call_tool("af_self_design_execute", {})
+
+            assert preview.isError is False
+            assert preview.structuredContent == {
+                "acceptance_clause_ids": ["acceptance:read-only-command"],
+                "allowed_writes": [],
+                "decision": {
+                    "assessments": [{"candidate_id": "issue:124", "reason": "eligible"}],
+                    "policy_digest": preview.structuredContent["decision"]["policy_digest"],
+                    "reason": "selected",
+                    "selected_candidate_id": "issue:124",
+                    "snapshot_digest": preview.structuredContent["decision"]["snapshot_digest"],
+                },
+                "objective_id": "objective:self-design",
+                "route": "propose",
+                "selected_candidate_id": "issue:124",
+                "stop_conditions": [
+                    "ambiguity",
+                    "authority_missing",
+                    "cancelled",
+                    "dependency_cycle",
+                    "evidence_missing",
+                    "overlap_detected",
+                    "snapshot_stale",
+                    "unsafe",
+                ],
+                "unit_kind": "child_task",
+            }
+
+            executed = await session.call_tool("af_self_design_execute", {"execute": True})
+
+            assert executed.isError is False
+            assert executed.structuredContent is not None
+            assert executed.structuredContent["plan"]["selected_candidate_id"] == "issue:124"
+            assert executed.structuredContent["record"]["status"] == "recorded"
+            assert "path" not in executed.structuredContent["record"]["record"]
+            assert executed.structuredContent["publication"]["status"] == "published"
+            assert executed.structuredContent["publication"]["issue_number"] == 146
 
     anyio.run(scenario)
     application.shutdown()
