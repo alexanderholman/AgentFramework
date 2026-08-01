@@ -180,10 +180,10 @@ class DatabaseCacheDriver:
                         )
                         return None
                     return value
-            except (SQLAlchemyError, TypeError, ValueError) as error:
+            except SQLAlchemyError as error:
+                raise _failure(error, stage="cache.database.get") from None
+            except (TypeError, ValueError):
                 self.delete(namespace, key)
-                if isinstance(error, SQLAlchemyError):
-                    raise _failure(error, stage="cache.database.get") from None
                 return None
 
     def set(
