@@ -15,6 +15,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
 from af import __version__
+from af.application.search import SearchController
 from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
 from af.domain.agent_routing import (
@@ -83,6 +84,34 @@ class DeleteResult(BaseModel):
     deleted: bool
 
 
+class SearchHitModel(BaseModel):
+    resource_id: str
+    source_id: str
+    authoritative_locator: str
+    tenant_id: str
+    projection_version: int
+    acl_evidence: list[str]
+    provenance: list[str]
+    score: float
+    rank: int
+    highlights: list[str]
+
+
+class SearchResultModel(BaseModel):
+    items: list[SearchHitModel]
+    total: int
+
+
+class SearchIndexSourceModel(BaseModel):
+    source: str
+    indexed: int
+
+
+class SearchIndexResultModel(BaseModel):
+    indexed: int
+    sources: list[SearchIndexSourceModel]
+
+
 class AgentRouteModel(BaseModel):
     prompt: str
     status: AgentRouteStatus
@@ -148,6 +177,7 @@ def create_mcp_server(application: AFApplication) -> FastMCP[None]:
 
 def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     controller = resolved.tasks
+    search = resolved.search
     agent_routes = resolved.agent_routes
     registry = resolved.container.resolve(ProcedureRegistry)
     transport_security = _transport_security_for(resolved)
@@ -252,6 +282,24 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     def af_delete_task(task_id: str) -> DeleteResult:
         return _invoke_mcp_tool(lambda: _delete_task(controller, task_id))
 
+    @server.tool(
+        name="af_index_search_resources",
+        description="Index persisted AF task and trace history into the configured search driver.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    def af_index_search_resources(limit: int = 100) -> SearchIndexResultModel:
+        return _invoke_mcp_tool(lambda: _index_search(search, limit=limit))
+
+    @server.tool(
+        name="af_search",
+        description="Query indexed AF history through the canonical tenant-safe search API.",
+        annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+        structured_output=True,
+    )
+    def af_search(text: str, limit: int = 20) -> SearchResultModel:
+        return _invoke_mcp_tool(lambda: _search(search, text=text, limit=limit))
+
     @server.resource(
         "af://manifest",
         name="AF manifest",
@@ -296,6 +344,42 @@ def _list_tasks(controller: TaskController) -> TaskListModel:
 def _delete_task(controller: TaskController, task_id: str) -> DeleteResult:
     controller.delete(task_id)
     return DeleteResult(id=task_id, deleted=True)
+
+
+def _index_search(search: SearchController, *, limit: int) -> SearchIndexResultModel:
+    result = search.index(limit=limit)
+    return SearchIndexResultModel.model_validate(
+        {
+            "indexed": result.indexed,
+            "sources": [
+                {"source": item.source, "indexed": item.indexed} for item in result.sources
+            ],
+        }
+    )
+
+
+def _search(search: SearchController, *, text: str, limit: int) -> SearchResultModel:
+    result = search.search(text, limit=limit)
+    return SearchResultModel.model_validate(
+        {
+            "items": [
+                {
+                    "resource_id": item.resource_id,
+                    "source_id": item.source_id,
+                    "authoritative_locator": item.authoritative_locator,
+                    "tenant_id": item.tenant_id,
+                    "projection_version": item.projection_version,
+                    "acl_evidence": list(item.acl_evidence),
+                    "provenance": list(item.provenance),
+                    "score": item.score,
+                    "rank": item.rank,
+                    "highlights": list(item.highlights),
+                }
+                for item in result.items
+            ],
+            "total": result.total,
+        }
+    )
 
 
 def _transport_security_for(

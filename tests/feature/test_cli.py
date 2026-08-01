@@ -18,6 +18,14 @@ from af.interfaces.cli import create_cli
 runner = CliRunner()
 
 
+def _search_application():  # type: ignore[no-untyped-def]
+    return create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+
 def test_cli_hello_uses_agent(application) -> None:  # type: ignore[no-untyped-def]
     result = runner.invoke(create_cli(application), ["hello"])
 
@@ -109,6 +117,42 @@ def test_cli_task_crud(application) -> None:  # type: ignore[no-untyped-def]
     assert json.loads(listed_after_delete.stdout) == []
 
 
+def test_cli_search_indexes_and_queries_task_and_trace_history() -> None:
+    application = _search_application()
+    try:
+        application.tasks.create("how many qs in qqqq")
+        application.tasks.execute("hello")
+
+        cli = create_cli(application)
+        indexed_result = runner.invoke(cli, ["search", "index"])
+
+        assert indexed_result.exit_code == 0
+        assert json.loads(indexed_result.stdout) == {
+            "indexed": 3,
+            "sources": [
+                {"source": "tasks", "indexed": 1},
+                {"source": "traces", "indexed": 2},
+            ],
+        }
+
+        queried_result = runner.invoke(cli, ["search", "query", "qqqq"])
+
+        assert queried_result.exit_code == 0
+        payload = json.loads(queried_result.stdout)
+        assert payload["total"] == 2
+        assert {item["source_id"] for item in payload["items"]} == {
+            "af_run_traces",
+            "af_tasks",
+        }
+        assert {item["tenant_id"] for item in payload["items"]} == {"af-local"}
+        assert all(
+            item["authoritative_locator"].startswith("af://relational/")
+            for item in payload["items"]
+        )
+    finally:
+        application.shutdown()
+
+
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
 
@@ -125,6 +169,7 @@ def test_cli_reports_expected_errors_without_stdout(application) -> None:  # typ
             "task not found: missing\n",
         ),
         (["tasks", "delete", "missing"], "task not found: missing\n"),
+        (["search", "query", "   "], "prompt must not be blank\n"),
     ]
 
     for arguments, expected_error in cases:

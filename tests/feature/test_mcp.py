@@ -28,6 +28,8 @@ EXPECTED_TOOLS = {
     "af_create_task",
     "af_update_task",
     "af_delete_task",
+    "af_index_search_resources",
+    "af_search",
     "af_route_agent",
 }
 
@@ -59,6 +61,11 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             assert tools["af_ask"].annotations.readOnlyHint is False
             assert tools["af_delete_task"].annotations is not None
             assert tools["af_delete_task"].annotations.destructiveHint is True
+            assert tools["af_index_search_resources"].annotations is not None
+            assert tools["af_index_search_resources"].annotations.readOnlyHint is False
+            assert tools["af_search"].annotations is not None
+            assert tools["af_search"].annotations.readOnlyHint is True
+            assert tools["af_search"].annotations.idempotentHint is True
             assert tools["af_route_agent"].annotations is not None
             assert tools["af_route_agent"].annotations.readOnlyHint is True
             assert tools["af_route_agent"].annotations.idempotentHint is True
@@ -116,6 +123,25 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             )
             assert updated.structuredContent is not None
             assert updated.structuredContent["output"] == "3"
+
+            indexed = await session.call_tool("af_index_search_resources", {})
+            assert indexed.isError is False
+            assert indexed.structuredContent == {
+                "indexed": 5,
+                "sources": [
+                    {"source": "tasks", "indexed": 1},
+                    {"source": "traces", "indexed": 4},
+                ],
+            }
+
+            searched = await session.call_tool("af_search", {"text": "pineapple"})
+            assert searched.isError is False
+            assert searched.structuredContent is not None
+            assert searched.structuredContent["total"] == 2
+            assert {item["source_id"] for item in searched.structuredContent["items"]} == {
+                "af_tasks",
+                "af_run_traces",
+            }
 
             deleted = await session.call_tool("af_delete_task", {"task_id": task_id})
             assert deleted.structuredContent == {"id": task_id, "deleted": True}
@@ -247,6 +273,7 @@ def test_mcp_reports_domain_failures_as_tool_errors(application) -> None:  # typ
                     "task not found: missing",
                 ),
                 ("af_delete_task", {"task_id": "missing"}, "task not found: missing"),
+                ("af_search", {"text": "   "}, "prompt must not be blank"),
             ]
 
             for tool_name, arguments, expected_error in cases:
