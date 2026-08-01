@@ -1633,3 +1633,24 @@ common directory without contacting or changing the upstream.
 - **TEST-026-3**: Expiry permits a new owner with a greater fencing token.
 - **TEST-026-4**: Manager dispatch requires verified lock, namespace, and TTL capabilities.
 - **TEST-026-5**: Memory and null lock operations validate inputs and fail closed.
+
+## [SPEC-027] Persistent File Cache Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST accept only an absolute canonical cache root.
+- MUST derive tenant, namespace, and key paths from validated identity digests.
+- MUST verify bounded frame identity, schema, expiry, and value before returning bytes.
+- MUST publish replacements atomically and leave no successful-operation temporary files.
+- MUST treat expiry and corruption as misses without damaging another namespace.
+- MUST preserve values across driver recreation and fail closed after shutdown.
+- MUST advertise cache capabilities honestly and exclude unsupported locks.
+
+### Tests
+- **TEST-027-1**: Replacement persists the final bytes across driver recreation.
+- **TEST-027-2**: Exact expiry and malformed frames return misses and remove the entry.
+- **TEST-027-3**: Flush removes only the selected tenant namespace.
+- **TEST-027-4**: Verified manager routing supports get, set, TTL, and delete.
+- **TEST-027-5**: Non-canonical roots and post-shutdown operations fail closed.
