@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -545,6 +546,156 @@ def test_cache_manager_remember_validates_funnel_durations() -> None:
             lambda: b"value",
             lock_ttl=timedelta(seconds=1),
             wait_timeout=timedelta(0),
+        )
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_serves_stale_and_refreshes_once() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("swr:resource")
+    scheduled: list[Callable[[], None]] = []
+    calls = 0
+
+    def load() -> bytes:
+        nonlocal calls
+        calls += 1
+        return f"value-{calls}".encode()
+
+    def schedule(refresh: Callable[[], None]) -> None:
+        scheduled.append(refresh)
+
+    options = {
+        "fresh_ttl": timedelta(seconds=5),
+        "stale_ttl": timedelta(seconds=10),
+        "lock_ttl": timedelta(seconds=5),
+        "wait_timeout": timedelta(seconds=1),
+        "schedule": schedule,
+    }
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
+    clock.now += timedelta(seconds=5)
+
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
+    assert calls == 1
+    assert len(scheduled) == 1
+
+    scheduled.pop()()
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-2"
+    assert calls == 2
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_preserves_stale_on_refresh_failure() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("swr:failure")
+    scheduled: list[Callable[[], None]] = []
+    failing = False
+
+    def load() -> bytes:
+        if failing:
+            raise RuntimeError("refresh unavailable")
+        return b"stable"
+
+    options = {
+        "fresh_ttl": timedelta(seconds=1),
+        "stale_ttl": timedelta(seconds=10),
+        "lock_ttl": timedelta(seconds=5),
+        "wait_timeout": timedelta(seconds=1),
+        "schedule": scheduled.append,
+    }
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"stable"
+    clock.now += timedelta(seconds=1)
+    failing = True
+
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"stable"
+    scheduled.pop()()
+    assert manager.get(namespace, key) == b"stable"
+
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"stable"
+    assert len(scheduled) == 1
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_cold_fills_after_hard_expiry() -> None:
+    clock = Clock()
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(memory_cache_registration(clock=clock))
+    namespace = _namespace()
+    key = CacheKey("swr:hard-expiry")
+    calls = 0
+
+    def load() -> bytes:
+        nonlocal calls
+        calls += 1
+        return f"value-{calls}".encode()
+
+    options = {
+        "fresh_ttl": timedelta(seconds=2),
+        "stale_ttl": timedelta(seconds=3),
+        "lock_ttl": timedelta(seconds=1),
+        "wait_timeout": timedelta(seconds=1),
+        "schedule": lambda refresh: None,
+    }
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-1"
+    clock.now += timedelta(seconds=5)
+    assert manager.stale_while_revalidate(namespace, key, load, **options) == b"value-2"
+    assert calls == 2
+    manager.close()
+
+
+def test_cache_manager_stale_while_revalidate_validates_policy() -> None:
+    manager = CacheManager(
+        connections={"primary": {"driver": "memory"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=Clock(),
+    )
+    manager.install(memory_cache_registration(clock=Clock()))
+    namespace = _namespace()
+    key = CacheKey("swr:validation")
+    common = {
+        "fresh_ttl": timedelta(seconds=1),
+        "stale_ttl": timedelta(seconds=1),
+        "lock_ttl": timedelta(seconds=1),
+        "wait_timeout": timedelta(seconds=1),
+        "schedule": lambda refresh: None,
+    }
+
+    for field in ("fresh_ttl", "stale_ttl", "lock_ttl", "wait_timeout"):
+        invalid = {**common, field: timedelta(0)}
+        with pytest.raises(ValueError):
+            manager.stale_while_revalidate(namespace, key, lambda: b"value", **invalid)
+    with pytest.raises(TypeError, match="scheduler"):
+        manager.stale_while_revalidate(
+            namespace,
+            key,
+            lambda: b"value",
+            **{**common, "schedule": object()},
         )
     manager.close()
 
