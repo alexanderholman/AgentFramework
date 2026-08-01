@@ -1858,3 +1858,48 @@ non-locking behavior unless they explicitly request coalescing.
 - DEC-047
 - SPEC-034
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #034 - Stale-While-Revalidate Cache Fill
+**Date**: 2026-08-01
+**Agent**: Codex / GPT-5
+**Status**: In Progress
+
+### Inputs
+- Final missing issue #19 slice on open PR #150
+- Verified raw-byte cache, TTL, namespace, and owner-fenced lock capabilities
+- Required red-before-green workflow and repository-wide `[SCRIPT:af-dev]` gate
+
+### Outputs
+- Added red-phase fresh/stale, one-refresh, hard-expiry, validation, and failure regressions
+- Added manager-owned stale-while-revalidate orchestration with caller-owned scheduling
+- Appended DEC-048 and SPEC-035 for the bounded SWR contract
+
+### Result Summary
+Fresh payloads retain ordinary raw cache semantics. After freshness expires, callers receive bounded
+stale bytes immediately while one fenced owner schedules refresh; refresh failure preserves the
+stale value. Hard expiry falls back to a bounded one-owner cold fill.
+
+### Issues Encountered
+- The first implementation head passed all tests, Ruff, and strict typing but reduced total
+  coverage to 89.96%, causing Python and service matrices to fail their shared 90% gate
+- Boundary regressions for scheduling rejection, expired refresh leases, cold-fill lease loss,
+  wait timeout, and hard-horizon overflow restored the canonical Python gate
+- The repository checkout remains unavailable with authenticated Git credentials, so guarded
+  connector writes target the exact PR head
+
+### Actions Taken
+- Committed the behavioral contract before implementation
+- Implemented digest-scoped freshness markers, combined hard TTL retention, single-owner scheduled
+  refresh, and bounded cold fill
+- Inspected failed workflow steps and logs before adding only verified missing coverage
+- Re-ran the hosted Python quality gate successfully before append-only governance history
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-048
+- SPEC-035
+- Script: `[SCRIPT:af-dev]`
+
