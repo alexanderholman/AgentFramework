@@ -34,6 +34,7 @@ _APPLICATION_FACTORY = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*$"
 )
 _MAX_APPLICATION_FACTORY_LENGTH = 256
+_CURRENT_APPLICATION_META_KEY = "af.current_application"
 
 
 def _validate_application_factory(value: str) -> None:
@@ -65,6 +66,22 @@ def _load_application_factory(value: str) -> Callable[[], object]:
             stage="cli.application-factory",
         )
     return cast(Callable[[], object], candidate)
+
+
+def current_application_from_context(context: typer.Context) -> AFApplication:
+    current = context.meta.get(_CURRENT_APPLICATION_META_KEY)
+    if not callable(current):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.application-context",
+        )
+    application = cast(AFApplication, current())
+    if not isinstance(application, AFApplication):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.application-context",
+        )
+    return application
 
 
 def create_cli(
@@ -174,6 +191,7 @@ def create_cli(
     ) -> None:
         nonlocal selected_factory_path
         selected_factory_path = None
+        context.meta[_CURRENT_APPLICATION_META_KEY] = current
         if factory_path is not None:
             if not accepts_operator_factory:
                 fail(

@@ -8,10 +8,11 @@ import typer
 
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication
-from af.framework.errors import AFError, PlatformError, PlatformReason
+from af.framework.errors import AFError, PlatformError, PlatformReason, ServiceNotBound
 from af.framework.self_analysis_operation import SelfAnalysisOperation
 from af.framework.self_design_operation import SelfDesignOperation
 from af.interfaces.cli import create_cli as create_base_cli
+from af.interfaces.cli import current_application_from_context
 
 
 def create_cli(
@@ -44,15 +45,23 @@ def create_cli(
             raise typer.Exit(code=2) from None
 
     @cli.command("self-design")
-    def plan_self_design() -> None:
+    def plan_self_design(context: typer.Context) -> None:
         """Emit one canonical read-only design plan from configured evidence."""
         try:
-            if self_design_operation is None:
+            operation = self_design_operation
+            if operation is None:
+                try:
+                    operation = current_application_from_context(context).container.resolve(
+                        SelfDesignOperation
+                    )
+                except ServiceNotBound:
+                    operation = None
+            if operation is None:
                 raise PlatformError(
                     PlatformReason.CONFIGURATION_INVALID,
                     stage="cli.self-design.evidence-provider",
                 )
-            typer.echo(self_design_operation.plan().canonical_json())
+            typer.echo(operation.plan().canonical_json())
         except (AFError, TypeError, ValueError) as error:
             typer.echo(str(error), err=True)
             raise typer.Exit(code=2) from None
