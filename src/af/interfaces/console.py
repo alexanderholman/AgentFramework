@@ -9,6 +9,7 @@ import typer
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication
 from af.framework.errors import AFError, PlatformError, PlatformReason
+from af.framework.self_alignment_operation import SelfAlignmentOperation
 from af.framework.self_analysis_operation import SelfAnalysisOperation
 from af.framework.self_design_operation import SelfDesignOperation
 from af.interfaces.cli import create_cli as create_base_cli
@@ -19,6 +20,7 @@ def create_cli(
     *,
     application_factory: Callable[[], AFApplication] | None = None,
     version_control: VersionControlController | None = None,
+    self_alignment_operation: SelfAlignmentOperation | None = None,
     self_analysis_operation: SelfAnalysisOperation | None = None,
     self_design_operation: SelfDesignOperation | None = None,
 ) -> typer.Typer:
@@ -28,6 +30,20 @@ def create_cli(
         application_factory=application_factory,
         version_control=version_control,
     )
+
+    @cli.command("self-align")
+    def plan_self_align() -> None:
+        """Emit one canonical read-only alignment plan from configured evidence."""
+        try:
+            if self_alignment_operation is None:
+                raise PlatformError(
+                    PlatformReason.CONFIGURATION_INVALID,
+                    stage="cli.self-align.evidence-provider",
+                )
+            typer.echo(self_alignment_operation.plan().canonical_json())
+        except (AFError, TypeError, ValueError) as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(code=2) from None
 
     @cli.command("self-analysis")
     def plan_self_analysis() -> None:
