@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import keyword
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +35,9 @@ def scaffold_procedure(*, root: Path, procedure_id: str, package: str) -> Proced
 
     if not is_valid_procedure_id(procedure_id):
         raise ValueError(f"invalid procedure id: {procedure_id!r}")
-    if _PACKAGE_PATTERN.fullmatch(package) is None:
+    if _PACKAGE_PATTERN.fullmatch(package) is None or any(
+        keyword.iskeyword(segment) for segment in package.split(".")
+    ):
         raise ValueError(f"invalid package name: {package!r}")
 
     slug = procedure_id.replace("-", "_")

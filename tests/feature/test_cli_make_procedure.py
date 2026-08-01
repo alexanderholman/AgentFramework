@@ -165,6 +165,29 @@ def test_make_procedure_refuses_to_overwrite_existing_files(
     )
 
 
+def test_make_procedure_rejects_python_keyword_packages(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        create_cli(),
+        [
+            "make",
+            "procedure",
+            "--procedure-id",
+            "uppercase",
+            "--package",
+            "class",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr == "invalid package name: 'class'\n"
+
+
 def test_make_procedure_supports_valid_numeric_leading_procedure_ids(
     tmp_path: Path,
     monkeypatch,
