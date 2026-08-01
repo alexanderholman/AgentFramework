@@ -18,6 +18,8 @@ from typing import Protocol, cast
 from af.cache.contracts import (
     CacheKey,
     CacheNamespace,
+    LockLease,
+    LockOwner,
     _validated_operation,
     _validated_ttl,
     _validated_value,
@@ -42,6 +44,7 @@ _CAPABILITIES = CapabilitySet(
         CacheFeature.WRITE.value,
         CacheFeature.TTL.value,
         CacheFeature.NAMESPACES.value,
+        CacheFeature.LOCKS.value,
     )
 )
 _UNSAFE_TEXT = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
@@ -52,6 +55,13 @@ _MEMCACHED_RELATIVE_TTL_LIMIT = 2_592_000
 class MemcachedClient(Protocol):
     def get(self, key: bytes, default: object | None = None) -> object | None: ...
 
+    def gets(
+        self,
+        key: bytes,
+        default: object | None = None,
+        cas_default: object | None = None,
+    ) -> tuple[object | None, object | None]: ...
+
     def set(
         self,
         key: bytes,
@@ -59,6 +69,27 @@ class MemcachedClient(Protocol):
         expire: int = 0,
         noreply: bool = False,
     ) -> bool: ...
+
+    def add(
+        self,
+        key: bytes,
+        value: bytes,
+        expire: int = 0,
+        noreply: bool = False,
+        flags: int | None = None,
+    ) -> bool: ...
+
+    def cas(
+        self,
+        key: bytes,
+        value: bytes,
+        cas: object,
+        expire: int = 0,
+        noreply: bool = False,
+        flags: int | None = None,
+    ) -> bool | None: ...
+
+    def incr(self, key: bytes, value: int, noreply: bool = False) -> int | None: ...
 
     def delete(self, key: bytes, noreply: bool = False) -> bool: ...
 
@@ -209,6 +240,72 @@ class MemcachedCacheDriver:
             raise ValueError("Memcached key is invalid")
         return encoded
 
+    def _lock_key(self, namespace: CacheNamespace, key: CacheKey) -> bytes:
+        encoded = (
+            f"af:lock:{self._namespace_identity(namespace)}:{self._key_identity(key)}"
+        ).encode("ascii")
+        if len(encoded) > _MAX_KEY_BYTES:
+            raise ValueError("Memcached key is invalid")
+        return encoded
+
+    def _lock_token_key(self, namespace: CacheNamespace, key: CacheKey) -> bytes:
+        encoded = (
+            f"af:lock:{self._namespace_identity(namespace)}:{self._key_identity(key)}:token"
+        ).encode("ascii")
+        if len(encoded) > _MAX_KEY_BYTES:
+            raise ValueError("Memcached key is invalid")
+        return encoded
+
+    def _lease_bytes(self, lease: LockLease) -> bytes:
+        return json.dumps(
+            {
+                "owner": lease.owner.value,
+                "fencing_token": lease.fencing_token,
+                "expires_at": lease.expires_at.isoformat(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    @staticmethod
+    def _lease(value: object) -> LockLease:
+        if type(value) is not bytes:
+            raise ValueError("Memcached lock entry is invalid")
+        try:
+            payload = json.loads(value.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("Memcached lock entry is invalid") from error
+        if type(payload) is not dict:
+            raise ValueError("Memcached lock entry is invalid")
+        owner = payload.get("owner")
+        fencing_token = payload.get("fencing_token")
+        expires_at = payload.get("expires_at")
+        if type(owner) is not str or type(fencing_token) is not int or type(expires_at) is not str:
+            raise ValueError("Memcached lock entry is invalid")
+        try:
+            expiry = datetime.fromisoformat(expires_at)
+        except ValueError as error:
+            raise ValueError("Memcached lock entry is invalid") from error
+        if expiry.utcoffset() is None:
+            raise ValueError("Memcached lock entry is invalid")
+        return LockLease(
+            owner=LockOwner(owner),
+            fencing_token=fencing_token,
+            expires_at=expiry.astimezone(UTC),
+        )
+
+    def _next_fencing_token(self, namespace: CacheNamespace, key: CacheKey) -> int:
+        try:
+            token_key = self._lock_token_key(namespace, key)
+            self._client.add(token_key, b"0", expire=0, noreply=False)
+            token = self._client.incr(token_key, 1, noreply=False)
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.acquire") from None
+        if type(token) is not int or token <= 0:
+            cause = RuntimeError("Memcached lock token allocation failed")
+            raise _failure(cause, stage="cache.memcached.lock.acquire")
+        return token
+
     def _expire(self, ttl: timedelta | None) -> int:
         if ttl is None:
             return 0
@@ -267,17 +364,150 @@ class MemcachedCacheDriver:
         del namespace
         raise NotImplementedError("memcached cache does not advertise flush capability")
 
-    def acquire_lock(self, *args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise NotImplementedError("memcached cache does not advertise lock capability")
+    def acquire_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        owner: LockOwner,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(owner, LockOwner):
+            raise TypeError("lock acquire requires a validated owner")
+        validated_ttl = _validated_ttl(ttl)
+        if validated_ttl is None:
+            raise ValueError("lock TTL is required")
+        self._assert_open()
+        now = self._now()
+        expires_at = now + validated_ttl
+        token = self._next_fencing_token(namespace, key)
+        lease = LockLease(owner=owner, fencing_token=token, expires_at=expires_at)
+        try:
+            lock_key = self._lock_key(namespace, key)
+            created = self._client.add(
+                lock_key,
+                self._lease_bytes(lease),
+                expire=self._expire(validated_ttl),
+                noreply=False,
+            )
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.acquire") from None
+        if created is True:
+            return lease
+        try:
+            current_value, cas_token = self._client.gets(lock_key, default=None, cas_default=None)
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.acquire") from None
+        if current_value is None or cas_token is None:
+            try:
+                added = self._client.add(
+                    lock_key,
+                    self._lease_bytes(lease),
+                    expire=self._expire(validated_ttl),
+                    noreply=False,
+                )
+            except Exception as error:
+                raise _failure(error, stage="cache.memcached.lock.acquire") from None
+            return lease if added is True else None
+        current = self._lease(current_value)
+        if current.expires_at > now:
+            return None
+        replaced: bool | None
+        try:
+            replaced = self._client.cas(
+                lock_key,
+                self._lease_bytes(lease),
+                cas_token,
+                expire=self._expire(validated_ttl),
+                noreply=False,
+            )
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.acquire") from None
+        return lease if replaced is True else None
 
-    def renew_lock(self, *args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise NotImplementedError("memcached cache does not advertise lock capability")
+    def renew_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+        *,
+        ttl: timedelta,
+    ) -> LockLease | None:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock renewal requires a validated lease")
+        validated_ttl = _validated_ttl(ttl)
+        if validated_ttl is None:
+            raise ValueError("lock TTL is required")
+        self._assert_open()
+        now = self._now()
+        if lease.expires_at <= now:
+            return None
+        try:
+            lock_key = self._lock_key(namespace, key)
+            current_value, cas_token = self._client.gets(lock_key, default=None, cas_default=None)
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.renew") from None
+        if current_value is None or cas_token is None:
+            return None
+        try:
+            current = self._lease(current_value)
+        except ValueError as error:
+            raise _failure(error, stage="cache.memcached.lock.renew") from None
+        if current != lease or current.expires_at <= now:
+            return None
+        renewed = LockLease(
+            owner=lease.owner,
+            fencing_token=lease.fencing_token,
+            expires_at=now + validated_ttl,
+        )
+        try:
+            updated = self._client.cas(
+                lock_key,
+                self._lease_bytes(renewed),
+                cas_token,
+                expire=self._expire(validated_ttl),
+                noreply=False,
+            )
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.renew") from None
+        return renewed if updated is True else None
 
-    def release_lock(self, *args: object, **kwargs: object) -> bool:
-        del args, kwargs
-        raise NotImplementedError("memcached cache does not advertise lock capability")
+    def release_lock(
+        self,
+        namespace: CacheNamespace,
+        key: CacheKey,
+        lease: LockLease,
+        /,
+    ) -> bool:
+        namespace, key = _validated_operation(namespace, key)
+        if not isinstance(lease, LockLease):
+            raise TypeError("lock release requires a validated lease")
+        self._assert_open()
+        now = self._now()
+        if lease.expires_at <= now:
+            return False
+        try:
+            lock_key = self._lock_key(namespace, key)
+            current_value, _cas_token = self._client.gets(lock_key, default=None, cas_default=None)
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.release") from None
+        if current_value is None:
+            return False
+        try:
+            current = self._lease(current_value)
+        except ValueError as error:
+            raise _failure(error, stage="cache.memcached.lock.release") from None
+        if current != lease or current.expires_at <= now:
+            return False
+        try:
+            deleted = bool(self._client.delete(lock_key, noreply=False))
+        except Exception as error:
+            raise _failure(error, stage="cache.memcached.lock.release") from None
+        return deleted or current == lease
 
     def close(self) -> None:
         if self._closed:

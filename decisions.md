@@ -2744,3 +2744,32 @@ violate that boundary on shared infrastructure.
 AF gains a verified network cache backend without violating tenant-safety rules or pretending that
 Memcached offers durable forever retention. Namespace-safe flush, distributed locks, stale-while-
 revalidate, and funnels remain later issue #19 slices.
+
+---
+
+## [DEC-045] Scope Memcached Coordination To Ephemeral Owner-Fenced Locks
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires Memcached lock drivers. AF's lock contract requires one active owner and
+ owner-checked renew/release, but Memcached does not provide durable transactions or namespace-safe
+ flush semantics. The implementation therefore needs to expose only the coordination guarantees the
+ runtime can actually support.
+
+### Decision
+1. Implement the Memcached follow-up slice as a lock-capable cache driver that advertises lock
+   capability alongside the existing read/write/TTL/namespace features.
+2. Store lock leases as validated owner, fencing-token, and expiry payloads under namespace-scoped
+   physical keys and use Memcached `add` plus `gets`/`cas` to preserve single-owner contention and
+   owner-fenced renew/release semantics.
+3. Allocate fencing tokens through a separate namespace-scoped counter key so newly claimed leases
+   advance monotonically while the token key remains isolated from tenant/application peers.
+4. Keep flush unsupported and treat lock loss caused by eviction or restart as an expected Memcached
+   durability boundary rather than pretending network cache locks are authoritative.
+
+### Consequences
+AF now covers the Memcached lock-driver acceptance slice for one active owner and owner-fenced
+ mutation while staying explicit that Memcached coordination is ephemeral. Redis, stale-while-
+revalidate, stampede protection, and funnels remain later issue #19 work.

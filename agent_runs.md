@@ -1727,3 +1727,48 @@ not advertise flush or lock capability yet.
 - DEC-044
 - SPEC-031
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #031 - Memcached Lock Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing Memcached cache-only slice, owner-fenced memory/database lock contracts, and cache
+  manager routing
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for Memcached owner-fenced lock acquisition, renewal, release, and
+  lock-specific failure boundaries
+- Extended the verified `memcached` driver to advertise lock capability and implement the shared
+  lock contract with namespace-scoped lease and token keys
+- Appended DEC-045 and SPEC-032 for the bounded Memcached lock slice
+
+### Result Summary
+This run advances the open issue #19 PR with the next smallest missing acceptance slice after the
+Memcached cache-only work: owner-fenced Memcached coordination. The driver now permits one active
+owner, preserves owner-checked renew/release semantics, and stays explicit that eviction or restart
+can still erase Memcached lock state because cache is not authority.
+
+### Issues Encountered
+- The red-phase tests initially failed because the existing Memcached driver intentionally omitted
+  lock capability; implementation added only the minimum real-client verbs (`add`, `gets`, `cas`,
+  `incr`) needed for the slice
+
+### Actions Taken
+- Added red-phase coverage for lock fencing, manager routing, and lock-specific failure stages in
+  `tests/unit/test_cache_memcached.py`
+- Implemented Memcached lease encoding/decoding, monotonic token allocation, and owner-fenced
+  acquire/renew/release paths in `src/af/cache/memcached.py`
+- Ran the focused cache suite before the repository-wide `[SCRIPT:af-dev]` gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-045
+- SPEC-032
+- Script: `[SCRIPT:af-dev]`

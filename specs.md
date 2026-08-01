@@ -1751,3 +1751,31 @@ common directory without contacting or changing the upstream.
 - **TEST-031-3**: Verified manager routing supports get, set, TTL, and delete, but rejects flush.
 - **TEST-031-4**: Unsafe host, port, timeout, or extra configuration values are rejected.
 - **TEST-031-5**: Missing Memcached runtime and post-shutdown operations fail closed.
+
+---
+
+## [SPEC-032] Memcached Lock Driver Slice
+
+**Date**: 2026-08-01
+**Status**: Active
+
+### Requirements
+- MUST provide Memcached lock acquisition through the verified `memcached` cache driver using the
+  shared `CacheManager` lock contract.
+- MUST permit at most one active lock owner per namespace/key at a time.
+- MUST reject renew and release requests from a different owner or stale lease.
+- MUST advance fencing tokens monotonically for newly claimed Memcached lock leases while the token
+  key remains scoped to the exact application, tenant, namespace, and logical key.
+- MUST fail closed on invalid lock entries, Memcached client failures, and post-shutdown access.
+- MUST continue to omit flush capability and MUST NOT claim durable lock retention across eviction
+  or restart.
+
+### Tests
+- **TEST-032-1**: One Memcached lock owner acquires the lease, a contending owner is rejected, and
+  a later claim after expiry advances the fencing token.
+- **TEST-032-2**: Renew and release succeed only for the current matching lease and fail for forged
+  or stale owners.
+- **TEST-032-3**: Verified manager routing exposes Memcached lock capability without widening flush
+  capability.
+- **TEST-032-4**: Invalid lock entries, lock-key derivation failures, client-operation failures,
+  and post-shutdown lock operations fail closed with lock-specific stages.

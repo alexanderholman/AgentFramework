@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 
 from af.cache import memcached as memcached_module
-from af.cache.contracts import CacheKey, CacheNamespace
+from af.cache.contracts import CacheKey, CacheNamespace, LockOwner
 from af.cache.manager import CacheDriver, CacheFeature, CacheManager
 from af.cache.memcached import MemcachedCacheDriver, memcached_cache_registration
 from af.framework.errors import PlatformError, PlatformReason
@@ -37,6 +37,8 @@ class RecordingMemcachedClient:
     def __init__(self, *, clock: Clock) -> None:
         self._clock = clock
         self._entries: dict[bytes, tuple[bytes, datetime | None]] = {}
+        self._cas_tokens: dict[bytes, int] = {}
+        self._next_cas_token = 1
         self.set_calls: list[dict[str, object]] = []
         self.closed = False
 
@@ -47,16 +49,38 @@ class RecordingMemcachedClient:
             return datetime.fromtimestamp(expire, UTC)
         return self._clock() + timedelta(seconds=expire)
 
-    def get(self, key: bytes, default: object | None = None) -> object | None:
-        del default
+    def _read(self, key: bytes) -> bytes | None:
         entry = self._entries.get(key)
         if entry is None:
             return None
         value, expires_at = entry
         if expires_at is not None and expires_at <= self._clock():
             self._entries.pop(key, None)
+            self._cas_tokens.pop(key, None)
             return None
         return value
+
+    def _store(self, key: bytes, value: bytes, expire: int) -> None:
+        self._entries[key] = (value, self._expiry(expire))
+        self._cas_tokens[key] = self._next_cas_token
+        self._next_cas_token += 1
+
+    def get(self, key: bytes, default: object | None = None) -> object | None:
+        value = self._read(key)
+        if value is None:
+            return default
+        return value
+
+    def gets(
+        self,
+        key: bytes,
+        default: object | None = None,
+        cas_default: object | None = None,
+    ) -> tuple[object | None, object | None]:
+        value = self._read(key)
+        if value is None:
+            return default, cas_default
+        return value, self._cas_tokens[key]
 
     def set(
         self,
@@ -73,11 +97,53 @@ class RecordingMemcachedClient:
                 "noreply": noreply,
             }
         )
-        self._entries[key] = (value, self._expiry(expire))
+        self._store(key, value, expire)
         return True
+
+    def add(
+        self,
+        key: bytes,
+        value: bytes,
+        expire: int = 0,
+        noreply: bool = False,
+        flags: object | None = None,
+    ) -> bool:
+        del noreply, flags
+        if self._read(key) is not None:
+            return False
+        self._store(key, value, expire)
+        return True
+
+    def cas(
+        self,
+        key: bytes,
+        value: bytes,
+        cas: object,
+        expire: int = 0,
+        noreply: bool = False,
+        flags: object | None = None,
+    ) -> bool | None:
+        del noreply, flags
+        current = self._read(key)
+        if current is None:
+            return None
+        if self._cas_tokens.get(key) != cas:
+            return False
+        self._store(key, value, expire)
+        return True
+
+    def incr(self, key: bytes, value: int, noreply: bool = False) -> int | None:
+        del noreply
+        current = self._read(key)
+        if current is None:
+            return None
+        next_value = int(current.decode("ascii")) + value
+        self._store(key, str(next_value).encode("ascii"), 0)
+        return next_value
 
     def delete(self, key: bytes, noreply: bool = False) -> bool:
         del noreply
+        self._cas_tokens.pop(key, None)
         return self._entries.pop(key, None) is not None
 
     def close(self) -> None:
@@ -114,6 +180,46 @@ class BrokenMemcachedClient(RecordingMemcachedClient):
         if self._stage == "set":
             raise RuntimeError("simulated memcached set failure")
         return self._stage != "nack"
+
+    def gets(
+        self,
+        key: bytes,
+        default: object | None = None,
+        cas_default: object | None = None,
+    ) -> tuple[object | None, object | None]:
+        if self._stage == "gets":
+            raise RuntimeError("simulated memcached gets failure")
+        return super().gets(key, default, cas_default)
+
+    def add(
+        self,
+        key: bytes,
+        value: bytes,
+        expire: int = 0,
+        noreply: bool = False,
+        flags: object | None = None,
+    ) -> bool:
+        if self._stage == "add":
+            raise RuntimeError("simulated memcached add failure")
+        return super().add(key, value, expire, noreply, flags)
+
+    def cas(
+        self,
+        key: bytes,
+        value: bytes,
+        cas: object,
+        expire: int = 0,
+        noreply: bool = False,
+        flags: object | None = None,
+    ) -> bool | None:
+        if self._stage == "cas":
+            raise RuntimeError("simulated memcached cas failure")
+        return super().cas(key, value, cas, expire, noreply, flags)
+
+    def incr(self, key: bytes, value: int, noreply: bool = False) -> int | None:
+        if self._stage == "incr":
+            raise RuntimeError("simulated memcached incr failure")
+        return super().incr(key, value, noreply)
 
     def delete(self, key: bytes, noreply: bool = False) -> bool:
         del key, noreply
@@ -243,12 +349,134 @@ def test_memcached_cache_uses_memcached_ttl_semantics_and_fails_closed_after_shu
     assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
+def test_memcached_lock_is_owner_fenced_and_renews_only_current_lease() -> None:
+    clock = Clock()
+    client = RecordingMemcachedClient(clock=clock)
+    cache = MemcachedCacheDriver(client=client, clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:resource")
+    first_owner = LockOwner("owner-a")
+    second_owner = LockOwner("owner-b")
+
+    first = cache.acquire_lock(namespace, key, first_owner, ttl=timedelta(seconds=5))
+    assert first is not None
+    assert cache.acquire_lock(namespace, key, second_owner, ttl=timedelta(seconds=5)) is None
+
+    forged = first.__class__(
+        owner=second_owner,
+        fencing_token=first.fencing_token,
+        expires_at=first.expires_at,
+    )
+    assert cache.renew_lock(namespace, key, forged, ttl=timedelta(seconds=10)) is None
+    assert not cache.release_lock(namespace, key, forged)
+
+    renewed = cache.renew_lock(namespace, key, first, ttl=timedelta(seconds=10))
+    assert renewed is not None
+    assert renewed.fencing_token == first.fencing_token
+    clock.now += timedelta(seconds=11)
+
+    second = cache.acquire_lock(namespace, key, second_owner, ttl=timedelta(seconds=5))
+    assert second is not None
+    assert second.fencing_token > first.fencing_token
+    assert not cache.release_lock(namespace, key, first)
+    assert cache.release_lock(namespace, key, second)
+    cache.close()
+
+
+def test_memcached_lock_handles_expired_missing_and_unclaimed_paths() -> None:
+    clock = Clock()
+    client = RecordingMemcachedClient(clock=clock)
+    cache = MemcachedCacheDriver(client=client, clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:resource")
+    owner = LockOwner("owner-a")
+
+    first = cache.acquire_lock(namespace, key, owner, ttl=timedelta(seconds=1))
+    assert first is not None
+    clock.now += timedelta(seconds=2)
+
+    assert cache.renew_lock(namespace, key, first, ttl=timedelta(seconds=1)) is None
+    assert not cache.release_lock(namespace, key, first)
+
+    recovered = cache.acquire_lock(namespace, key, owner, ttl=timedelta(seconds=5))
+    assert recovered is not None
+    assert recovered.fencing_token > first.fencing_token
+
+    client.evict(cache._lock_key(namespace, key))
+    assert cache.renew_lock(namespace, key, recovered, ttl=timedelta(seconds=1)) is None
+    assert not cache.release_lock(namespace, key, recovered)
+    cache.close()
+
+
+def test_memcached_lock_validates_inputs_and_invalid_entries_fail_closed() -> None:
+    clock = Clock()
+    client = RecordingMemcachedClient(clock=clock)
+    cache = MemcachedCacheDriver(client=client, clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:resource")
+    owner = LockOwner("owner-a")
+    lease = cache.acquire_lock(namespace, key, owner, ttl=timedelta(seconds=5))
+    assert lease is not None
+
+    with pytest.raises(TypeError):
+        cache.acquire_lock(namespace, key, object(), ttl=timedelta(seconds=1))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        cache.acquire_lock(namespace, key, owner, ttl=timedelta(0))
+    with pytest.raises(TypeError):
+        cache.renew_lock(namespace, key, object(), ttl=timedelta(seconds=1))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        cache.renew_lock(namespace, key, lease, ttl=timedelta(0))
+    with pytest.raises(TypeError):
+        cache.release_lock(namespace, key, object())  # type: ignore[arg-type]
+
+    client._entries[cache._lock_key(namespace, key)] = (b"not-json", clock() + timedelta(seconds=5))
+    with pytest.raises(PlatformError) as renew_error:
+        cache.renew_lock(namespace, key, lease, ttl=timedelta(seconds=1))
+    assert renew_error.value.stage == "cache.memcached.lock.renew"
+    with pytest.raises(PlatformError) as release_error:
+        cache.release_lock(namespace, key, lease)
+    assert release_error.value.stage == "cache.memcached.lock.release"
+    cache.close()
+
+
+def test_memcached_lock_handles_missing_tokens_and_compare_exchange_misses() -> None:
+    clock = Clock()
+    client = RecordingMemcachedClient(clock=clock)
+    cache = MemcachedCacheDriver(client=client, clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:resource")
+    owner = LockOwner("owner-a")
+
+    token_key = cache._lock_token_key(namespace, key)
+    client._entries[token_key] = (b"not-a-number", None)
+    with pytest.raises(PlatformError) as token_error:
+        cache.acquire_lock(namespace, key, owner, ttl=timedelta(seconds=5))
+    assert token_error.value.stage == "cache.memcached.lock.acquire"
+
+    repaired = RecordingMemcachedClient(clock=clock)
+    cache = MemcachedCacheDriver(client=repaired, clock=clock)
+    lease = cache.acquire_lock(namespace, key, owner, ttl=timedelta(seconds=1))
+    assert lease is not None
+    clock.now += timedelta(seconds=2)
+
+    lock_key = cache._lock_key(namespace, key)
+    stale_value = repaired._entries[lock_key][0]
+    stale_cas = repaired._cas_tokens[lock_key]
+    replacement = cache.acquire_lock(namespace, key, LockOwner("owner-b"), ttl=timedelta(seconds=5))
+    assert replacement is not None
+    assert replacement.owner == LockOwner("owner-b")
+
+    assert repaired.cas(lock_key, stale_value, stale_cas, expire=1, noreply=False) is False
+    cache.close()
+
+
 def test_memcached_cache_covers_error_boundaries_and_optional_operations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     namespace = _namespace()
     key = CacheKey("resource")
-    owner = object()
+    lock_key = CacheKey("lock:resource")
+    owner = LockOwner("owner-a")
 
     with pytest.raises(TypeError):
         MemcachedCacheDriver(
@@ -302,20 +530,78 @@ def test_memcached_cache_covers_error_boundaries_and_optional_operations(
     with pytest.raises(PlatformError) as invalid_key:
         long_key_cache.get(namespace, key)
     assert invalid_key.value.stage == "cache.memcached.get"
+    monkeypatch.setattr(
+        MemcachedCacheDriver,
+        "_namespace_identity",
+        staticmethod(
+            lambda namespace: hashlib.sha256(
+                f"{namespace.application_id}\0{namespace.tenant_id}\0{namespace.name}".encode()
+            ).hexdigest()
+        ),
+    )
 
     unsupported = MemcachedCacheDriver(
         client=RecordingMemcachedClient(clock=Clock()), clock=Clock()
     )
     with pytest.raises(NotImplementedError):
         unsupported.flush(namespace)
-    with pytest.raises(NotImplementedError):
-        unsupported.acquire_lock(namespace, key, owner, ttl=timedelta(seconds=1))
-    with pytest.raises(NotImplementedError):
-        unsupported.renew_lock(namespace, key, owner, ttl=timedelta(seconds=1))
-    with pytest.raises(NotImplementedError):
-        unsupported.release_lock(namespace, key, owner)
     unsupported.close()
     unsupported.close()
+
+    for stage, operation, expected_stage in (
+        (
+            "add",
+            lambda cache: cache.acquire_lock(namespace, lock_key, owner, ttl=timedelta(seconds=1)),
+            "cache.memcached.lock.acquire",
+        ),
+        (
+            "incr",
+            lambda cache: cache.acquire_lock(namespace, lock_key, owner, ttl=timedelta(seconds=1)),
+            "cache.memcached.lock.acquire",
+        ),
+        (
+            "gets",
+            lambda cache: cache.renew_lock(
+                namespace,
+                lock_key,
+                cast(
+                    object, cache.acquire_lock(namespace, lock_key, owner, ttl=timedelta(seconds=5))
+                ),
+                ttl=timedelta(seconds=1),
+            ),
+            "cache.memcached.lock.renew",
+        ),
+        (
+            "cas",
+            lambda cache: cache.renew_lock(
+                namespace,
+                lock_key,
+                cast(
+                    object, cache.acquire_lock(namespace, lock_key, owner, ttl=timedelta(seconds=5))
+                ),
+                ttl=timedelta(seconds=1),
+            ),
+            "cache.memcached.lock.renew",
+        ),
+        (
+            "delete",
+            lambda cache: cache.release_lock(
+                namespace,
+                lock_key,
+                cast(
+                    object, cache.acquire_lock(namespace, lock_key, owner, ttl=timedelta(seconds=5))
+                ),
+            ),
+            "cache.memcached.lock.release",
+        ),
+    ):
+        cache = MemcachedCacheDriver(
+            client=BrokenMemcachedClient(clock=Clock(), stage=stage),
+            clock=Clock(),
+        )
+        with pytest.raises(PlatformError) as stage_error:
+            operation(cache)
+        assert stage_error.value.stage == expected_stage
 
 
 def test_memcached_registration_is_inert_and_routes_through_verified_manager(
@@ -352,9 +638,10 @@ def test_memcached_registration_is_inert_and_routes_through_verified_manager(
             CacheFeature.WRITE.value,
             CacheFeature.TTL.value,
             CacheFeature.NAMESPACES.value,
+            CacheFeature.LOCKS.value,
         }
     )
-    assert not evidence.capabilities.supports({CacheFeature.FLUSH.value, CacheFeature.LOCKS.value})
+    assert not evidence.capabilities.supports({CacheFeature.FLUSH.value})
     disposer = registration.disposer
     assert disposer is not None
     disposer(driver)
@@ -375,11 +662,18 @@ def test_memcached_registration_is_inert_and_routes_through_verified_manager(
     manager.install(registration)
     namespace = _namespace()
     key = CacheKey("resource")
+    lock_key = CacheKey("lock:resource")
+    owner = LockOwner("owner-a")
 
     manager.set(namespace, key, b"value", ttl=timedelta(seconds=5))
     assert manager.get(namespace, key) == b"value"
     assert manager.delete(namespace, key)
     assert manager.get(namespace, key) is None
+    lease = manager.acquire_lock(namespace, lock_key, owner, ttl=timedelta(seconds=5))
+    assert lease is not None
+    renewed = manager.renew_lock(namespace, lock_key, lease, ttl=timedelta(seconds=10))
+    assert renewed is not None
+    assert manager.release_lock(namespace, lock_key, renewed)
     with pytest.raises(CapabilityValidationError):
         manager.flush(namespace)
 
