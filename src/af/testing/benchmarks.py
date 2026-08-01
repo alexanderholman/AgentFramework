@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from inspect import isasyncgen, isawaitable, isgenerator
-from typing import Protocol
+from typing import Protocol, cast
 
 from af.application.bus import GateDecision, GateEffect
 from af.framework.context import AcceptanceScope
@@ -744,7 +744,10 @@ class BenchmarkRunResult:
         if self.score is not None:
             if type(self.score) not in {float, int}:
                 raise ValueError("benchmark score must be numeric")
-            object.__setattr__(self, "score", float(self.score))
+            numeric = float(self.score)
+            if numeric != numeric or numeric in {float("inf"), float("-inf")}:
+                raise ValueError("benchmark score must be finite")
+            object.__setattr__(self, "score", numeric)
         object.__setattr__(
             self, "metrics", _measurement_pairs(self.metrics, "benchmark result metric")
         )
@@ -919,9 +922,10 @@ class BenchmarkRunner:
         reason_code = "plugin-open-failed"
         session: BenchmarkPluginSession | None = None
         try:
-            session = plugin.open(request)
-            if session is None:
+            opened = _call_sync(plugin.open, request)
+            if opened is None:
                 raise TypeError("benchmark plugin session is invalid")
+            session = cast(BenchmarkPluginSession, opened)
             _call_sync(session.setup)
             attempted = True
             measurement = _call_sync(session.execute)

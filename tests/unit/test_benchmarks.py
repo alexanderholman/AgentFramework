@@ -584,6 +584,31 @@ def test_runner_fail_closed_edge_cases_and_result_validation() -> None:
     ).run(_request())
     assert bad_measurement.reason_code == "plugin-exception"
 
+    class _AwaitableOpen:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __await__(self):
+            yield "unexpected"
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _AwaitableOpenPlugin(_Plugin):
+        def __init__(self, awaitable_open: _AwaitableOpen) -> None:
+            super().__init__(events=[])
+            self.awaitable_open = awaitable_open
+
+        def open(self, _request: BenchmarkRunRequest):
+            self._events.append("open")
+            return self.awaitable_open
+
+    awaitable_open = _AwaitableOpen()
+    awaitable_result = BenchmarkRunner((_AwaitableOpenPlugin(awaitable_open),)).run(_request())
+    assert awaitable_result.outcome is BenchmarkOutcome.INFRASTRUCTURE_FAILURE
+    assert awaitable_result.reason_code == "plugin-setup-failed"
+    assert awaitable_open.closed is True
+
     invalid_result = BenchmarkRunResult(
         outcome=BenchmarkOutcome.COMPLETED,
         reason_code="verified",
@@ -622,5 +647,7 @@ def test_runner_fail_closed_edge_cases_and_result_validation() -> None:
         permitted_audiences=("reviewers",),
     )
     assert invalid_result.payload()["metrics"] == {"wer": 0.0}
+    with pytest.raises(ValueError, match="score must be finite"):
+        replace(invalid_result, score=float("nan"))
     with pytest.raises(TypeError, match="export result"):
         BenchmarkExport(object())  # type: ignore[arg-type]
