@@ -300,7 +300,8 @@ def test_self_design_execute_command_previews_without_writes(tmp_path: Path) -> 
 def test_self_design_execute_command_executes_one_configured_governed_effect(
     tmp_path: Path,
 ) -> None:
-    executor = RecordingSelfDesignExecutor(_execution_result(tmp_path))
+    execution_result = _execution_result(tmp_path)
+    executor = RecordingSelfDesignExecutor(execution_result)
 
     result = runner.invoke(
         create_cli(
@@ -318,6 +319,29 @@ def test_self_design_execute_command_executes_one_configured_governed_effect(
     assert payload["publication"]["issue_number"] == 146
     assert executor.preview_calls == 0
     assert executor.execute_calls == 1
+
+
+def test_self_design_execute_command_emits_canonical_json(tmp_path: Path) -> None:
+    execution_result = _execution_result(tmp_path)
+    executor = RecordingSelfDesignExecutor(execution_result)
+
+    result = runner.invoke(
+        create_cli(
+            self_design_execution=SelfDesignExecutionController(executor),
+        ),
+        ["self-design-execute", "--execute"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        json.dumps(
+            execution_result.to_dict(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 def test_self_design_execute_command_fails_closed_without_controller() -> None:

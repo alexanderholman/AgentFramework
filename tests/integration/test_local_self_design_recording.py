@@ -163,8 +163,41 @@ def test_local_recorder_rejects_conflicting_existing_record(tmp_path: Path) -> N
     result = recorder.record(request)
     Path(result.record_path).write_text("{}\n", encoding="utf-8")
 
-    with pytest.raises(DesignRecordingError, match="conflicts with existing state"):
+    with pytest.raises(DesignRecordingError, match="record state is invalid"):
         recorder.record(request)
+
+
+def test_local_recorder_reuses_existing_record_for_later_identical_plan_execution(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path)
+    recorder = LocalDesignPlanRecorder()
+
+    first = recorder.record(request)
+    later_request = DesignRecordingRequest(
+        prepared=request.prepared,
+        authority=DesignRecordAuthority(
+            authority_id="integration:record-124-retry",
+            repository=request.authority.repository,
+            base_ref=request.authority.base_ref,
+            head_sha=request.authority.head_sha,
+            snapshot_digest=request.authority.snapshot_digest,
+            plan_digest=request.authority.plan_digest,
+            version_control_manifest_digest=request.authority.version_control_manifest_digest,
+            issued_at=request.authority.issued_at + timedelta(minutes=1),
+            expires_at=request.authority.expires_at + timedelta(minutes=1),
+            allowed_effects=request.authority.allowed_effects,
+        ),
+        coordination=request.coordination,
+        observed_at=request.observed_at + timedelta(minutes=1),
+    )
+
+    second = recorder.record(later_request)
+
+    assert second.status is DesignRecordStatus.UNCHANGED
+    assert second.record_path == first.record_path
+    assert second.record.digest == first.record.digest
+    assert second.record.authority.digest == first.record.authority.digest
 
 
 def test_local_recorder_rejects_redirected_managed_directory(tmp_path: Path) -> None:

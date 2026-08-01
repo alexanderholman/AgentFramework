@@ -96,7 +96,14 @@ def create_cli(
             if not execute:
                 typer.echo(controller.preview().canonical_json())
                 return
-            typer.echo(json.dumps(controller.execute().to_dict(), sort_keys=True))
+            typer.echo(
+                json.dumps(
+                    controller.execute().to_dict(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
         except (AFError, TypeError, ValueError) as error:
             typer.echo(str(error), err=True)
             raise typer.Exit(code=2) from None
