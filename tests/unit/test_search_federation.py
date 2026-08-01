@@ -286,14 +286,12 @@ def test_federator_fails_closed_when_returned_hits_violate_query_policy(
 def test_federator_limits_results_and_orders_ties_by_stable_identity() -> None:
     router = Router(
         {
-            "alpha": (
-                _hit("resource-b", rank=1),
-                _hit("resource-a", rank=1),
-            )
+            "alpha": (_hit("resource-b", rank=1),),
+            "beta": (_hit("resource-a", rank=1),),
         }
     )
 
-    result = SearchFederator(router, sources=("alpha",)).search(_query(limit=1))
+    result = SearchFederator(router, sources=("alpha", "beta")).search(_query(limit=1))
 
     assert [hit.resource_id for hit in result.hits] == ["resource-a"]
 
