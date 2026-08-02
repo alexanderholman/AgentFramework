@@ -1,0 +1,460 @@
+from __future__ import annotations
+
+import hashlib
+import os
+from datetime import UTC, datetime
+from io import BufferedIOBase, BytesIO
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from af.filesystem.contracts import (
+    ByteRange,
+    FilesystemEntry,
+    FilesystemKey,
+    FilesystemOperationError,
+    FileVisibility,
+    MultipartPart,
+    MultipartUpload,
+    SignedUrlOperation,
+    UnsupportedFilesystemFeature,
+)
+from af.filesystem.decorators import ReadOnlyFilesystemDriver, ScopedFilesystemDriver
+from af.filesystem.local import LocalFilesystemDriver, local_filesystem_registration
+from af.filesystem.memory import MemoryFilesystemDriver, memory_filesystem_registration
+from af.framework.errors import PlatformError, PlatformReason
+from af.framework.managers import CapabilityBinding, ConnectionRef
+
+_NOW = datetime(2026, 8, 1, 12, tzinfo=UTC)
+
+
+class BrokenBinaryStream(BufferedIOBase):
+    def readable(self) -> bool:
+        return True
+
+    def read(self, size: int = -1) -> str:  # type: ignore[override]
+        del size
+        return "not-bytes"
+
+
+def _binding(version: str = "1") -> CapabilityBinding:
+    return CapabilityBinding(
+        driver_version=version,
+        artifact_digest="a" * 64,
+        dependency_graph_digest="b" * 64,
+        configuration_digest="c" * 64,
+        deployment_profile="test",
+        policy_version="policy-v1",
+    )
+
+
+def test_memory_filesystem_driver_validates_clocks_streams_and_unsupported_operations() -> None:
+    key = FilesystemKey("docs/report.txt")
+    upload = MultipartUpload(key=key, upload_id="upload-1")
+
+    with pytest.raises(TypeError):
+        MemoryFilesystemDriver(clock="bad")  # type: ignore[arg-type]
+
+    driver = MemoryFilesystemDriver(clock=lambda: datetime(2026, 8, 1, 12))
+    with pytest.raises(PlatformError) as invalid_clock:
+        driver.write(key, BytesIO(b"content"))
+    assert invalid_clock.value.reason is PlatformReason.PERMANENT_FAILURE
+
+    driver = MemoryFilesystemDriver(clock=lambda: _NOW)
+    with pytest.raises(FilesystemOperationError):
+        driver.read(key)
+    with pytest.raises(ValueError):
+        driver.write(key, object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        driver.write(key, BrokenBinaryStream())
+    with pytest.raises(UnsupportedFilesystemFeature) as visibility_error:
+        driver.write(key, BytesIO(b"content"), visibility=FileVisibility.PUBLIC)
+    assert visibility_error.value.feature == "visibility"
+
+    for operation in (
+        lambda: driver.signed_url(key, expires_at=_NOW),
+        lambda: driver.set_visibility(key, FileVisibility.PUBLIC),
+        lambda: driver.create_multipart_upload(key),
+        lambda: driver.upload_part(upload, 1, BytesIO(b"x")),
+        lambda: driver.complete_multipart_upload(upload, (MultipartPart(1, "a" * 64),)),
+    ):
+        with pytest.raises(UnsupportedFilesystemFeature):
+            operation()
+
+    driver.close()
+    driver.close()
+    with pytest.raises(PlatformError) as closed:
+        driver.list()
+    assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_memory_filesystem_registration_validates_configuration_and_evidence_clock() -> None:
+    registration = memory_filesystem_registration(clock=lambda: _NOW)
+    ref = ConnectionRef("filesystem", "primary", "memory")
+
+    with pytest.raises(ValueError):
+        registration.factory(ref, {"driver": "memory", "extra": True})
+    with pytest.raises(ValueError):
+        registration.verifier(ref, object(), _binding())  # type: ignore[arg-type]
+
+    invalid_clock_registration = memory_filesystem_registration(
+        clock=lambda: datetime(2026, 8, 1, 12)
+    )
+    driver = MemoryFilesystemDriver(clock=lambda: _NOW)
+    with pytest.raises(ValueError):
+        invalid_clock_registration.verifier(ref, driver, _binding())
+
+
+def test_local_filesystem_driver_covers_listing_metadata_copy_move_delete_and_shutdown(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError):
+        LocalFilesystemDriver("")
+    with pytest.raises(ValueError):
+        LocalFilesystemDriver("relative-root")
+    symlink_root = tmp_path / "storage-link"
+    symlink_root.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError):
+        LocalFilesystemDriver(symlink_root)
+    with pytest.raises(TypeError):
+        LocalFilesystemDriver(tmp_path / "storage", clock="bad")  # type: ignore[arg-type]
+
+    key = FilesystemKey("docs/report.txt")
+    root = tmp_path / "storage"
+    driver = LocalFilesystemDriver(root, clock=lambda: _NOW)
+    driver.write(key, BytesIO(b"content"))
+    driver.write(FilesystemKey("docs/other.txt"), BytesIO(b"other"))
+    driver.write(FilesystemKey("images/logo.bin"), BytesIO(b"logo"))
+    (root / "docs" / "symlink.bin").symlink_to(root / "images" / "logo.bin")
+
+    entries = driver.list(FilesystemKey("docs"))
+    assert [entry.key.value for entry in entries] == ["docs/other.txt", "docs/report.txt"]
+    assert driver.metadata(key).checksum_sha256 == hashlib.sha256(b"content").hexdigest()
+    assert driver.checksum(key) == hashlib.sha256(b"content").hexdigest()
+
+    copy_key = FilesystemKey("copies/report.txt")
+    moved_key = FilesystemKey("archive/report.txt")
+    driver.copy(key, copy_key)
+    driver.move(copy_key, moved_key)
+
+    with driver.read(moved_key) as stream:
+        assert stream.read() == b"content"
+    assert driver.delete(moved_key)
+    assert not driver.delete(moved_key)
+
+    for operation in (
+        lambda: driver.metadata(FilesystemKey("missing.txt")),
+        lambda: driver.read(FilesystemKey("missing.txt")),
+    ):
+        with pytest.raises(FilesystemOperationError):
+            operation()
+
+    with pytest.raises(ValueError):
+        driver.write(key, object())  # type: ignore[arg-type]
+    with pytest.raises(FilesystemOperationError) as broken_stream:
+        driver.write(FilesystemKey("docs/broken.txt"), BrokenBinaryStream())
+    assert broken_stream.value.reason is PlatformReason.PERMANENT_FAILURE
+
+    upload = MultipartUpload(key=key, upload_id="upload-1")
+    for operation in (
+        lambda: driver.signed_url(key, expires_at=_NOW),
+        lambda: driver.set_visibility(key, FileVisibility.PUBLIC),
+        lambda: driver.create_multipart_upload(key),
+        lambda: driver.upload_part(upload, 1, BytesIO(b"x")),
+        lambda: driver.complete_multipart_upload(upload, (MultipartPart(1, "a" * 64),)),
+    ):
+        with pytest.raises(UnsupportedFilesystemFeature):
+            operation()
+
+    driver.close()
+    with pytest.raises(FilesystemOperationError) as closed:
+        driver.list()
+    assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
+
+
+def test_local_filesystem_driver_reports_invalid_clock_and_registration_validation(
+    tmp_path: Path,
+) -> None:
+    driver = LocalFilesystemDriver(tmp_path / "storage", clock=lambda: datetime(2026, 8, 1, 12))
+    with pytest.raises(FilesystemOperationError) as invalid_clock:
+        driver._now()
+    assert invalid_clock.value.reason is PlatformReason.PERMANENT_FAILURE
+
+    registration = local_filesystem_registration(clock=lambda: _NOW)
+    ref = ConnectionRef("filesystem", "primary", "local")
+    with pytest.raises(ValueError):
+        registration.factory(ref, {"driver": "local"})
+    with pytest.raises(ValueError):
+        registration.factory(ref, {"driver": "local", "root": "relative-root"})
+    with pytest.raises(ValueError):
+        registration.verifier(ref, object(), _binding())  # type: ignore[arg-type]
+
+    invalid_clock_registration = local_filesystem_registration(
+        clock=lambda: datetime(2026, 8, 1, 12)
+    )
+    valid_driver = LocalFilesystemDriver(tmp_path / "valid", clock=lambda: _NOW)
+    with pytest.raises(ValueError):
+        invalid_clock_registration.verifier(ref, valid_driver, _binding())
+
+
+def test_local_filesystem_driver_closes_ranged_handle_when_fstat_fails(tmp_path: Path) -> None:
+    driver = LocalFilesystemDriver(tmp_path / "storage", clock=lambda: _NOW)
+    key = FilesystemKey("docs/report.txt")
+    driver.write(key, BytesIO(b"content"))
+    opened = driver._path(key).open("rb")
+
+    with (
+        patch.object(
+            LocalFilesystemDriver,
+            "_open_key_handle",
+            autospec=True,
+            return_value=opened,
+        ),
+        patch.object(ByteRange, "bounds", side_effect=ValueError("boom")),
+        pytest.raises(FilesystemOperationError),
+    ):
+        driver.read(key, byte_range=ByteRange(start=0))
+
+    assert opened.closed
+
+
+def test_local_filesystem_driver_rejects_symlink_swap_during_write(tmp_path: Path) -> None:
+    root = tmp_path / "storage"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    driver = LocalFilesystemDriver(root, clock=lambda: _NOW)
+    key = FilesystemKey("nested/report.txt")
+
+    original_mkdir = os.mkdir
+
+    def attack_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        original_mkdir(path, mode, dir_fd=dir_fd)
+        if path == "nested" and dir_fd is not None:
+            parent = Path(os.readlink(f"/proc/self/fd/{dir_fd}"))
+            if parent == root:
+                nested = root / "nested"
+                nested.rmdir()
+                nested.symlink_to(outside, target_is_directory=True)
+
+    with (
+        patch("os.mkdir", side_effect=attack_mkdir),
+        pytest.raises(FilesystemOperationError) as captured,
+    ):
+        driver.write(key, BytesIO(b"content"))
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert not (outside / "report.txt").exists()
+
+
+def test_local_filesystem_driver_rejects_symlink_swap_after_read_validation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "storage"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    driver = LocalFilesystemDriver(root, clock=lambda: _NOW)
+    key = FilesystemKey("nested/report.txt")
+    driver.write(key, BytesIO(b"inside"))
+    (outside / "report.txt").write_bytes(b"outside")
+
+    original_path = LocalFilesystemDriver._path
+
+    def swap_after_validation(
+        self: LocalFilesystemDriver,
+        requested: FilesystemKey,
+    ) -> Path:
+        path = original_path(self, requested)
+        if requested == key:
+            nested = root / "nested"
+            if nested.exists() and not nested.is_symlink():
+                nested.rename(root / "nested-hidden")
+                nested.symlink_to(outside, target_is_directory=True)
+        return path
+
+    with (
+        patch.object(
+            LocalFilesystemDriver,
+            "_path",
+            autospec=True,
+            side_effect=swap_after_validation,
+        ),
+        pytest.raises(FilesystemOperationError) as captured,
+        driver.read(key) as stream,
+    ):
+        stream.read()
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert (outside / "report.txt").read_bytes() == b"outside"
+
+
+def test_memory_filesystem_move_is_a_no_op_when_source_equals_destination() -> None:
+    driver = MemoryFilesystemDriver(clock=lambda: _NOW)
+    key = FilesystemKey("docs/report.txt")
+    driver.write(key, BytesIO(b"content"))
+
+    driver.move(key, key)
+
+    with driver.read(key) as stream:
+        assert stream.read() == b"content"
+
+
+def test_scoped_filesystem_driver_rewrites_keys_and_keeps_listings_relative() -> None:
+    base = MemoryFilesystemDriver(clock=lambda: _NOW)
+    driver = ScopedFilesystemDriver(base, FilesystemKey("tenant-a"))
+    key = FilesystemKey("docs/report.txt")
+    copy_key = FilesystemKey("docs/report-copy.txt")
+    moved_key = FilesystemKey("archive/report.txt")
+
+    driver.write(key, BytesIO(b"content"))
+    driver.copy(key, copy_key)
+    driver.move(copy_key, moved_key)
+
+    with base.read(FilesystemKey("tenant-a/docs/report.txt")) as stream:
+        assert stream.read() == b"content"
+    with driver.read(key, byte_range=ByteRange(start=1, end=4)) as stream:
+        assert stream.read() == b"onte"
+
+    assert [entry.key.value for entry in driver.list()] == ["archive/report.txt", "docs/report.txt"]
+    assert driver.metadata(key).key == key
+    assert driver.checksum(key) == hashlib.sha256(b"content").hexdigest()
+    assert driver.delete(moved_key)
+
+
+def test_scoped_filesystem_driver_rejects_underlying_entries_that_escape_scope() -> None:
+    class RogueDriver:
+        def read(self, key: FilesystemKey, /, *, byte_range: ByteRange | None = None) -> BytesIO:
+            del key, byte_range
+            return BytesIO(b"")
+
+        def write(
+            self,
+            key: FilesystemKey,
+            stream: BufferedIOBase,
+            /,
+            *,
+            visibility: FileVisibility = FileVisibility.PRIVATE,
+        ):
+            del key, stream, visibility
+            raise AssertionError("write should not be called")
+
+        def list(self, prefix: FilesystemKey | None = None, /):
+            del prefix
+            return ()
+
+        def metadata(self, key: FilesystemKey, /):
+            del key
+            raise AssertionError("metadata should not be called")
+
+        def checksum(self, key: FilesystemKey, /) -> str:
+            del key
+            raise AssertionError("checksum should not be called")
+
+        def copy(self, source: FilesystemKey, destination: FilesystemKey, /) -> None:
+            del source, destination
+            raise AssertionError("copy should not be called")
+
+        def move(self, source: FilesystemKey, destination: FilesystemKey, /) -> None:
+            del source, destination
+            raise AssertionError("move should not be called")
+
+        def delete(self, key: FilesystemKey, /) -> bool:
+            del key
+            raise AssertionError("delete should not be called")
+
+        def signed_url(
+            self,
+            key: FilesystemKey,
+            /,
+            *,
+            expires_at,
+            operation=SignedUrlOperation.GET,
+        ):
+            del key, expires_at, operation
+            raise AssertionError("signed_url should not be called")
+
+        def set_visibility(self, key: FilesystemKey, visibility: FileVisibility, /):
+            del key, visibility
+            raise AssertionError("set_visibility should not be called")
+
+        def create_multipart_upload(self, key: FilesystemKey, /):
+            del key
+            raise AssertionError("create_multipart_upload should not be called")
+
+        def upload_part(self, upload: MultipartUpload, part_number: int, stream: BufferedIOBase, /):
+            del upload, part_number, stream
+            raise AssertionError("upload_part should not be called")
+
+        def complete_multipart_upload(
+            self,
+            upload: MultipartUpload,
+            parts: tuple[MultipartPart, ...],
+            /,
+        ):
+            del upload, parts
+            raise AssertionError("complete_multipart_upload should not be called")
+
+        def close(self) -> None:
+            return None
+
+    rogue = RogueDriver()
+    driver = ScopedFilesystemDriver(rogue, FilesystemKey("tenant-a"))
+    rogue.list = lambda prefix=None: (  # type: ignore[method-assign]
+        FilesystemEntry(
+            key=FilesystemKey("tenant-b/leak.txt"),
+            size=1,
+            updated_at=_NOW,
+        ),
+    )
+
+    with pytest.raises(FilesystemOperationError) as captured:
+        driver.list()
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+
+
+def test_read_only_filesystem_driver_allows_reads_and_blocks_mutations() -> None:
+    base = MemoryFilesystemDriver(clock=lambda: _NOW)
+    key = FilesystemKey("docs/report.txt")
+    upload = MultipartUpload(key=key, upload_id="upload-1")
+    part = MultipartPart(part_number=1, checksum_sha256="a" * 64)
+    base.write(key, BytesIO(b"content"))
+    driver = ReadOnlyFilesystemDriver(base)
+
+    with driver.read(key) as stream:
+        assert stream.read() == b"content"
+    assert [entry.key for entry in driver.list()] == [key]
+    assert driver.metadata(key).key == key
+    assert driver.checksum(key) == hashlib.sha256(b"content").hexdigest()
+
+    blocked_operations = (
+        lambda: driver.write(key, BytesIO(b"new")),
+        lambda: driver.copy(key, FilesystemKey("docs/copy.txt")),
+        lambda: driver.move(key, FilesystemKey("archive/report.txt")),
+        lambda: driver.delete(key),
+        lambda: driver.set_visibility(key, FileVisibility.PUBLIC),
+        lambda: driver.create_multipart_upload(key),
+        lambda: driver.upload_part(upload, 1, BytesIO(b"x")),
+        lambda: driver.complete_multipart_upload(upload, (part,)),
+        lambda: driver.signed_url(
+            key,
+            expires_at=_NOW,
+            operation=SignedUrlOperation.PUT,
+        ),
+    )
+    for operation in blocked_operations:
+        with pytest.raises(FilesystemOperationError) as captured:
+            operation()
+        assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
+
+    with pytest.raises(UnsupportedFilesystemFeature):
+        driver.signed_url(key, expires_at=_NOW, operation=SignedUrlOperation.GET)
+
+    driver.close()
+    with pytest.raises(PlatformError) as closed:
+        driver.list()
+    assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED

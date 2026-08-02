@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from dataclasses import dataclass, field
@@ -131,6 +132,50 @@ class DesignRecordAuthority:
     def digest(self) -> str:
         return _digest(self.canonical_json())
 
+    @classmethod
+    def from_dict(cls, payload: object) -> DesignRecordAuthority:
+        if type(payload) is not dict:
+            raise TypeError("self-design recording authority payload is invalid")
+        allowed_effects = payload.get("allowed_effects")
+        if type(allowed_effects) is not list:
+            raise ValueError("self-design recording authority effects are invalid")
+        try:
+            authority_id = payload["authority_id"]
+            repository = payload["repository"]
+            base_ref = payload["base_ref"]
+            head_sha = payload["head_sha"]
+            snapshot_digest = payload["snapshot_digest"]
+            plan_digest = payload["plan_digest"]
+            version_control_manifest_digest = payload["version_control_manifest_digest"]
+            effects = tuple(DesignRecordingEffect(item) for item in allowed_effects)
+            issued_at = datetime.fromisoformat(str(payload["issued_at"]).replace("Z", "+00:00"))
+            expires_at = datetime.fromisoformat(str(payload["expires_at"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("self-design recording authority payload is invalid") from error
+        string_fields = (
+            authority_id,
+            repository,
+            base_ref,
+            head_sha,
+            snapshot_digest,
+            plan_digest,
+            version_control_manifest_digest,
+        )
+        if any(type(value) is not str for value in string_fields):
+            raise ValueError("self-design recording authority payload is invalid")
+        return cls(
+            authority_id=authority_id,
+            repository=repository,
+            base_ref=base_ref,
+            head_sha=head_sha,
+            snapshot_digest=snapshot_digest,
+            plan_digest=plan_digest,
+            version_control_manifest_digest=version_control_manifest_digest,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            allowed_effects=effects,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DesignRecordingRequest:
@@ -212,6 +257,33 @@ class DesignPlanRecord:
             version_control_manifest_digest=request.coordination.manifest.digest(),
             recorded_at=request.observed_at,
         )
+
+    @classmethod
+    def from_canonical_bytes(
+        cls,
+        content: bytes,
+        prepared: PreparedDesignPlan,
+    ) -> DesignPlanRecord:
+        if not isinstance(prepared, PreparedDesignPlan):
+            raise TypeError("self-design prepared plan is invalid")
+        if type(content) is not bytes:
+            raise TypeError("self-design record bytes are invalid")
+        try:
+            payload = json.loads(content)
+            authority = DesignRecordAuthority.from_dict(payload["authority"])
+            recorded_at = datetime.fromisoformat(str(payload["recorded_at"]).replace("Z", "+00:00"))
+            version_control_manifest_digest = payload["version_control_manifest_digest"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise DesignRecordingError("self-design record state is invalid") from error
+        record = cls(
+            prepared=prepared,
+            authority=authority,
+            version_control_manifest_digest=version_control_manifest_digest,
+            recorded_at=recorded_at,
+        )
+        if not hmac.compare_digest(record.canonical_bytes(), content):
+            raise DesignRecordingError("self-design record state is invalid")
+        return record
 
     def payload(self) -> dict[str, object]:
         return {

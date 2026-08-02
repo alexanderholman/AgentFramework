@@ -55,6 +55,7 @@ def test_environment_source_preserves_existing_settings_parsing() -> None:
                 "AF_PORT": "9000",
                 "AF_ALLOWED_HOSTS": "one.example, two.example",
                 "AF_ALLOW_REMOTE_INFERENCE": "yes",
+                "AF_SESSION_COOKIE_SIGNING_KEY": "deployment-session-key",
                 "AF_SELECTOR_CONFIDENCE_THRESHOLD": "0.65",
             }
         )
@@ -64,6 +65,7 @@ def test_environment_source_preserves_existing_settings_parsing() -> None:
     assert snapshot.settings.port == 9000
     assert snapshot.settings.allowed_hosts == ("one.example", "two.example")
     assert snapshot.settings.allow_remote_inference is True
+    assert snapshot.settings.session_cookie_signing_key == "deployment-session-key"
     assert snapshot.settings.selector_confidence_threshold == 0.65
 
     disabled = load_settings(EnvironmentConfigSource({"AF_ALLOW_REMOTE_INFERENCE": "off"}))

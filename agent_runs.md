@@ -1537,7 +1537,374 @@ Two merge blockers in the PR's deterministic reference slice:
 
 ---
 
-## Run #026 - Queue Capability-Gate and Ordering Clarification Slice
+## Run #026 - CacheManager Memory and Null Slice
+**Date**: 2026-08-01
+**Agent**: Codex
+**Status**: In Progress
+
+### Plan
+1. Specify bounded cache identities, TTL behavior, namespace isolation, and manager routing.
+2. Implement verified memory and null registrations behind `CacheManager`.
+3. Run focused tests, strict typing, formatting, lint, packaging, governance, and regression
+   gates; keep the pull request draft until exact-head CI and review are complete.
+
+### Progress
+- Added the failing cache specification first in commit
+  `ac369e68af08c9aac7da4d7c38eefdb226df2def`.
+- Implemented immutable contracts, named capability routing, lazy TTL expiry, exact
+  namespace flush, deterministic shutdown, and an explicit no-storage driver.
+- Issue #18 remains open only for source adapters certified with their owning driver
+  issues; no duplicate search branch was created.
+
+### Related References
+- Issue #19
+- DEC-030
+- SPEC-025
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #027 - CacheManager Remember and Memoize Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing `agent/cache-manager-memory` worktree and verified cache manager branch
+- Required TDD workflow and `[SCRIPT:af-dev]` gate
+
+### Outputs
+- Added failing unit coverage for manager-level `remember` and `memoize`
+- Implemented synchronous compute-on-miss cache fill on `CacheManager`
+- Appended DEC-041 and SPEC-028 for the new bounded cache-fill slice
+
+### Result Summary
+This run extends the existing issue #19 pull request with the smallest remaining application-
+level cache semantic that does not require a new backend driver contract. `remember` and
+`memoize` now reuse the verified manager routing and current store validation.
+
+### Issues Encountered
+- The worktree initially lacked the dev toolchain, so the first red-phase test attempt failed
+  before `pytest` execution and required a locked `uv sync --extra dev` through `[SCRIPT:af-dev]`
+
+### Actions Taken
+- Added three failing tests covering cache-fill reuse and loader validation
+- Implemented manager-only loader validation and cache-fill helpers without changing drivers
+- Prepared the branch for focused cache tests and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-041
+- SPEC-028
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #028 - Database Cache Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache manager branch with memory, null, file, and fenced memory-lock slices
+- Repository SQLite and SQLAlchemy dependencies already exercised by other AF drivers
+
+### Outputs
+- Added failing unit coverage for a verified database-backed cache driver
+- Implemented a persistent `database` cache registration and driver with exact TTL and namespace
+  semantics
+- Appended DEC-042 and SPEC-029 for the bounded database cache slice
+
+### Result Summary
+This run extends the existing issue #19 pull request with the next smallest persistent cache
+backend supported by current repository dependencies. The new driver stores bounded bytes in one
+tenant-scoped table, treats expiry and invalid persisted rows as misses, and deliberately does not
+advertise lock capability yet.
+
+### Issues Encountered
+- The first red-phase test invocation failed before collection because the worktree lacked the dev
+  extra; rerunning with `uv run --extra dev` produced the expected missing-module failure
+
+### Actions Taken
+- Added five red-phase tests covering persistence, expiry, invalid-row cleanup, namespace-safe
+  flush, manager routing, capability boundaries, and shutdown behavior
+- Implemented `src/af/cache/database.py` using the existing SQLAlchemy dependency and verified
+  driver-registration pattern
+- Prepared the branch for focused cache tests and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-042
+- SPEC-029
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #029 - Database Lock Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified database cache driver and owner-fenced memory lock contract
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for persistent owner-fenced database locks across driver instances
+- Implemented database-backed acquire, renew, and release semantics with monotonic fencing tokens
+- Appended DEC-043 and SPEC-030 for the bounded database-lock slice
+
+### Result Summary
+This run extends the open issue #19 PR with the smallest remaining persistent coordination slice
+already supported by repository dependencies. The database cache driver now advertises verified
+lock capability, fences renew/release by exact lease identity, and preserves namespace-safe cache
+flush behavior.
+
+### Issues Encountered
+- The first red-phase focused test run failed exactly because the database driver still raised
+  `NotImplementedError` for lock operations; the new slice closed that gap without expanding to
+  Redis or Memcached behavior
+
+### Actions Taken
+- Added red-phase coverage for cross-instance contention, forged-owner rejection, manager routing,
+  and shutdown validation
+- Implemented a dedicated `af_cache_locks` table with atomic acquire/reclaim, renew, and release
+  updates
+- Prepared the branch for focused cache tests and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-043
+- SPEC-030
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #030 - Memcached Cache Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache-manager, local drivers, and optional-service registration patterns
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for a verified Memcached-backed cache driver
+- Implemented a cache-only `memcached` registration and driver with namespace-scoped physical keys
+  and Memcached TTL translation
+- Appended DEC-044 and SPEC-031 for the bounded Memcached cache slice
+
+### Result Summary
+This run extends the open issue #19 PR with the next smallest network-backed cache slice while
+preserving AF's tenant-safety contract. The Memcached driver treats eviction and non-durable
+forever entries as normal misses, routes through the verified cache manager, and intentionally does
+not advertise flush or lock capability yet.
+
+### Issues Encountered
+- The first red-phase focused test run failed during collection because the Memcached module did
+  not exist yet; implementing the driver and registration closed that gap without widening to lock
+  semantics
+
+### Actions Taken
+- Added red-phase coverage for runtime-identity checks, tenant isolation, eviction tolerance, TTL
+  translation, manager routing, and unsafe configuration rejection
+- Implemented `src/af/cache/memcached.py` using the repository's optional-runtime registration
+  pattern and a namespace-safe key derivation strategy
+- Prepared the branch for focused cache tests, type/lint checks, and the full AF development gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-044
+- SPEC-031
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #031 - Memcached Lock Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing Memcached cache-only slice, owner-fenced memory/database lock contracts, and cache
+  manager routing
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for Memcached owner-fenced lock acquisition, renewal, release, and
+  lock-specific failure boundaries
+- Extended the verified `memcached` driver to advertise lock capability and implement the shared
+  lock contract with namespace-scoped lease and token keys
+- Appended DEC-045 and SPEC-032 for the bounded Memcached lock slice
+
+### Result Summary
+This run advances the open issue #19 PR with the next smallest missing acceptance slice after the
+Memcached cache-only work: owner-fenced Memcached coordination. The driver now permits one active
+owner, preserves owner-checked renew/release semantics, and stays explicit that eviction or restart
+can still erase Memcached lock state because cache is not authority.
+
+### Issues Encountered
+- The red-phase tests initially failed because the existing Memcached driver intentionally omitted
+  lock capability; implementation added only the minimum real-client verbs (`add`, `gets`, `cas`,
+  `incr`) needed for the slice
+
+### Actions Taken
+- Added red-phase coverage for lock fencing, manager routing, and lock-specific failure stages in
+  `tests/unit/test_cache_memcached.py`
+- Implemented Memcached lease encoding/decoding, monotonic token allocation, and owner-fenced
+  acquire/renew/release paths in `src/af/cache/memcached.py`
+- Ran the focused cache suite before the repository-wide `[SCRIPT:af-dev]` gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-045
+- SPEC-032
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #032 - Redis Cache And Lock Driver Slice
+**Date**: 2026-08-01
+**Agent**: OpenCode / GPT-5.4
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache-manager, memory/database/memcached driver patterns, and append-only cache
+  history
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added failing unit coverage for Redis runtime identity, namespace-safe cache keys, millisecond
+  TTLs, owner-fenced locks, and Redis-specific failure boundaries
+- Implemented a verified `redis` cache driver and inert registration with namespace-scoped physical
+  keys, millisecond TTL translation, and compare-by-value renew/release scripts
+- Appended DEC-046 and SPEC-033 for the bounded Redis cache and lock slice
+
+### Result Summary
+This run advances the open issue #19 PR with the remaining named driver backend: Redis. The driver
+routes through the shared `CacheManager`, preserves tenant-safe key isolation, permits one active
+lock owner at a time, and stays explicit that flush, stale-while-revalidate, stampede protection,
+and funnels are still outside this incremental slice.
+
+### Issues Encountered
+- The red-phase focused test run initially failed at collection because `af.cache.redis` did not
+  exist yet; implementation added only the minimum runtime surface needed by the new tests
+
+### Actions Taken
+- Added red-phase coverage in `tests/unit/test_cache_redis.py` for runtime identity, key isolation,
+  TTL behavior, owner-fenced lease mutation, manager routing, and failure stages
+- Implemented `src/af/cache/redis.py` using the existing optional-runtime evidence pattern and
+  namespace-scoped key derivation used by other network cache drivers
+- Ran the focused cache suite before the repository-wide `[SCRIPT:af-dev]` gate
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-046
+- SPEC-033
+- Script: `[SCRIPT:af-dev]`
+
+
+---
+
+## Run #033 - Bounded Cache-Fill Funnel
+**Date**: 2026-08-01
+**Agent**: Codex / GPT-5
+**Status**: In Progress
+
+### Inputs
+- Issue #19 follow-up on open PR #150
+- Existing verified cache drivers and owner-fenced lock contracts
+- Required TDD workflow and `[SCRIPT:af-dev]` validation gate
+
+### Outputs
+- Added red-phase concurrency, timeout, lease-loss, validation, and memoize regressions
+- Added opt-in lock-backed request coalescing to `remember` and `memoize`
+- Appended DEC-047 and SPEC-034 for the bounded funnel slice
+
+### Result Summary
+The manager now permits one loader to fill a contended key while bounded waiters reuse the
+published value. Lease loss rejects stale publication, and cache-only callers retain the existing
+non-locking behavior unless they explicitly request coalescing.
+
+### Issues Encountered
+- The repository checkout was unavailable with authenticated Git credentials, so guarded GitHub
+  connector writes were used against the exact PR head
+- The test-only workflow was superseded after the implementation commit; the separate test commit
+  still preserves red-before-green ordering
+
+### Actions Taken
+- Added a one-winner eight-thread behavior test and bounded failure regressions
+- Implemented explicit lock/wait duration validation, double-checked cache fill, lease renewal, and
+  sanitized transient failure stages
+- Ran formatting, lint, compilation, and the hosted Python quality gate before append-only history
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-047
+- SPEC-034
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #034 - Stale-While-Revalidate Cache Fill
+**Date**: 2026-08-01
+**Agent**: Codex / GPT-5
+**Status**: In Progress
+
+### Inputs
+- Final missing issue #19 slice on open PR #150
+- Verified raw-byte cache, TTL, namespace, and owner-fenced lock capabilities
+- Required red-before-green workflow and repository-wide `[SCRIPT:af-dev]` gate
+
+### Outputs
+- Added red-phase fresh/stale, one-refresh, hard-expiry, validation, and failure regressions
+- Added manager-owned stale-while-revalidate orchestration with caller-owned scheduling
+- Appended DEC-048 and SPEC-035 for the bounded SWR contract
+
+### Result Summary
+Fresh payloads retain ordinary raw cache semantics. After freshness expires, callers receive bounded
+stale bytes immediately while one fenced owner schedules refresh; refresh failure preserves the
+stale value. Hard expiry falls back to a bounded one-owner cold fill.
+
+### Issues Encountered
+- The first implementation head passed all tests, Ruff, and strict typing but reduced total
+  coverage to 89.96%, causing Python and service matrices to fail their shared 90% gate
+- Boundary regressions for scheduling rejection, expired refresh leases, cold-fill lease loss,
+  wait timeout, and hard-horizon overflow restored the canonical Python gate
+- The repository checkout remains unavailable with authenticated Git credentials, so guarded
+  connector writes target the exact PR head
+
+### Actions Taken
+- Committed the behavioral contract before implementation
+- Implemented digest-scoped freshness markers, combined hard TTL retention, single-owner scheduled
+  refresh, and bounded cold fill
+- Inspected failed workflow steps and logs before adding only verified missing coverage
+- Re-ran the hosted Python quality gate successfully before append-only governance history
+
+### Related References
+- Issue #19
+- Pull Request #150
+- DEC-048
+- SPEC-035
+- Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #035 - Queue Capability-Gate and Ordering Clarification Slice
 **Date**: 2026-08-01 16:40:00 UTC
 **Agent**: OpenCode
 **Status**: Completed
@@ -1565,7 +1932,7 @@ Two merge blockers in the PR's deterministic reference slice:
   first new tests failed during collection until those fields were added
 
 ### Related References
-- SPEC-025
-- DEC-039
+- SPEC-037
+- DEC-050
 - Issue #20
 - PR #153

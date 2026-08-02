@@ -2,6 +2,7 @@
 {% block title %}Tasks · AF{% endblock %}
 {% block content %}
   <h1>Tasks</h1>
+  {% if flash %}<p role="status">{{ flash }}</p>{% endif %}
   {% if tasks %}
     <ol>
       {% for task in tasks %}
@@ -10,4 +11,3 @@
     </ol>
   {% else %}<p>No persisted tasks yet.</p>{% endif %}
 {% endblock %}
-

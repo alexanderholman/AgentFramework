@@ -2554,7 +2554,348 @@ remaining deterministic, local, auditable, and authority-neutral.
 
 ---
 
-## [DEC-039] Make Queue FIFO and Transaction Requests Explicit Capability Gates
+## DEC-030: Keep Cache Non-Authoritative and Namespace Every Mutation
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 introduces local cache stores before persistent and network drivers. Cache misses,
+expiry, eviction, and an explicit null store must remain normal behavior, while a flush must
+never cross application or tenant boundaries.
+
+### Decision
+1. Route cache access through an application-owned `CacheManager` that constructs only
+   registered drivers with current capability evidence.
+2. Require every operation to carry an immutable application, tenant, and namespace
+   identity plus a bounded key.
+3. Store bounded bytes only in this first slice; cache values never become authority.
+4. Make TTL expiry fail as a miss at the expiry boundary and scope flush to one exact
+   namespace.
+5. Provide memory and null drivers as explicit configurations; the null driver validates
+   requests but retains nothing.
+
+### Consequences
+The first cache slice is deterministic, testable, and safe for tenant isolation. Higher-level
+remember, stale-while-revalidate, locking, persistent stores, and network stores remain
+separate issue #19 slices.
+
+## [DEC-039] Fence Cache Locks With Owner Identity and Monotonic Tokens
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+DEC-030 introduced non-authoritative namespaced cache stores and deferred coordination.
+Issue #19 next requires one active lock owner while ensuring a stale or different owner cannot
+renew or release the current lease.
+
+### Decision
+1. Bind every lock to the exact application, tenant, namespace, and key identity.
+2. Return an opaque owner identity, positive monotonic fencing token, and timezone-aware expiry
+   as one immutable lease.
+3. Renew or release only when the supplied lease exactly matches the active unexpired lease.
+4. Preserve fencing-token monotonicity across expiry and release for the driver's lifetime.
+5. Let the null driver validate lock requests but never claim ownership.
+6. Treat locks as coordination only; authoritative consumers must reject stale fencing tokens.
+
+### Consequences
+The memory driver can prove single-owner contention and stale-owner rejection deterministically.
+Persistent and network drivers, blocking funnels, and stampede control remain later issue #19
+slices against the same lease contract.
+
+## [DEC-040] Treat File Cache Frames as Non-Authoritative Atomic Artifacts
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 requires a persistent local store without allowing cache files, corruption, expiry, or
+tenant-controlled identity text to become authoritative filesystem state.
+
+### Decision
+1. Require an explicit absolute canonical root and derive all child paths from SHA-256 digests
+   of already-validated namespace and key identities.
+2. Store the original identities inside a bounded versioned frame and verify them after read.
+3. Replace entries atomically through a private same-directory temporary file, file sync,
+   rename, and directory sync where supported.
+4. Treat malformed, oversized, symlinked, mismatched, or expired entries as cache misses and
+   remove only the exact entry.
+5. Scope flush to one namespace digest directory and never advertise lock capability for the
+   file driver.
+
+### Consequences
+File cache values survive driver recreation without becoming authority. Corruption and eviction
+remain normal misses, tenant identities never become path components, and coordination continues
+to require a driver that honestly advertises locks.
+
+---
+
+## [DEC-041] Keep Remember and Memoize as Manager-Level Cache Fill Semantics
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still lacks higher-level cache fill semantics after the first local cache, lock, and
+ file slices. The next smallest acceptance increment is to let application code reuse the
+ verified cache manager and existing store contracts for compute-on-miss behavior without yet
+ introducing stale-while-revalidate or new backend-specific primitives.
+
+### Decision
+1. Implement `remember` on `CacheManager` as a synchronous manager-owned cache fill that reads
+   first, executes one provided loader on a miss, stores the returned bytes through the same
+   verified connection, and returns the stored value.
+2. Implement `memoize` as a thin wrapper that returns a zero-argument callable delegating to
+   `remember`.
+3. Keep the first slice backend-agnostic by reusing existing `get` and `set` driver contracts
+   instead of expanding every driver interface.
+4. Require the supplied loader to be callable and preserve the existing bounded-bytes write
+   validation at the store boundary.
+
+### Consequences
+Application code can opt into deterministic cache fills immediately on top of memory, null, and
+ file drivers. The slice stays small and testable, but it does not yet provide stale
+ revalidation, contention collapse, or distributed single-flight guarantees.
+
+---
+
+## [DEC-042] Keep Database Cache Storage Row-Scoped and Non-Coordinating
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still needs a persistent cache backend that works with the verified `CacheManager`
+contracts and current repository dependencies. The next smallest slice is a database-backed cache
+store without yet expanding into distributed locks or network-specific behavior.
+
+### Decision
+1. Implement a `database` cache driver that stores cache entries in one bounded table keyed by
+   validated application, tenant, namespace, and cache-key identities.
+2. Reuse the existing bytes, TTL, delete, and namespace flush contracts instead of introducing a
+   new serialization or lock contract.
+3. Treat expired or invalid persisted rows as cache misses and remove only the exact affected row.
+4. Advertise read, write, TTL, namespace, and flush capabilities only; do not advertise lock
+   capability in this slice.
+5. Prefer a local SQL backend already shipped in the repository dependency set so the slice
+   remains deterministic and fully testable under `[SCRIPT:af-dev]`.
+
+### Consequences
+AF gains a verified persistent cache backend that survives process restarts and preserves tenant
+flush boundaries without taking on distributed coordination semantics. Redis, Memcached, and
+database-backed lock coordination remain later issue #19 slices.
+
+---
+
+## [DEC-043] Extend Database Cache Rows With Persistent Owner-Fenced Locks
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires one lock-capable persistent store after the memory-only coordination
+slice. The open PR already ships a bounded database cache driver, so the next smallest increment
+is to reuse the same local SQL dependency for owner-fenced lock coordination.
+
+### Decision
+1. Add one `af_cache_locks` table keyed by validated application, tenant, namespace, and cache
+   key identities.
+2. Reuse the existing immutable `LockLease` contract with owner identity, monotonic fencing token,
+   and timezone-aware expiry.
+3. Acquire by inserting a first lease or atomically replacing only one expired matching row with a
+   greater fencing token.
+4. Renew and release only when the supplied lease exactly matches the persisted owner, token, and
+   expiry.
+5. Keep cache-entry storage and lock coordination in separate tables so flush operations cannot
+   erase unrelated tenant or application state.
+
+### Consequences
+AF now has one persistent lock-capable cache backend that preserves the fenced-owner rules across
+driver recreation and cross-instance contention. This remains a local deterministic SQL slice and
+does not yet provide Redis or Memcached network semantics, funnels, or stale-while-revalidate.
+
+---
+
+## [DEC-044] Scope Memcached Cache Isolation With Versioned Namespace Keys
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires a Memcached cache driver, but AF's cache contract forbids flush behavior
+that can erase unrelated tenant or application data. Native Memcached `flush_all` semantics would
+violate that boundary on shared infrastructure.
+
+### Decision
+1. Implement the first Memcached slice as a cache-only driver with verified read, write, TTL, and
+   namespace capabilities.
+2. Derive physical keys from validated application, tenant, namespace, and cache-key identities so
+   tenants with the same logical key never collide.
+3. Omit flush and lock capabilities from the first Memcached slice instead of wrapping
+   `flush_all` in an unsafe abstraction.
+4. Treat Memcached eviction and forever-entry loss as normal cache-miss behavior because cache is
+   optimization, never authority.
+5. Translate AF TTLs into Memcached's relative and absolute expiry rules while keeping AF's exact
+   positive-duration validation boundary.
+
+### Consequences
+AF gains a verified network cache backend without violating tenant-safety rules or pretending that
+Memcached offers durable forever retention. Namespace-safe flush, distributed locks, stale-while-
+revalidate, and funnels remain later issue #19 slices.
+
+---
+
+## [DEC-045] Scope Memcached Coordination To Ephemeral Owner-Fenced Locks
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires Memcached lock drivers. AF's lock contract requires one active owner and
+ owner-checked renew/release, but Memcached does not provide durable transactions or namespace-safe
+ flush semantics. The implementation therefore needs to expose only the coordination guarantees the
+ runtime can actually support.
+
+### Decision
+1. Implement the Memcached follow-up slice as a lock-capable cache driver that advertises lock
+   capability alongside the existing read/write/TTL/namespace features.
+2. Store lock leases as validated owner, fencing-token, and expiry payloads under namespace-scoped
+   physical keys and use Memcached `add` plus `gets`/`cas` to preserve single-owner contention and
+   owner-fenced renew/release semantics.
+3. Allocate fencing tokens through a separate namespace-scoped counter key so newly claimed leases
+   advance monotonically while the token key remains isolated from tenant/application peers.
+4. Keep flush unsupported and treat lock loss caused by eviction or restart as an expected Memcached
+   durability boundary rather than pretending network cache locks are authoritative.
+
+### Consequences
+AF now covers the Memcached lock-driver acceptance slice for one active owner and owner-fenced
+ mutation while staying explicit that Memcached coordination is ephemeral. Redis, stale-while-
+revalidate, stampede protection, and funnels remain later issue #19 work.
+
+---
+
+## [DEC-046] Scope Redis Coordination To Verified Namespace-Scoped Cache And Locks
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 still requires Redis cache and lock drivers on the open PR after memory, file, database,
+and Memcached slices landed. AF's cache contract forbids tenant-unsafe flush behavior, and the
+smallest remaining driver slice is one verified Redis backend that reuses the existing cache and
+owner-fenced lock contracts without widening into stale-while-revalidate or funnel orchestration.
+
+### Decision
+1. Implement a verified `redis` cache driver that advertises only read, write, TTL, namespace, and
+   lock capabilities.
+2. Derive physical cache, namespace-version, lock, and lock-token keys from validated application,
+   tenant, namespace, and logical key identities so same-named tenant data never collides.
+3. Translate AF TTLs into Redis millisecond expiry and treat eviction or restart loss as normal
+   cache or lock miss behavior because cache is optimization, never authority.
+4. Use Redis `SET ... NX PX`, `INCR`, and compare-by-value scripts for acquire, renew, and release
+   so only one active owner holds a lease and only the current lease can mutate it.
+5. Keep flush unsupported in this slice instead of wrapping unsafe whole-database deletion in a
+   tenant-safe abstraction.
+
+### Consequences
+AF now covers the missing Redis driver slice on issue #19 with namespace-safe keys and owner-fenced
+network coordination while staying explicit about the runtime's non-authoritative durability model.
+Stale-while-revalidate, request coalescing, stampede protection, and funnels remain later issue #19
+work.
+
+
+---
+
+## [DEC-047] Make Stampede Protection An Explicit Lock-Backed Cache Fill
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 requires request coalescing and stampede protection, while several cache drivers
+intentionally do not advertise locks. Applying coordination implicitly to every `remember` call
+would either reject valid cache-only drivers or claim guarantees they cannot provide.
+
+### Decision
+1. Keep ordinary `remember` and `memoize` behavior unchanged unless callers supply a positive
+   lock TTL.
+2. Treat a supplied lock TTL as an explicit request for the selected driver's verified lock
+   capability and use a bounded wait timeout for contenders.
+3. Permit one lease owner to run the loader, double-check the cache after acquisition, and let
+   contenders reuse the published value instead of running duplicate loaders.
+4. Renew the lease after loading and before publication; if ownership was lost, reject the stale
+   write and return a value only when another owner has already published one.
+5. Surface contention timeout and lease loss as sanitized transient failures, never as an
+   unbounded wait or an unfenced cache write.
+
+### Consequences
+AF gains opt-in, backend-independent request coalescing over verified lock drivers without
+breaking cache-only stores. Callers must choose lock and wait durations appropriate to their
+loader; stale-while-revalidate remains a separate issue #19 slice.
+
+---
+
+## [DEC-048] Retain Raw Values Behind Explicit Freshness Markers
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #19 requires stale-while-revalidate across drivers whose ordinary `get` operation never
+returns expired entries. SWR must preserve the shared raw-bytes cache contract, avoid making cache
+authoritative, and use only capabilities the selected driver has verified.
+
+### Decision
+1. Add an explicit `stale_while_revalidate` manager operation requiring positive fresh, stale,
+   lock, and bounded-wait durations plus a caller-owned revalidation scheduler.
+2. Store payload bytes under the caller's key for the combined fresh-plus-stale hard TTL and store
+   a bounded digest-derived freshness marker for only the fresh TTL.
+3. Return retained stale bytes immediately after freshness expires; allow one owner-fenced lease to
+   schedule refresh while contenders continue receiving stale bytes.
+4. Renew ownership before publishing refreshed bytes. Expired refresh leases and loader or
+   scheduler failures preserve stale data and release ownership without claiming success.
+5. After the hard stale horizon expires, use a bounded one-owner cold fill and reject stale writes
+   or unbounded contention with sanitized transient failures.
+
+### Consequences
+SWR works uniformly over verified lock-capable cache drivers without changing ordinary raw cache
+values or requiring backend-specific expiry introspection. Callers retain responsibility for the
+scheduler and must not reuse AF's reserved digest-derived freshness-marker keys.
+
+---
+
+## [DEC-049] Keep Capability Contracts Typed, Exact, and Evidence-Separated
+
+**Date**: 2026-08-01
+**Status**: Accepted
+
+### Context
+Issue #38 requires a provider-neutral capability language that can describe exact request needs,
+stable installed capabilities, measured availability, and deterministic routing decisions without
+importing vendor or runtime-specific policy into AF trusted core.
+
+### Decision
+1. Add a dedicated `af.framework.capabilities` module rather than overloading existing
+   procedure-routing or manager capability sets.
+2. Keep four immutable aggregates as the trusted boundary: `CapabilityDescriptor`,
+   `RequestRequirements`, `CapabilityCandidate`, and `CapabilityRoute`.
+3. Separate declared descriptor facts from measured lifecycle, authorization, and verified quality
+   evidence in `CapabilityCandidate` so capability claims never imply deployment or trust.
+4. Use canonical JSON-ready dictionaries plus SHA-256 digests for replay-safe identity and route
+   comparison.
+5. Start with an exact deterministic matcher that validates relationships and emits stable reason
+   codes for exact match, partial match, excessive cost, unavailable, unverified, prohibited,
+   ambiguous, and unsupported outcomes.
+
+### Consequences
+AF now has a typed, bounded core contract for future capability catalogue, benchmark, and routing
+work. Later issues can layer importers, evidence stores, and richer policy over the same stable
+contracts without weakening the fail-closed exact-match baseline.
+
+---
+
+## [DEC-050] Make Queue FIFO and Transaction Requests Explicit Capability Gates
 **Date**: 2026-08-01
 **Status**: Accepted
 **Decision Maker**: OpenCode implementation for issue #20

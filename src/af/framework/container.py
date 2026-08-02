@@ -667,7 +667,7 @@ class Container:
         )
         with self._registry_lock, self._condition:
             self._assert_registry_mutable_locked()
-            self._tags[name] = keys
+            self._tags[name] = (*self._tags.get(name, ()), *keys)
 
     def resolve_tagged(self, name: str) -> tuple[object, ...]:
         self._assert_active()
@@ -2577,7 +2577,10 @@ class Container:
                 or task in self._tasks
                 or self._internal_authority_tasks.get(task, 0) > 0
             )
-        return self._entry_task is None and self._entry_thread_id == get_ident()
+        # Contextvars propagate into Starlette/FastAPI sync handler worker threads.
+        # When the invocation owner is the async request task, preserve read/resolve
+        # authority inside those worker threads for the active invocation only.
+        return self._entry_task is not None or self._entry_thread_id == get_ident()
 
     def _grant_internal_authority(self, task: asyncio.Task[Any]) -> None:
         if self._scope is Scope.INVOCATION and self._entered:

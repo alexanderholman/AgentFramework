@@ -6,11 +6,15 @@ import asyncio
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
+
+from sqlalchemy.engine import make_url
 
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
 from af.application.bus import ApplicationBus
 from af.application.dispatch import build_application_endpoints
 from af.application.ideons import IdeonController, IdeonService
+from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
 from af.domain.agent_routing import DeterministicAgentRouter
@@ -28,12 +32,15 @@ from af.framework.container import (
     Container,
     ProviderRegistrar,
     ProviderResourceRegistry,
+    Resolver,
     Scope,
     ServiceProvider,
 )
+from af.framework.contracts import Classifier as FrameworkClassifier
 from af.framework.contracts import ReuseStore, Selector, TraceRepository
 from af.framework.errors import AsyncLifecycleRequired, InvalidProviderConfiguration
 from af.framework.pipeline import PipelineAgent
+from af.framework.procedure_contributors import resolve_procedure_contributions
 from af.framework.reuse import InMemoryReuseStore, ReplayRegressionGate
 from af.framework.routing import LadderRouter, ProcedureRegistry, RoutingPolicy
 from af.framework.types import (
@@ -46,6 +53,8 @@ from af.infrastructure.database import Database
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
+from af.search.embedded_manager import embedded_search_registration
+from af.search.manager import SearchManager, bind_search_manager
 
 
 class _PersistenceProvider(ServiceProvider):
@@ -126,16 +135,22 @@ class _FrameworkProvider(ServiceProvider):
         self._selector_confidence_threshold = selector_confidence_threshold
 
     def register(self, container: ProviderRegistrar) -> None:
-        def create_registry(_: object) -> ProcedureRegistry:
+        def create_registry(resolver: Resolver) -> ProcedureRegistry:
             registry = ProcedureRegistry()
             registry.register(HelloProcedure())
             registry.register(CharacterCountProcedure())
+            for contribution in resolve_procedure_contributions(resolver):
+                registry.register(contribution.procedure)
             return registry
 
-        def create_classifier(_: object) -> ClassifierChain:
-            return ClassifierChain(
-                [HelloClassifier(), CharacterCountClassifier(), UnknownClassifier()]
+        def create_classifier(resolver: Resolver) -> ClassifierChain:
+            classifiers: list[FrameworkClassifier] = [HelloClassifier(), CharacterCountClassifier()]
+            classifiers.extend(
+                contribution.classifier
+                for contribution in resolve_procedure_contributions(resolver)
             )
+            classifiers.append(UnknownClassifier())
+            return ClassifierChain(classifiers)
 
         container.bind(
             ProcedureRegistry,
@@ -149,7 +164,9 @@ class _FrameworkProvider(ServiceProvider):
         )
         container.bind(
             DeterministicVerifier,
-            lambda _: DeterministicVerifier(),
+            lambda resolver: DeterministicVerifier(
+                contribution.verifier for contribution in resolve_procedure_contributions(resolver)
+            ),
             scope=Scope.APPLICATION,
         )
         if self._reuse_store is None:
@@ -197,6 +214,37 @@ class _FrameworkProvider(ServiceProvider):
         )
 
 
+class _SearchProvider(ServiceProvider):
+    provider_id = "af.search"
+    dependencies = ("af.persistence",)
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        profile: str,
+        ephemeral: bool,
+    ) -> None:
+        self._settings = settings
+        self._profile = profile
+        self._ephemeral = ephemeral
+
+    def register(self, container: ProviderRegistrar) -> None:
+        bind_search_manager(
+            container,
+            connections={
+                "primary": {
+                    "driver": "embedded",
+                    "database": _search_database(self._settings, ephemeral=self._ephemeral),
+                }
+            },
+            default="primary",
+            deployment_profile=self._profile,
+            policy_version="af-search-v1",
+            registrations=(embedded_search_registration(),),
+        )
+
+
 class _IdeonProvider(ServiceProvider):
     provider_id = "af.ideons"
 
@@ -230,7 +278,7 @@ class _IdeonProvider(ServiceProvider):
 
 class _ApplicationProvider(ServiceProvider):
     provider_id = "af.application"
-    dependencies = ("af.framework", "af.ideons")
+    dependencies = ("af.framework", "af.ideons", "af.search")
 
     def register(self, container: ProviderRegistrar) -> None:
         container.bind(
@@ -249,6 +297,20 @@ class _ApplicationProvider(ServiceProvider):
         container.bind(
             TaskController,
             lambda current: TaskController(current.resolve(TaskService)),
+            scope=Scope.TRANSIENT,
+        )
+        container.bind(
+            SearchService,
+            lambda current: SearchService(
+                current.resolve(SearchManager),
+                current.resolve_token(TaskRepository),
+                current.resolve_token(TraceRepository),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            SearchController,
+            lambda current: SearchController(current.resolve(SearchService)),
             scope=Scope.TRANSIENT,
         )
         container.bind(
@@ -271,6 +333,7 @@ class AFApplication:
     agent: PipelineAgent
     bus: ApplicationBus
     tasks: TaskController
+    search: SearchController
     traces: TraceRepository
     verifier: DeterministicVerifier
     agent_routes: AgentRoutingController
@@ -403,6 +466,13 @@ def _prepare_application(
             selector_confidence_threshold,
         ),
         _IdeonProvider(ideon_service),
+        _SearchProvider(
+            resolved_settings,
+            profile=(
+                resolved_config.profile.value if resolved_config.profile is not None else "local"
+            ),
+            ephemeral=task_repository is not None or trace_repository is not None,
+        ),
         _ApplicationProvider(),
         *tuple(providers),
     )
@@ -440,12 +510,30 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         agent=container.resolve(PipelineAgent),
         bus=endpoints.bus,
         tasks=endpoints.tasks,
+        search=container.resolve(SearchController),
         traces=container.resolve_token(TraceRepository),
         verifier=container.resolve(DeterministicVerifier),
         agent_routes=endpoints.agent_routes,
         ideons=endpoints.ideons,
         lifecycle=build.lifecycle,
     )
+
+
+def _search_database(settings: Settings, *, ephemeral: bool) -> str:
+    if ephemeral:
+        return ":memory:"
+    parsed = make_url(settings.database_url)
+    database_name = parsed.database
+    if (
+        parsed.get_backend_name() == "sqlite"
+        and isinstance(database_name, str)
+        and database_name not in ("", ":memory:")
+    ):
+        database_path = Path(database_name).expanduser()
+        suffix = database_path.suffix or ".sqlite3"
+        stem = database_path.stem or "af"
+        return str(database_path.with_name(f"{stem}-search{suffix}"))
+    return "storage/af-search.sqlite3"
 
 
 def _resolve_selector_metadata(selector: Selector | None) -> SelectorMetadata | None:

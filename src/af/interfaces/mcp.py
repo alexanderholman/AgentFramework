@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -15,6 +15,11 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
 from af import __version__
+from af.application.search import SearchController
+from af.application.self_design_execution import (
+    SelfDesignExecutionController,
+    SelfDesignExecutionResult,
+)
 from af.application.tasks import TaskController
 from af.bootstrap import AFApplication, create_application
 from af.domain.agent_routing import (
@@ -24,8 +29,9 @@ from af.domain.agent_routing import (
     AgentRouteStatus,
 )
 from af.domain.tasks import Task
-from af.framework.errors import AFError, InvalidProviderConfiguration
+from af.framework.errors import AFError, InvalidProviderConfiguration, ServiceNotBound
 from af.framework.routing import ProcedureRegistry
+from af.framework.self_design_operation import SelfDesignOperation
 from af.framework.types import ExecutionOutcome
 from af.interfaces.http_trust import (
     ParsedHost,
@@ -83,6 +89,34 @@ class DeleteResult(BaseModel):
     deleted: bool
 
 
+class SearchHitModel(BaseModel):
+    resource_id: str
+    source_id: str
+    authoritative_locator: str
+    tenant_id: str
+    projection_version: int
+    acl_evidence: list[str]
+    provenance: list[str]
+    score: float
+    rank: int
+    highlights: list[str]
+
+
+class SearchResultModel(BaseModel):
+    items: list[SearchHitModel]
+    total: int
+
+
+class SearchIndexSourceModel(BaseModel):
+    source: str
+    indexed: int
+
+
+class SearchIndexResultModel(BaseModel):
+    indexed: int
+    sources: list[SearchIndexSourceModel]
+
+
 class AgentRouteModel(BaseModel):
     prompt: str
     status: AgentRouteStatus
@@ -100,12 +134,13 @@ def _annotations(
     read_only: bool,
     destructive: bool,
     idempotent: bool,
+    open_world: bool = False,
 ) -> ToolAnnotations:
     return ToolAnnotations(
         readOnlyHint=read_only,
         destructiveHint=destructive,
         idempotentHint=idempotent,
-        openWorldHint=False,
+        openWorldHint=open_world,
     )
 
 
@@ -148,9 +183,12 @@ def create_mcp_server(application: AFApplication) -> FastMCP[None]:
 
 def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     controller = resolved.tasks
+    search = resolved.search
     agent_routes = resolved.agent_routes
     registry = resolved.container.resolve(ProcedureRegistry)
     transport_security = _transport_security_for(resolved)
+    self_design_operation = _resolve_self_design_operation(resolved)
+    self_design_execution = _resolve_self_design_execution(resolved)
 
     server: FastMCP[None] = FastMCP(
         name="AF Agent Framework",
@@ -207,6 +245,47 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     def af_route_agent(prompt: str) -> AgentRouteModel:
         return _invoke_mcp_tool(lambda: AgentRouteModel.from_route(agent_routes.route(prompt)))
 
+    if self_design_operation is not None:
+
+        @server.tool(
+            name="af_self_design",
+            description="Emit one canonical read-only self-design plan from configured evidence.",
+            annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+            structured_output=True,
+        )
+        def af_self_design() -> dict[str, object]:
+            return _invoke_mcp_tool(
+                lambda: cast(
+                    dict[str, object],
+                    json.loads(self_design_operation.plan().canonical_json()),
+                )
+            )
+
+    if self_design_execution is not None:
+
+        @server.tool(
+            name="af_self_design_execute",
+            description=(
+                "Preview or explicitly execute one configured governed self-design cycle."
+            ),
+            annotations=_annotations(
+                read_only=False,
+                destructive=False,
+                idempotent=False,
+                open_world=True,
+            ),
+            structured_output=True,
+        )
+        def af_self_design_execute(execute: bool = False) -> dict[str, object]:
+            return _invoke_mcp_tool(
+                lambda: cast(
+                    dict[str, object],
+                    _mcp_self_design_execution_result(self_design_execution.execute())
+                    if execute
+                    else json.loads(self_design_execution.preview().canonical_json()),
+                )
+            )
+
     @server.tool(
         name="af_list_tasks",
         description="List persisted AF Tasks.",
@@ -252,6 +331,24 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
     def af_delete_task(task_id: str) -> DeleteResult:
         return _invoke_mcp_tool(lambda: _delete_task(controller, task_id))
 
+    @server.tool(
+        name="af_index_search_resources",
+        description="Index persisted AF task and trace history into the configured search driver.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    def af_index_search_resources(limit: int = 100) -> SearchIndexResultModel:
+        return _invoke_mcp_tool(lambda: _index_search(search, limit=limit))
+
+    @server.tool(
+        name="af_search",
+        description="Query indexed AF history through the canonical tenant-safe search API.",
+        annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+        structured_output=True,
+    )
+    def af_search(text: str, limit: int = 20) -> SearchResultModel:
+        return _invoke_mcp_tool(lambda: _search(search, text=text, limit=limit))
+
     @server.resource(
         "af://manifest",
         name="AF manifest",
@@ -276,6 +373,16 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
                     "routes": sorted(
                         descriptor.procedure_id for descriptor in registry.catalogue()
                     ),
+                    "route_identities": [
+                        {
+                            "procedure_id": descriptor.procedure_id,
+                            "version": descriptor.version,
+                            "digest": descriptor.digest,
+                        }
+                        for descriptor in sorted(
+                            registry.catalogue(), key=lambda item: item.procedure_id
+                        )
+                    ],
                     "tiers": sorted(
                         {descriptor.tier.name.lower() for descriptor in registry.catalogue()}
                     ),
@@ -296,6 +403,74 @@ def _list_tasks(controller: TaskController) -> TaskListModel:
 def _delete_task(controller: TaskController, task_id: str) -> DeleteResult:
     controller.delete(task_id)
     return DeleteResult(id=task_id, deleted=True)
+
+
+def _resolve_self_design_operation(application: AFApplication) -> SelfDesignOperation | None:
+    try:
+        operation = application.container.resolve(SelfDesignOperation)
+    except ServiceNotBound:
+        return None
+    return operation if isinstance(operation, SelfDesignOperation) else None
+
+
+def _resolve_self_design_execution(
+    application: AFApplication,
+) -> SelfDesignExecutionController | None:
+    try:
+        controller = application.container.resolve(SelfDesignExecutionController)
+    except ServiceNotBound:
+        return None
+    return controller if isinstance(controller, SelfDesignExecutionController) else None
+
+
+def _mcp_self_design_execution_result(
+    result: SelfDesignExecutionResult,
+) -> dict[str, object]:
+    payload = result.to_dict()
+    record = payload.get("record")
+    if isinstance(record, dict):
+        record_payload = record.get("record")
+        if isinstance(record_payload, dict):
+            sanitized = dict(record_payload)
+            sanitized.pop("path", None)
+            record["record"] = sanitized
+    return payload
+
+
+def _index_search(search: SearchController, *, limit: int) -> SearchIndexResultModel:
+    result = search.index(limit=limit)
+    return SearchIndexResultModel.model_validate(
+        {
+            "indexed": result.indexed,
+            "sources": [
+                {"source": item.source, "indexed": item.indexed} for item in result.sources
+            ],
+        }
+    )
+
+
+def _search(search: SearchController, *, text: str, limit: int) -> SearchResultModel:
+    result = search.search(text, limit=limit)
+    return SearchResultModel.model_validate(
+        {
+            "items": [
+                {
+                    "resource_id": item.resource_id,
+                    "source_id": item.source_id,
+                    "authoritative_locator": item.authoritative_locator,
+                    "tenant_id": item.tenant_id,
+                    "projection_version": item.projection_version,
+                    "acl_evidence": list(item.acl_evidence),
+                    "provenance": list(item.provenance),
+                    "score": item.score,
+                    "rank": item.rank,
+                    "highlights": list(item.highlights),
+                }
+                for item in result.items
+            ],
+            "total": result.total,
+        }
+    )
 
 
 def _transport_security_for(

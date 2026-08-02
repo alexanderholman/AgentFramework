@@ -50,6 +50,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     mcp_transport: str = "stdio"
+    session_cookie_signing_key: str = "af-local-session-signing-key"
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()
     allow_remote_inference: bool = False
@@ -137,6 +138,7 @@ _ENV_NAMES = {
     "AF_HOST": "host",
     "AF_PORT": "port",
     "AF_MCP_TRANSPORT": "mcp_transport",
+    "AF_SESSION_COOKIE_SIGNING_KEY": "session_cookie_signing_key",
     "AF_ALLOWED_HOSTS": "allowed_hosts",
     "AF_ALLOWED_ORIGINS": "allowed_origins",
     "AF_ALLOW_REMOTE_INFERENCE": "allow_remote_inference",
@@ -320,7 +322,13 @@ def _validate_settings(settings: Settings) -> None:
         raise InvalidProviderConfiguration(
             "selector confidence threshold must be a finite probability in [0, 1]"
         )
-    for name in ("app_name", "database_url", "host", "mcp_transport"):
+    for name in (
+        "app_name",
+        "database_url",
+        "host",
+        "mcp_transport",
+        "session_cookie_signing_key",
+    ):
         value = getattr(settings, name)
         _validate_single_line(value, name)
     for name in ("allowed_hosts", "allowed_origins"):
