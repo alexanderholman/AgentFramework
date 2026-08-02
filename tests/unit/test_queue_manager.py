@@ -288,7 +288,7 @@ def test_sync_queue_registration_rejects_invalid_consumer_identity_and_verifier_
     with pytest.raises(TypeError, match="consumer"):
         sync_queue_registration(consumer="not callable")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="synchronous"):
-        sync_queue_registration(consumer=async_consumer)
+        sync_queue_registration(consumer=cast(Any, async_consumer))
     with pytest.raises(TypeError, match="clock"):
         sync_queue_registration(consumer=lambda _job: None, clock="not callable")  # type: ignore[arg-type]
 
@@ -442,7 +442,7 @@ def test_sync_driver_rejects_invalid_inputs_and_surfaces_consumer_failures() -> 
         return None
 
     with pytest.raises(TypeError, match="synchronous"):
-        SyncQueueDriver(async_consumer, clock=lambda: _NOW)
+        SyncQueueDriver(cast(Any, async_consumer), clock=lambda: _NOW)
 
     typed = SyncQueueDriver(
         lambda _job: (_ for _ in ()).throw(
@@ -470,7 +470,7 @@ def test_sync_driver_rejects_invalid_inputs_and_surfaces_consumer_failures() -> 
 
         return _pending()
 
-    awaitable = SyncQueueDriver(awaitable_consumer, clock=lambda: _NOW)
+    awaitable = SyncQueueDriver(cast(Any, awaitable_consumer), clock=lambda: _NOW)
     with pytest.raises(TypeError, match="asynchronous result"):
         awaitable.dispatch(_job("job-awaitable"))
 
