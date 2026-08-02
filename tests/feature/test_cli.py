@@ -763,6 +763,199 @@ def test_provider_commands_refuse_interaction_without_a_scripted_adapter() -> No
         application.shutdown()
 
 
+def test_provider_command_keyboard_interrupt_returns_cancelled_exit_and_restores_interaction() -> (
+    None
+):
+    class InterruptingInteraction(ScriptedCliInteraction):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        def text(self, *, message: str) -> str:
+            self.events.append(PromptEvent(kind="text", message=message))
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-cancel"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    interactions: list[InterruptingInteraction] = []
+
+    def build_interaction() -> InterruptingInteraction:
+        interaction = InterruptingInteraction()
+        interactions.append(interaction)
+        return interaction
+
+    try:
+        result = runner.invoke(
+            create_cli(application, interaction_factory=build_interaction),
+            ["provider-prompt"],
+        )
+
+        assert result.exit_code == 130
+        assert result.stdout == ""
+        assert result.stderr == "operation was cancelled\n"
+        assert tuple(interactions[0].events) == (PromptEvent(kind="text", message="Name"),)
+        assert interactions[0].closed is True
+    finally:
+        application.shutdown()
+
+
+def test_provider_command_keyboard_interrupt_is_not_suppressed_by_close_failure() -> None:
+    class InterruptingInteraction(ScriptedCliInteraction):
+        def text(self, *, message: str) -> str:
+            self.events.append(PromptEvent(kind="text", message=message))
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            raise RuntimeError("restore failed")
+
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-cancel-close-failure"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+
+    try:
+        result = runner.invoke(
+            create_cli(application, interaction_factory=InterruptingInteraction),
+            ["provider-prompt"],
+        )
+
+        assert result.exit_code == 130
+        assert result.stdout == ""
+        assert result.stderr == "operation was cancelled\n"
+    finally:
+        application.shutdown()
+
+
+def test_provider_command_cancellation_clears_interaction_for_next_invocation() -> None:
+    class InterruptingThenRecordingInteraction(ScriptedCliInteraction):
+        created = 0
+
+        def __init__(self) -> None:
+            super().__init__(text_responses=("Ralph",))
+            type(self).created += 1
+            self.instance_number = type(self).created
+
+        def text(self, *, message: str) -> str:
+            self.events.append(PromptEvent(kind="text", message=message))
+            if self.instance_number == 1:
+                raise KeyboardInterrupt
+            return super().text(message=message)
+
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-cancel-reset"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    InterruptingThenRecordingInteraction.created = 0
+    cli = create_cli(application, interaction_factory=InterruptingThenRecordingInteraction)
+
+    try:
+        cancelled = runner.invoke(cli, ["provider-prompt"])
+        succeeded = runner.invoke(cli, ["provider-prompt"])
+
+        assert cancelled.exit_code == 130
+        assert cancelled.stdout == ""
+        assert cancelled.stderr == "operation was cancelled\n"
+        assert succeeded.exit_code == 0
+        assert succeeded.stdout == "Ralph\n"
+        assert succeeded.stderr == ""
+        assert InterruptingThenRecordingInteraction.created == 2
+    finally:
+        application.shutdown()
+
+
+def test_cli_sanitizes_interaction_close_failures_and_still_shuts_down_owned_application(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    class ClosingInteraction(ScriptedCliInteraction):
+        def text(self, *, message: str) -> str:
+            self.events.append(PromptEvent(kind="text", message=message))
+            return "Ralph"
+
+        def close(self) -> None:
+            raise RuntimeError("restore failed")
+
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-close-failure"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    monkeypatch.setattr(cli_module, "create_application", lambda: application)
+
+    result = runner.invoke(
+        create_cli(interaction_factory=ClosingInteraction),
+        ["provider-prompt"],
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == "Ralph\n"
+    assert result.stderr == "transport operation failed\n"
+    assert application.lifecycle.state is ApplicationState.SHUTDOWN
+
+
 def test_cli_reports_expected_errors_without_stdout(application) -> None:  # type: ignore[no-untyped-def]
     cli = create_cli(application)
 

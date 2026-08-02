@@ -5,14 +5,16 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import AbstractContextManager, suppress
 from importlib import import_module
 from inspect import iscoroutine
 from pathlib import Path
-from typing import Annotated, cast
+from types import TracebackType
+from typing import Annotated, Literal, cast
 
 import typer
 from typer._click.core import Command, Context
+from typer._click.exceptions import Exit as ClickExit
 from typer.core import TyperGroup
 
 from af.application.ideons import InterpretRequest
@@ -49,6 +51,59 @@ _MAX_APPLICATION_FACTORY_LENGTH = 256
 _CURRENT_APPLICATION_META_KEY = "af.current_application"
 _CURRENT_CONTAINER_META_KEY = "af.current_container"
 _CURRENT_INTERACTION_META_KEY = "af.current_interaction"
+
+
+def _close_interaction(interaction: CliInteraction) -> None:
+    try:
+        interaction.close()
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:
+        raise PlatformError(
+            PlatformReason.TRANSPORT_FAILED,
+            stage="cli.interaction-close",
+            protected_cause=error,
+        ) from None
+
+
+def _cancellation_in_progress(error: BaseException | None) -> bool:
+    if isinstance(error, KeyboardInterrupt):
+        return True
+    if isinstance(error, ClickExit):
+        return error.exit_code == 130
+    return isinstance(error, PlatformError) and error.reason is PlatformReason.CANCELLED
+
+
+class _ManagedInteraction(AbstractContextManager[CliInteraction]):
+    def __init__(
+        self,
+        interaction: CliInteraction,
+        *,
+        on_close: Callable[[], None],
+    ) -> None:
+        self._interaction = interaction
+        self._on_close = on_close
+
+    def __enter__(self) -> CliInteraction:
+        return self._interaction
+
+    def __exit__(
+        self,
+        error_type: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
+        del error_type, traceback
+        try:
+            _close_interaction(self._interaction)
+        except AFError as close_error:
+            if _cancellation_in_progress(error):
+                return False
+            typer.echo(str(close_error), err=True)
+            raise typer.Exit(code=2) from None
+        finally:
+            self._on_close()
+        return False
 
 
 def _validate_application_factory(value: str) -> None:
@@ -193,6 +248,16 @@ def create_cli(
             install_click_group_command_contributors(self, current())
             return super().get_command(ctx, name)
 
+        def invoke(self, ctx: Context) -> object:
+            try:
+                return super().invoke(ctx)
+            except KeyboardInterrupt:
+                typer.echo(
+                    str(PlatformError(PlatformReason.CANCELLED, stage="cli.cancelled")),
+                    err=True,
+                )
+                raise typer.Exit(code=130) from None
+
     cli = typer.Typer(
         name="af",
         no_args_is_help=True,
@@ -270,7 +335,18 @@ def create_cli(
         if current_interaction is None:
             factory = interaction_factory or NonInteractiveCliInteraction
             current_interaction = factory()
+            if lifecycle_context is not None:
+                lifecycle_context.with_resource(
+                    _ManagedInteraction(
+                        current_interaction,
+                        on_close=lambda: _clear_interaction(),
+                    )
+                )
         return current_interaction
+
+    def _clear_interaction() -> None:
+        nonlocal current_interaction
+        current_interaction = None
 
     def current_version_control() -> VersionControlController:
         nonlocal cached_version_control

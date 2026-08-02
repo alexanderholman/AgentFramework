@@ -32,6 +32,8 @@ class CliInteraction(Protocol):
 
     def confirm(self, *, message: str, default: bool = False) -> bool: ...
 
+    def close(self) -> None: ...
+
 
 @dataclass(slots=True)
 class NonInteractiveCliInteraction:
@@ -44,6 +46,9 @@ class NonInteractiveCliInteraction:
     def confirm(self, *, message: str, default: bool = False) -> bool:
         del message, default
         _fail_interaction(InteractiveInputUnavailable())
+
+    def close(self) -> None:
+        return None
 
 
 @dataclass(slots=True)
@@ -71,6 +76,9 @@ class ScriptedCliInteraction:
         response = self.confirm_responses[self._confirm_index]
         self._confirm_index += 1
         return response
+
+    def close(self) -> None:
+        return None
 
 
 def _fail_interaction(error: AFError) -> NoReturn:
