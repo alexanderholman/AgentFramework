@@ -24,7 +24,7 @@ CSRF_COOKIE_NAME = "af-csrf"
 SESSION_COOKIE_NAME = "af-session"
 CSRF_FORM_FIELD = "csrf_token"
 _CSRF_SECRET = secrets.token_bytes(32)
-_SESSION_SECRET = secrets.token_bytes(32)
+_MAX_SESSION_COOKIE_BYTES = 1024
 
 type WebProfile = Literal["basic", "pretty", "experimental"]
 
@@ -48,22 +48,24 @@ def _issue_csrf_token() -> str:
     return f"{nonce}.{signature}"
 
 
-def _sign_session_payload(payload: bytes) -> str:
-    signature = hmac.new(_SESSION_SECRET, payload, hashlib.sha256).hexdigest()
+def _sign_session_payload(payload: bytes, *, signing_key: bytes) -> str:
+    signature = hmac.new(signing_key, payload, hashlib.sha256).hexdigest()
     encoded = base64.urlsafe_b64encode(payload).decode("ascii")
     return f"{encoded}.{signature}"
 
 
-def _read_session(request: Request) -> dict[str, str]:
+def _read_session(request: Request, *, signing_key: bytes) -> dict[str, str]:
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
     encoded, separator, signature = token.partition(".")
     if not encoded or not separator or not signature:
+        return {}
+    if len(encoded) > _MAX_SESSION_COOKIE_BYTES:
         return {}
     try:
         payload = base64.b64decode(encoded.encode("ascii"), altchars=b"-_", validate=True)
     except (ValueError, binascii.Error):
         return {}
-    expected = hmac.new(_SESSION_SECRET, payload, hashlib.sha256).hexdigest()
+    expected = hmac.new(signing_key, payload, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, expected):
         return {}
     try:
@@ -79,7 +81,13 @@ def _read_session(request: Request) -> dict[str, str]:
     return session
 
 
-def _write_session(request: Request, response: Response, session: dict[str, str]) -> None:
+def _write_session(
+    request: Request,
+    response: Response,
+    session: dict[str, str],
+    *,
+    signing_key: bytes,
+) -> None:
     if not session:
         response.delete_cookie(
             key=SESSION_COOKIE_NAME,
@@ -92,7 +100,7 @@ def _write_session(request: Request, response: Response, session: dict[str, str]
     payload = json.dumps(session, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
-        value=_sign_session_payload(payload),
+        value=_sign_session_payload(payload, signing_key=signing_key),
         httponly=True,
         samesite="lax",
         secure=request.url.scheme == "https",
@@ -100,18 +108,18 @@ def _write_session(request: Request, response: Response, session: dict[str, str]
     )
 
 
-def _flash_message(request: Request) -> str | None:
-    flash = _read_session(request).get("flash")
+def _flash_message(request: Request, *, signing_key: bytes) -> str | None:
+    flash = _read_session(request, signing_key=signing_key).get("flash")
     return flash or None
 
 
-def _set_flash(request: Request, response: Response, message: str) -> None:
-    _write_session(request, response, {"flash": message})
+def _set_flash(request: Request, response: Response, message: str, *, signing_key: bytes) -> None:
+    _write_session(request, response, {"flash": message}, signing_key=signing_key)
 
 
-def _clear_flash(request: Request, response: Response) -> None:
-    if _flash_message(request) is not None:
-        _write_session(request, response, {})
+def _clear_flash(request: Request, response: Response, *, signing_key: bytes) -> None:
+    if request.cookies.get(SESSION_COOKIE_NAME):
+        _write_session(request, response, {}, signing_key=signing_key)
 
 
 def _has_valid_csrf_signature(token: str) -> bool:
@@ -174,9 +182,11 @@ def create_web_router(
     *,
     web_profile: WebProfile,
     experimental_state: Literal["disabled", "fallback", "enabled"],
+    session_cookie_signing_key: str,
 ) -> APIRouter:
     router = APIRouter(tags=["web"])
     templates = Jinja2Templates(directory=TEMPLATE_DIRECTORY)
+    signing_key = session_cookie_signing_key.encode("utf-8")
 
     def profile_context() -> dict[str, str]:
         return {
@@ -199,14 +209,14 @@ def create_web_router(
                 "tasks": controller.list(),
                 "prompt": prompt,
                 "error": error,
-                "flash": _flash_message(request),
+                "flash": _flash_message(request, signing_key=signing_key),
                 "csrf_token": token,
                 **profile_context(),
             },
             status_code=status_code,
         )
         _set_csrf_cookie(request, response, token)
-        _clear_flash(request, response)
+        _clear_flash(request, response, signing_key=signing_key)
         return response
 
     def render_task(
@@ -226,14 +236,14 @@ def create_web_router(
                 "task": task,
                 "prompt": prompt or task.prompt,
                 "error": error,
-                "flash": _flash_message(request),
+                "flash": _flash_message(request, signing_key=signing_key),
                 "csrf_token": token,
                 **profile_context(),
             },
             status_code=status_code,
         )
         _set_csrf_cookie(request, response, token)
-        _clear_flash(request, response)
+        _clear_flash(request, response, signing_key=signing_key)
         return response
 
     @router.get("/", response_class=HTMLResponse)
@@ -247,11 +257,11 @@ def create_web_router(
             name="tasks/index.html",
             context={
                 "tasks": controller.list(),
-                "flash": _flash_message(request),
+                "flash": _flash_message(request, signing_key=signing_key),
                 **profile_context(),
             },
         )
-        _clear_flash(request, response)
+        _clear_flash(request, response, signing_key=signing_key)
         return response
 
     @router.post("/tasks")
@@ -274,7 +284,7 @@ def create_web_router(
             url=f"/tasks/{task.id}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-        _set_flash(request, response, "Saved task.")
+        _set_flash(request, response, "Saved task.", signing_key=signing_key)
         return response
 
     @router.get("/tasks/{task_id}", response_class=HTMLResponse)
@@ -303,7 +313,7 @@ def create_web_router(
             url=f"/tasks/{task.id}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-        _set_flash(request, response, "Updated task.")
+        _set_flash(request, response, "Updated task.", signing_key=signing_key)
         return response
 
     @router.post("/tasks/{task_id}/delete")
@@ -316,7 +326,7 @@ def create_web_router(
             return _csrf_forbidden()
         controller.delete(task_id)
         response = RedirectResponse(url="/tasks", status_code=status.HTTP_303_SEE_OTHER)
-        _set_flash(request, response, "Deleted task.")
+        _set_flash(request, response, "Deleted task.", signing_key=signing_key)
         return response
 
     return router
