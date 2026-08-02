@@ -13,8 +13,8 @@ from types import TracebackType
 from typing import Annotated, cast
 
 import typer
-from typer._click.exceptions import Exit as ClickExit
 from typer._click.core import Command, Context
+from typer._click.exceptions import Exit as ClickExit
 from typer.core import TyperGroup
 
 from af.application.ideons import InterpretRequest
