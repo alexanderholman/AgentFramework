@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import AbstractContextManager, suppress
 from importlib import import_module
 from inspect import iscoroutine
 from pathlib import Path
+from types import TracebackType
 from typing import Annotated, cast
 
 import typer
+from typer._click.exceptions import Exit as ClickExit
 from typer._click.core import Command, Context
 from typer.core import TyperGroup
 
@@ -59,6 +61,46 @@ def _close_interaction(interaction: CliInteraction) -> None:
             stage="cli.interaction-close",
             protected_cause=error,
         ) from None
+
+
+def _cancellation_in_progress(error: BaseException | None) -> bool:
+    if isinstance(error, KeyboardInterrupt):
+        return True
+    if isinstance(error, ClickExit):
+        return error.exit_code == 130
+    return isinstance(error, PlatformError) and error.reason is PlatformReason.CANCELLED
+
+
+class _ManagedInteraction(AbstractContextManager[CliInteraction]):
+    def __init__(
+        self,
+        interaction: CliInteraction,
+        *,
+        on_close: Callable[[], None],
+    ) -> None:
+        self._interaction = interaction
+        self._on_close = on_close
+
+    def __enter__(self) -> CliInteraction:
+        return self._interaction
+
+    def __exit__(
+        self,
+        error_type: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        del error_type, traceback
+        try:
+            _close_interaction(self._interaction)
+        except AFError as close_error:
+            if _cancellation_in_progress(error):
+                return False
+            typer.echo(str(close_error), err=True)
+            raise typer.Exit(code=2) from None
+        finally:
+            self._on_close()
+        return False
 
 
 def _validate_application_factory(value: str) -> None:
@@ -285,7 +327,18 @@ def create_cli(
         if current_interaction is None:
             factory = interaction_factory or NonInteractiveCliInteraction
             current_interaction = factory()
+            if lifecycle_context is not None:
+                lifecycle_context.with_resource(
+                    _ManagedInteraction(
+                        current_interaction,
+                        on_close=lambda: _clear_interaction(),
+                    )
+                )
         return current_interaction
+
+    def _clear_interaction() -> None:
+        nonlocal current_interaction
+        current_interaction = None
 
     def current_version_control() -> VersionControlController:
         nonlocal cached_version_control
@@ -334,13 +387,7 @@ def create_cli(
             nonlocal current_interaction
             nonlocal lifecycle_context
             nonlocal selected_factory_path
-            interaction_close_error: AFError | None = None
             try:
-                if current_interaction is not None:
-                    try:
-                        _close_interaction(current_interaction)
-                    except AFError as error:
-                        interaction_close_error = error
                 if owns_application and cached_application is not None:
                     cached_application.shutdown()
             finally:
@@ -350,8 +397,6 @@ def create_cli(
                 if owns_application:
                     cached_application = None
                 selected_factory_path = None
-            if interaction_close_error is not None:
-                fail(interaction_close_error)
 
         context.call_on_close(close_owned_application)
 
