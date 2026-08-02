@@ -10,7 +10,7 @@ from importlib import import_module
 from inspect import iscoroutine
 from pathlib import Path
 from types import TracebackType
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
 import typer
 from typer._click.core import Command, Context
@@ -89,7 +89,7 @@ class _ManagedInteraction(AbstractContextManager[CliInteraction]):
         error_type: type[BaseException] | None,
         error: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool | None:
+    ) -> Literal[False]:
         del error_type, traceback
         try:
             _close_interaction(self._interaction)
