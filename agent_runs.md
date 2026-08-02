@@ -1903,3 +1903,37 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - SPEC-035
 - Script: `[SCRIPT:af-dev]`
 
+---
+
+## Run #035 - Queue Capability-Gate and Ordering Clarification Slice
+**Date**: 2026-08-01 16:40:00 UTC
+**Agent**: OpenCode
+**Status**: Completed
+
+### Inputs
+- GitHub issue #20
+- Open PR #153 (`worker/issue-20-attempt-1`)
+- Existing sync and database QueueManager slices
+
+### Outputs
+- Added explicit `fifo_group` and `requires_transaction` queue job requests
+- Added fail-closed FIFO and transactional capability checks to queue manager routing and current
+  sync/database drivers
+- Added ordering regressions for sync direct dispatch and database reserve order
+- Added queue contract documentation plus append-only spec and decision records
+
+### Verified Results
+- `uv run --extra dev pytest tests/unit/test_queue_manager.py`: passed
+- `uv run --extra dev pytest tests/unit/test_queue_drivers.py`: passed
+- Full lint, typing, and AF development gate results are recorded with the corresponding branch
+  update for PR #153
+
+### Issues Encountered
+- The queue contract did not previously model FIFO-group or transactional-dispatch intent, so the
+  first new tests failed during collection until those fields were added
+
+### Related References
+- SPEC-037
+- DEC-050
+- Issue #20
+- PR #153

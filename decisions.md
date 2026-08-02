@@ -2893,3 +2893,44 @@ importing vendor or runtime-specific policy into AF trusted core.
 AF now has a typed, bounded core contract for future capability catalogue, benchmark, and routing
 work. Later issues can layer importers, evidence stores, and richer policy over the same stable
 contracts without weakening the fail-closed exact-match baseline.
+
+---
+
+## [DEC-050] Make Queue FIFO and Transaction Requests Explicit Capability Gates
+**Date**: 2026-08-01
+**Status**: Accepted
+**Decision Maker**: OpenCode implementation for issue #20
+
+### Context
+The first QueueManager slices already support synchronous inline execution and a durable relational
+queue. Acceptance for issue #20 also requires unsupported FIFO and transaction semantics to fail
+explicitly, and driver ordering guarantees to be documented and tested. Without first-class queue
+contract fields for those requests, callers cannot declare the requirement and the manager cannot
+fail closed before work is accepted.
+
+### Decision
+1. Add explicit `fifo_group` and `requires_transaction` requests to `QueueJob`.
+2. Treat those requests as independent queue capabilities rather than backend-name branches.
+3. Make the current sync and database drivers reject both requests explicitly.
+4. Document only the ordering each built-in driver actually provides.
+
+### Consequences
+**Positive:**
+- Callers can state FIFO and transactional expectations without coupling application code to a
+  broker vendor.
+- Unsupported semantics fail closed before a driver silently weakens delivery behavior.
+- The current slices record honest ordering guarantees for sync and relational queue delivery.
+
+**Negative:**
+- The new fields do not provide FIFO or broker transactions by themselves; future drivers still
+  need verified implementations and real-service evidence before claiming those capabilities.
+
+### Related Decisions
+- DEC-029 (Use Providers, Managers, Named Drivers, and Honest Delivery Semantics)
+- Issue #20
+
+### Output References
+- Added: `docs/queue.md`
+- Updated: `src/af/queue/contracts.py`, `src/af/queue/manager.py`, `src/af/queue/sync.py`,
+  `src/af/queue/database.py`
+- Tested by: `tests/unit/test_queue_manager.py`, `tests/unit/test_queue_drivers.py`

@@ -1909,3 +1909,40 @@ common directory without contacting or changing the upstream.
   relationships, and fallback cycles fail closed before selection.
 - **TEST-036-5**: Over-budget candidates surface `excessive_cost`, and structurally compatible but
   non-exact candidates surface `partial_match`.
+
+---
+
+## [SPEC-037] Queue Capability Boundaries and Deterministic Ordering Declarations
+**Date**: 2026-08-01
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Require AF queue contracts to express capability-sensitive delivery requests explicitly and fail
+closed when a selected driver cannot prove them. The first queue slices must also document and
+test each built-in driver's real ordering semantics instead of implying broker-generic FIFO or
+transaction guarantees.
+
+### Requirements
+- MUST allow a `QueueJob` to express requested FIFO grouping and transactional dispatch semantics
+  independently of the selected backend
+- MUST reject unsupported FIFO-group and transactional-dispatch requests through capability
+  validation or explicit driver failure before silently enqueuing the job
+- MUST document each built-in driver's actual ordering semantics and delivery boundary
+- MUST state the database queue driver's deterministic reservation order exactly as
+  `available_at`, then `occurred_at`, then `message_id`
+- MUST state that the synchronous queue driver preserves only direct in-process dispatch order and
+  provides no durability, worker isolation, or broker transaction guarantee
+
+### Tests
+- **TEST-037-1**: Queue contract validation accepts canonical FIFO-group and boolean transactional
+  flags and rejects malformed values
+- **TEST-037-2**: Sync and database drivers fail closed for unsupported FIFO-group and
+  transactional-dispatch requests
+- **TEST-037-3**: The database queue reserves jobs in deterministic
+  `available_at`/`occurred_at`/`message_id` order
+- **TEST-037-4**: The synchronous queue driver preserves direct dispatch order for accepted jobs
+
+### Related Specs
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- Issue #20
