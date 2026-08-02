@@ -32,12 +32,15 @@ from af.framework.container import (
     Container,
     ProviderRegistrar,
     ProviderResourceRegistry,
+    Resolver,
     Scope,
     ServiceProvider,
 )
+from af.framework.contracts import Classifier as FrameworkClassifier
 from af.framework.contracts import ReuseStore, Selector, TraceRepository
 from af.framework.errors import AsyncLifecycleRequired, InvalidProviderConfiguration
 from af.framework.pipeline import PipelineAgent
+from af.framework.procedure_contributors import resolve_procedure_contributions
 from af.framework.reuse import InMemoryReuseStore, ReplayRegressionGate
 from af.framework.routing import LadderRouter, ProcedureRegistry, RoutingPolicy
 from af.framework.types import (
@@ -132,16 +135,22 @@ class _FrameworkProvider(ServiceProvider):
         self._selector_confidence_threshold = selector_confidence_threshold
 
     def register(self, container: ProviderRegistrar) -> None:
-        def create_registry(_: object) -> ProcedureRegistry:
+        def create_registry(resolver: Resolver) -> ProcedureRegistry:
             registry = ProcedureRegistry()
             registry.register(HelloProcedure())
             registry.register(CharacterCountProcedure())
+            for contribution in resolve_procedure_contributions(resolver):
+                registry.register(contribution.procedure)
             return registry
 
-        def create_classifier(_: object) -> ClassifierChain:
-            return ClassifierChain(
-                [HelloClassifier(), CharacterCountClassifier(), UnknownClassifier()]
+        def create_classifier(resolver: Resolver) -> ClassifierChain:
+            classifiers: list[FrameworkClassifier] = [HelloClassifier(), CharacterCountClassifier()]
+            classifiers.extend(
+                contribution.classifier
+                for contribution in resolve_procedure_contributions(resolver)
             )
+            classifiers.append(UnknownClassifier())
+            return ClassifierChain(classifiers)
 
         container.bind(
             ProcedureRegistry,
@@ -155,7 +164,9 @@ class _FrameworkProvider(ServiceProvider):
         )
         container.bind(
             DeterministicVerifier,
-            lambda _: DeterministicVerifier(),
+            lambda resolver: DeterministicVerifier(
+                contribution.verifier for contribution in resolve_procedure_contributions(resolver)
+            ),
             scope=Scope.APPLICATION,
         )
         if self._reuse_store is None:

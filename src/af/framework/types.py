@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -143,6 +145,43 @@ class ProcedureDescriptor:
     replay_safe: bool = False
     has_selection_grounding: bool = False
     metrics: RouteMetrics = field(default_factory=lambda: RouteMetrics(0, 0, 0))
+
+    @property
+    def digest(self) -> str:
+        payload = {
+            "procedure_id": self.procedure_id,
+            "version": self.version,
+            "intent": self.intent,
+            "arguments": [
+                {
+                    "name": argument.name,
+                    "value_type": argument.value_type.value,
+                    "min_length": argument.min_length,
+                    "max_length": argument.max_length,
+                    "allow_blank": argument.allow_blank,
+                }
+                for argument in self.arguments
+            ],
+            "effect": self.effect.value,
+            "risk": self.risk.value,
+            "requires_confirmation": self.requires_confirmation,
+            "tier": int(self.tier),
+            "pure": self.pure,
+            "replay_safe": self.replay_safe,
+            "has_selection_grounding": self.has_selection_grounding,
+            "metrics": {
+                "cost": self.metrics.cost,
+                "latency": self.metrics.latency,
+                "intelligence": self.metrics.intelligence,
+            },
+        }
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

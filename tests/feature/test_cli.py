@@ -1,21 +1,154 @@
 from __future__ import annotations
 
 import json
+import sys
+from dataclasses import dataclass
+from types import ModuleType
 
+import typer
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from af.bootstrap import create_application
 from af.config import Settings
+from af.domain.procedures import BaseProcedure
 from af.framework.application import ApplicationState
-from af.framework.container import Container, ProviderRegistrar, ServiceProvider
-from af.framework.errors import InvalidPrompt
-from af.framework.types import PROMPT_MAX_LENGTH
+from af.framework.container import Container, ProviderRegistrar, Scope, ServiceProvider
+from af.framework.context import current_context
+from af.framework.errors import InvalidPrompt, InvalidSelectionProposal
+from af.framework.procedure_contributors import (
+    InstalledProcedureContribution,
+    bind_procedure_contributor,
+)
+from af.framework.types import (
+    PROMPT_MAX_LENGTH,
+    ArgumentValueType,
+    Classification,
+    ProcedureArgumentDescriptor,
+    ProcedureDescriptor,
+    ProcedureEffect,
+    ProcedureResult,
+    ProcedureRisk,
+    RouteMetrics,
+    VerificationResult,
+    WorkTier,
+)
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces import cli as cli_module
-from af.interfaces.cli import create_cli
+from af.interfaces.cli import (
+    create_cli,
+    current_application_from_context,
+    current_container_from_context,
+    current_interaction_from_context,
+)
+from af.interfaces.cli_commands import bind_cli_command_contributor
+from af.interfaces.cli_interactions import PromptEvent, ScriptedCliInteraction
 
 runner = CliRunner()
+
+
+@dataclass(frozen=True, slots=True)
+class _UppercaseRegistration:
+    procedure: BaseProcedure
+    classifier: object
+
+
+class _UppercaseClassifier:
+    def classify(self, request) -> Classification | None:  # type: ignore[no-untyped-def]
+        text = request.prompt
+        prefix = "uppercase "
+        if not isinstance(text, str) or not text.casefold().startswith(prefix):
+            return None
+        value = text[len(prefix) :].strip()
+        if not value:
+            return None
+        return Classification(
+            intent="text.uppercase",
+            arguments={"text": value},
+            confidence=1.0,
+            classifier=type(self).__name__,
+        )
+
+
+class _UppercaseProcedure(BaseProcedure):
+    id = "uppercase"
+    version = "2.1.0"
+    tier = WorkTier.PROCEDURAL
+    pure = True
+    replay_safe = True
+    metrics = RouteMetrics(cost=2, latency=1, intelligence=1)
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=version,
+        intent="text.uppercase",
+        arguments=(
+            ProcedureArgumentDescriptor(
+                name="text",
+                value_type=ArgumentValueType.TEXT,
+                min_length=1,
+                max_length=PROMPT_MAX_LENGTH,
+                allow_blank=False,
+            ),
+        ),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+
+    def supports(self, classification: Classification) -> bool:
+        return classification.intent == "text.uppercase"
+
+    def execute(self, classification: Classification) -> ProcedureResult:
+        text = classification.arguments["text"]
+        return ProcedureResult(output=text.upper(), evidence={"text": text})
+
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "text.uppercase":
+            raise InvalidSelectionProposal("unsupported intent for uppercase")
+        if set(classification.arguments) != {"text"}:
+            raise InvalidSelectionProposal("invalid arguments for uppercase")
+        if not classification.arguments["text"]:
+            raise InvalidSelectionProposal("invalid arguments for uppercase")
+
+
+class _UppercaseProvider(ServiceProvider):
+    provider_id = "test.procedure.uppercase"
+
+    def register(self, registrar: ProviderRegistrar) -> None:
+        contributor = InstalledProcedureContribution(
+            classifier=_UppercaseClassifier(),
+            procedure=_UppercaseProcedure(),
+            verifier=_UppercaseVerifier(),
+        )
+        registrar.bind(
+            _UppercaseRegistration,
+            lambda _: _UppercaseRegistration(
+                procedure=_UppercaseProcedure(),
+                classifier=_UppercaseClassifier(),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        bind_procedure_contributor(registrar, contributor)
+
+
+class _UppercaseVerifier:
+    def verify(
+        self,
+        request,
+        classification: Classification,
+        procedure,
+        result: ProcedureResult,
+    ) -> VerificationResult | None:  # type: ignore[no-untyped-def]
+        del request, procedure
+        if classification.intent != "text.uppercase":
+            return None
+        expected = classification.arguments["text"].upper()
+        passed = result.output == expected
+        return VerificationResult(
+            passed,
+            "independent uppercase matched" if passed else "independent uppercase mismatch",
+        )
 
 
 def _search_application():  # type: ignore[no-untyped-def]
@@ -62,6 +195,133 @@ def test_cli_route_agent_returns_structured_decision(application) -> None:  # ty
         "reason": "ambiguous",
         "candidates": ["architect", "builder"],
     }
+
+
+def test_cli_routes_lists_installed_deterministic_procedures(application) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(create_cli(application), ["routes"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+
+    assert payload == [
+        {
+            "procedure_id": "character-count",
+            "version": "1.0.0",
+            "digest": payload[0]["digest"],
+            "intent": "text.character_count",
+            "arguments": [
+                {
+                    "name": "text",
+                    "value_type": "text",
+                    "min_length": 1,
+                    "max_length": 10000,
+                    "allow_blank": True,
+                },
+                {
+                    "name": "character",
+                    "value_type": "text",
+                    "min_length": 1,
+                    "max_length": 1,
+                    "allow_blank": True,
+                },
+            ],
+            "effect": "read_only",
+            "risk": "none",
+            "requires_confirmation": False,
+            "tier": "procedural",
+            "pure": True,
+            "replay_safe": True,
+            "has_selection_grounding": True,
+            "metrics": {"cost": 1, "latency": 1, "intelligence": 1},
+        },
+        {
+            "procedure_id": "hello",
+            "version": "1.0.0",
+            "digest": payload[1]["digest"],
+            "intent": "system.hello",
+            "arguments": [],
+            "effect": "read_only",
+            "risk": "none",
+            "requires_confirmation": False,
+            "tier": "static",
+            "pure": True,
+            "replay_safe": True,
+            "has_selection_grounding": False,
+            "metrics": {"cost": 0, "latency": 0, "intelligence": 0},
+        },
+    ]
+    assert all(item["digest"].startswith("sha256:") for item in payload)
+    assert all(len(item["digest"]) == len("sha256:") + 64 for item in payload)
+
+
+def test_cli_routes_include_provider_contributed_procedures_with_stable_identity() -> None:
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(_UppercaseProvider(),),
+    )
+    try:
+        result = runner.invoke(create_cli(application), ["routes"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        uppercase = next(item for item in payload if item["procedure_id"] == "uppercase")
+        assert uppercase == {
+            "procedure_id": "uppercase",
+            "version": "2.1.0",
+            "digest": uppercase["digest"],
+            "intent": "text.uppercase",
+            "arguments": [
+                {
+                    "name": "text",
+                    "value_type": "text",
+                    "min_length": 1,
+                    "max_length": 10000,
+                    "allow_blank": False,
+                }
+            ],
+            "effect": "read_only",
+            "risk": "none",
+            "requires_confirmation": False,
+            "tier": "procedural",
+            "pure": True,
+            "replay_safe": True,
+            "has_selection_grounding": False,
+            "metrics": {"cost": 2, "latency": 1, "intelligence": 1},
+        }
+        assert uppercase["digest"].startswith("sha256:")
+        assert len(uppercase["digest"]) == len("sha256:") + 64
+    finally:
+        application.shutdown()
+
+
+def test_provider_contributed_procedure_runs_through_cli_and_rest() -> None:
+    from af.interfaces.http import create_http_app
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(_UppercaseProvider(),),
+    )
+    try:
+        cli_result = runner.invoke(create_cli(application), ["ask", "uppercase hello world"])
+
+        assert cli_result.exit_code == 0
+        assert cli_result.stdout == "HELLO WORLD\n"
+
+        with TestClient(create_http_app(application), base_url="http://127.0.0.1") as client:
+            response = client.post("/api/v1/tasks", json={"prompt": "uppercase hello world"})
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["output"] == "HELLO WORLD"
+        assert payload["intent"] == "text.uppercase"
+        assert payload["route"] == "uppercase"
+        assert payload["verified"] is True
+    finally:
+        application.shutdown()
 
 
 def test_cli_ideon_command_uses_the_composed_reference_service(application) -> None:  # type: ignore[no-untyped-def]
@@ -149,6 +409,356 @@ def test_cli_search_indexes_and_queries_task_and_trace_history() -> None:
             item["authoritative_locator"].startswith("af://relational/")
             for item in payload["items"]
         )
+    finally:
+        application.shutdown()
+
+
+def test_cli_search_index_limit_bounds_total_backfill() -> None:
+    application = _search_application()
+    try:
+        application.tasks.create("how many qs in qqqq")
+        application.tasks.execute("hello")
+
+        result = runner.invoke(create_cli(application), ["search", "index", "--limit", "2"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {
+            "indexed": 2,
+            "sources": [
+                {"source": "tasks", "indexed": 1},
+                {"source": "traces", "indexed": 1},
+            ],
+        }
+    finally:
+        application.shutdown()
+
+
+def test_cli_search_index_limit_includes_trace_history_when_tasks_exceed_limit() -> None:
+    application = _search_application()
+    try:
+        application.tasks.create("hello")
+        application.tasks.create("how many qs in qqqq")
+        application.tasks.create("how many rs in strawberry")
+        application.tasks.execute("hello")
+
+        result = runner.invoke(create_cli(application), ["search", "index", "--limit", "4"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {
+            "indexed": 4,
+            "sources": [
+                {"source": "tasks", "indexed": 2},
+                {"source": "traces", "indexed": 2},
+            ],
+        }
+    finally:
+        application.shutdown()
+
+
+def test_cli_discovers_provider_contributed_commands_without_central_registration() -> None:
+    class HelloContributor:
+        def __init__(self) -> None:
+            self.registrations = 0
+
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            self.registrations += 1
+
+            @cli.command("provider-hello")
+            def provider_hello(context: typer.Context) -> None:
+                typer.echo(current_application_from_context(context).tasks.execute("hello").output)
+
+    class SettingsContributor:
+        def __init__(self) -> None:
+            self.registrations = 0
+
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            self.registrations += 1
+
+            @cli.command("provider-settings")
+            def provider_settings(context: typer.Context) -> None:
+                typer.echo(current_application_from_context(context).settings.database_url)
+
+    class HelloProvider(ServiceProvider):
+        provider_id = "test.cli-provider.hello"
+
+        def __init__(self, contributor: HelloContributor) -> None:
+            self._contributor = contributor
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, self._contributor)
+
+    class SettingsProvider(ServiceProvider):
+        provider_id = "test.cli-provider.settings"
+
+        def __init__(self, contributor: SettingsContributor) -> None:
+            self._contributor = contributor
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, self._contributor)
+
+    hello = HelloContributor()
+    settings = SettingsContributor()
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(HelloProvider(hello), SettingsProvider(settings)),
+    )
+    try:
+        cli = create_cli(application)
+
+        help_result = runner.invoke(cli, ["--help"])
+        hello_result = runner.invoke(cli, ["provider-hello"])
+        settings_result = runner.invoke(cli, ["provider-settings"])
+
+        assert help_result.exit_code == 0
+        assert "provider-hello" in help_result.stdout
+        assert "provider-settings" in help_result.stdout
+        assert hello_result.exit_code == 0
+        assert hello_result.stdout == "Hello, world!\n"
+        assert settings_result.exit_code == 0
+        assert settings_result.stdout == "sqlite+pysqlite:///:memory:\n"
+        assert hello.registrations == 1
+        assert settings.registrations == 1
+    finally:
+        application.shutdown()
+
+
+def test_installed_cli_loads_provider_commands_from_explicit_application_factory(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    class HelloContributor:
+        def __init__(self) -> None:
+            self.registrations = 0
+
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            self.registrations += 1
+
+            @cli.command("provider-hello")
+            def provider_hello(context: typer.Context) -> None:
+                typer.echo(current_application_from_context(context).tasks.execute("hello").output)
+
+    class HelloProvider(ServiceProvider):
+        provider_id = "test.cli-provider.installed"
+
+        def __init__(self, contributor: HelloContributor) -> None:
+            self._contributor = contributor
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, self._contributor)
+
+    module = ModuleType("test_cli_provider_operator_profile")
+    contributor = HelloContributor()
+
+    def build_application():  # type: ignore[no-untyped-def]
+        return create_application(
+            settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+            task_repository=InMemoryTaskRepository(),
+            trace_repository=InMemoryTraceRepository(),
+            providers=(HelloProvider(contributor),),
+        )
+
+    module.build_application = build_application  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    cli = create_cli()
+
+    loaded = runner.invoke(
+        cli,
+        [
+            "--application-factory",
+            "test_cli_provider_operator_profile:build_application",
+            "provider-hello",
+        ],
+    )
+    unloaded = runner.invoke(cli, ["provider-hello"])
+
+    assert loaded.exit_code == 0
+    assert loaded.stdout == "Hello, world!\n"
+    assert unloaded.exit_code == 2
+    assert contributor.registrations == 1
+
+
+def test_provider_commands_run_inside_a_fresh_cli_invocation_scope() -> None:
+    class InvocationSnapshot:
+        def __init__(
+            self,
+            *,
+            sequence: int,
+            tenant_id: str | None,
+            requested_scope: str,
+            effective_scope: str,
+            invocation_kind: str,
+        ) -> None:
+            self.sequence = sequence
+            self.tenant_id = tenant_id
+            self.requested_scope = requested_scope
+            self.effective_scope = effective_scope
+            self.invocation_kind = invocation_kind
+
+    class ScopeContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-scope")
+            def provider_scope(context: typer.Context) -> None:
+                application = current_application_from_context(context)
+                container = current_container_from_context(context)
+                first = container.resolve(InvocationSnapshot)
+                second = container.resolve(InvocationSnapshot)
+                typer.echo(
+                    json.dumps(
+                        {
+                            "same_application_container": container is application.container,
+                            "same_instance_within_invocation": first is second,
+                            "sequence": first.sequence,
+                            "tenant_id": first.tenant_id,
+                            "requested_scope": first.requested_scope,
+                            "effective_scope": first.effective_scope,
+                            "invocation_kind": first.invocation_kind,
+                        }
+                    )
+                )
+
+    class ScopeProvider(ServiceProvider):
+        provider_id = "test.cli-provider.invocation-scope"
+
+        def __init__(self, contributor: ScopeContributor) -> None:
+            self._contributor = contributor
+            self._sequence = 0
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            registrar.bind(
+                InvocationSnapshot,
+                self._create_snapshot,
+                scope=Scope.INVOCATION,
+            )
+            bind_cli_command_contributor(registrar, self._contributor)
+
+        def _create_snapshot(self, current: Container) -> InvocationSnapshot:
+            del current
+            context = current_context()
+            self._sequence += 1
+            return InvocationSnapshot(
+                sequence=self._sequence,
+                tenant_id=context.tenant_id,
+                requested_scope=context.requested_scope.value,
+                effective_scope=context.effective_scope.value,
+                invocation_kind="interaction",
+            )
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(ScopeProvider(ScopeContributor()),),
+    )
+    try:
+        cli = create_cli(application)
+
+        first = runner.invoke(cli, ["provider-scope"])
+        second = runner.invoke(cli, ["provider-scope"])
+
+        assert first.exit_code == 0
+        assert second.exit_code == 0
+        assert json.loads(first.stdout) == {
+            "same_application_container": False,
+            "same_instance_within_invocation": True,
+            "sequence": 1,
+            "tenant_id": None,
+            "requested_scope": "deterministic",
+            "effective_scope": "deterministic",
+            "invocation_kind": "interaction",
+        }
+        assert json.loads(second.stdout) == {
+            "same_application_container": False,
+            "same_instance_within_invocation": True,
+            "sequence": 2,
+            "tenant_id": None,
+            "requested_scope": "deterministic",
+            "effective_scope": "deterministic",
+            "invocation_kind": "interaction",
+        }
+    finally:
+        application.shutdown()
+
+
+def test_provider_commands_can_use_scripted_cli_interactions() -> None:
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(
+                    json.dumps(
+                        {
+                            "name": interaction.text(message="Name"),
+                            "confirmed": interaction.confirm(message="Continue?", default=True),
+                        }
+                    )
+                )
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    interactions: list[ScriptedCliInteraction] = []
+
+    def build_interaction() -> ScriptedCliInteraction:
+        interaction = ScriptedCliInteraction(
+            text_responses=("Ralph",),
+            confirm_responses=(True,),
+        )
+        interactions.append(interaction)
+        return interaction
+
+    try:
+        result = runner.invoke(
+            create_cli(application, interaction_factory=build_interaction),
+            ["provider-prompt"],
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {"name": "Ralph", "confirmed": True}
+        assert tuple(interactions[0].events) == (
+            PromptEvent(kind="text", message="Name"),
+            PromptEvent(kind="confirm", message="Continue?"),
+        )
+    finally:
+        application.shutdown()
+
+
+def test_provider_commands_refuse_interaction_without_a_scripted_adapter() -> None:
+    class PromptContributor:
+        def register(self, cli) -> None:  # type: ignore[no-untyped-def]
+            @cli.command("provider-prompt")
+            def provider_prompt(context: typer.Context) -> None:
+                interaction = current_interaction_from_context(context)
+                typer.echo(interaction.text(message="Name"))
+
+    class PromptProvider(ServiceProvider):
+        provider_id = "test.cli-provider.prompt-refusal"
+
+        def register(self, registrar: ProviderRegistrar) -> None:
+            bind_cli_command_contributor(registrar, PromptContributor())
+
+    application = create_application(
+        settings=Settings(database_url="sqlite+pysqlite:///:memory:"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+        providers=(PromptProvider(),),
+    )
+    try:
+        result = runner.invoke(create_cli(application), ["provider-prompt"])
+
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert result.stderr == "interactive input is unavailable for this CLI invocation\n"
     finally:
         application.shutdown()
 

@@ -1,6 +1,27 @@
 """First-class testing helpers for AF applications and extensions."""
 
 from af.testing.application import BindingOverride, TestApplication, TestApplicationBuilder
+from af.testing.benchmarks import (
+    BenchmarkBinding,
+    BenchmarkCompatibility,
+    BenchmarkExecutionCancelled,
+    BenchmarkExecutionFailure,
+    BenchmarkExport,
+    BenchmarkFixtureAuthorization,
+    BenchmarkFixtureManifest,
+    BenchmarkInconclusiveResult,
+    BenchmarkMeasurement,
+    BenchmarkOutcome,
+    BenchmarkPlugin,
+    BenchmarkPluginDescriptor,
+    BenchmarkPluginRegistry,
+    BenchmarkPluginSession,
+    BenchmarkRunner,
+    BenchmarkRunRequest,
+    BenchmarkRunResult,
+    BenchmarkVerification,
+    BenchmarkWorkspace,
+)
 from af.testing.conformance import (
     ConformanceCase,
     ConformanceEvidence,
@@ -37,6 +58,25 @@ from af.testing.search import SearchDriverConformanceSuite, search_driver_cases
 
 __all__ = (
     "ApplicationLeakReport",
+    "BenchmarkBinding",
+    "BenchmarkCompatibility",
+    "BenchmarkExecutionCancelled",
+    "BenchmarkExecutionFailure",
+    "BenchmarkExport",
+    "BenchmarkFixtureAuthorization",
+    "BenchmarkFixtureManifest",
+    "BenchmarkInconclusiveResult",
+    "BenchmarkMeasurement",
+    "BenchmarkOutcome",
+    "BenchmarkPlugin",
+    "BenchmarkPluginDescriptor",
+    "BenchmarkPluginRegistry",
+    "BenchmarkPluginSession",
+    "BenchmarkRunRequest",
+    "BenchmarkRunResult",
+    "BenchmarkRunner",
+    "BenchmarkVerification",
+    "BenchmarkWorkspace",
     "BindingOverride",
     "ConformanceCase",
     "ConformanceEvidence",
