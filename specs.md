@@ -1590,6 +1590,7 @@ common directory without contacting or changing the upstream.
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 - Epic #120 and bootstrap issue #123
 
+
 ---
 
 ## SPEC-025: Verified Memory and Null Cache Slice

@@ -2552,6 +2552,7 @@ remaining deterministic, local, auditable, and authority-neutral.
 - `src/af/interfaces/cli.py`
 - Version-control unit, integration, and feature tests
 
+
 ---
 
 ## DEC-030: Keep Cache Non-Authoritative and Namespace Every Mutation
