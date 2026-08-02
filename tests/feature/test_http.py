@@ -370,9 +370,10 @@ def test_html_flash_cookie_round_trips_across_application_instances_with_shared_
     )
 
     try:
-        with _http_client(first_application) as first_client, _http_client(
-            second_application
-        ) as second_client:
+        with (
+            _http_client(first_application) as first_client,
+            _http_client(second_application) as second_client,
+        ):
             index = first_client.get("/")
             created = first_client.post(
                 "/tasks",
