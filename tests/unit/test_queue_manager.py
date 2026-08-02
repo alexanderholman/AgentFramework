@@ -285,6 +285,7 @@ def test_sync_queue_registration_rejects_invalid_consumer_identity_and_verifier_
     async def async_consumer(_job: QueueJob) -> None:
         return None
 
+    # Casts keep mypy happy while preserving the runtime validation regressions.
     with pytest.raises(TypeError, match="consumer"):
         sync_queue_registration(consumer="not callable")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="synchronous"):
@@ -441,6 +442,7 @@ def test_sync_driver_rejects_invalid_inputs_and_surfaces_consumer_failures() -> 
     async def async_consumer(_job: QueueJob) -> None:
         return None
 
+    # Casts keep mypy happy while preserving the runtime validation regressions.
     with pytest.raises(TypeError, match="synchronous"):
         SyncQueueDriver(cast(Any, async_consumer), clock=lambda: _NOW)
 
