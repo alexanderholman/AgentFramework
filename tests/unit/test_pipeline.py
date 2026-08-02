@@ -1840,6 +1840,56 @@ def test_router_uses_registered_metrics_snapshot() -> None:
     assert routed.id == "snapshot-mutable"
 
 
+def test_registry_catalogue_exposes_stable_descriptor_digest() -> None:
+    registry = ProcedureRegistry()
+    procedure = SnapshotMutableProcedure()
+
+    registry.register(procedure)
+
+    descriptor = registry.descriptor(procedure.id)
+
+    assert descriptor is not None
+    assert descriptor.digest.startswith("sha256:")
+    assert len(descriptor.digest) == len("sha256:") + 64
+    assert registry.catalogue()[0].digest == descriptor.digest
+
+
+def test_registry_rejects_duplicate_procedure_identity_before_mutation() -> None:
+    registry = ProcedureRegistry()
+    first = SnapshotMutableProcedure()
+    second = SnapshotMutableProcedure()
+
+    registry.register(first)
+
+    with pytest.raises(
+        ValueError,
+        match=r"procedure already registered: snapshot-mutable@1\.0\.0",
+    ):
+        registry.register(second)
+
+
+def test_registry_rejects_conflicting_version_for_existing_procedure_id() -> None:
+    registry = ProcedureRegistry()
+    registry.register(SnapshotMutableProcedure())
+    conflicting = SnapshotMutableProcedure()
+    conflicting.version = "2.0.0"
+    conflicting.selection_descriptor = ProcedureDescriptor(
+        procedure_id=conflicting.id,
+        version=conflicting.version,
+        intent="snapshot.mutable",
+        arguments=(),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="procedure id conflicts with existing registration: snapshot-mutable",
+    ):
+        registry.register(conflicting)
+
+
 def test_routing_policy_requires_one_or_two_explicit_goals() -> None:
     with pytest.raises(InvalidRoutingPolicy):
         RoutingPolicy(

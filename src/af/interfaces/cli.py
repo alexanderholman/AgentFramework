@@ -12,28 +12,43 @@ from pathlib import Path
 from typing import Annotated, cast
 
 import typer
+from typer._click.core import Command, Context
+from typer.core import TyperGroup
 
 from af.application.ideons import InterpretRequest
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication, create_application
 from af.bootstrap_version_control import create_version_control_controller
 from af.domain.ideons.records import ContextGraph
+from af.framework.container import Container, InvocationKind
+from af.framework.context import AcceptanceScope, ExecutionContext
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
+from af.framework.routing import ProcedureRegistry
 from af.framework.version_control import VersionControlRequest
+from af.interfaces.cli_commands import (
+    install_cli_command_contributors,
+    install_click_group_command_contributors,
+)
+from af.interfaces.cli_interactions import CliInteraction, NonInteractiveCliInteraction
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
+    procedure_descriptor_to_dict,
     search_index_result_to_dict,
     search_result_to_dict,
     task_to_dict,
 )
+from af.interfaces.procedure_scaffold import scaffold_procedure
 
 _APPLICATION_FACTORY = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:"
     r"[A-Za-z_][A-Za-z0-9_]*$"
 )
 _MAX_APPLICATION_FACTORY_LENGTH = 256
+_CURRENT_APPLICATION_META_KEY = "af.current_application"
+_CURRENT_CONTAINER_META_KEY = "af.current_container"
+_CURRENT_INTERACTION_META_KEY = "af.current_interaction"
 
 
 def _validate_application_factory(value: str) -> None:
@@ -67,13 +82,61 @@ def _load_application_factory(value: str) -> Callable[[], object]:
     return cast(Callable[[], object], candidate)
 
 
+def current_application_from_context(context: typer.Context) -> AFApplication:
+    current = context.meta.get(_CURRENT_APPLICATION_META_KEY)
+    if not callable(current):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.application-context",
+        )
+    application = cast(AFApplication, current())
+    if not isinstance(application, AFApplication):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.application-context",
+        )
+    return application
+
+
+def current_container_from_context(context: typer.Context) -> Container:
+    current = context.meta.get(_CURRENT_CONTAINER_META_KEY)
+    if not callable(current):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.container-context",
+        )
+    container = current()
+    if not isinstance(container, Container):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.container-context",
+        )
+    return container
+
+
+def current_interaction_from_context(context: typer.Context) -> CliInteraction:
+    current = context.meta.get(_CURRENT_INTERACTION_META_KEY)
+    if not callable(current):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.interaction-context",
+        )
+    interaction = current()
+    if not isinstance(interaction, CliInteraction):
+        raise PlatformError(
+            PlatformReason.CONTEXT_UNAVAILABLE,
+            stage="cli.interaction-context",
+        )
+    return interaction
+
+
 def create_cli(
     application: AFApplication | None = None,
     *,
     application_factory: Callable[[], AFApplication] | None = None,
+    interaction_factory: Callable[[], CliInteraction] | None = None,
     version_control: VersionControlController | None = None,
 ) -> typer.Typer:
-    cli = typer.Typer(name="af", no_args_is_help=True, help="AF Agent Framework")
     task_commands = typer.Typer(name="tasks", no_args_is_help=True, help="Persisted Task CRUD")
     ideon_commands = typer.Typer(
         name="ideon",
@@ -89,6 +152,11 @@ def create_cli(
         name="migrations",
         no_args_is_help=True,
         help="Plan, inspect, apply, reverse, and verify database migrations",
+    )
+    make_commands = typer.Typer(
+        name="make",
+        no_args_is_help=True,
+        help="Generate bounded AF scaffolds",
     )
     initialization_commands = typer.Typer(
         name="init",
@@ -109,10 +177,42 @@ def create_cli(
         create_application if application_factory is None else application_factory
     )
     selected_factory_path: str | None = None
+    lifecycle_context: typer.Context | Context | None = None
+    current_invocation: Container | None = None
+    current_interaction: CliInteraction | None = None
     accepts_operator_factory = application is None and application_factory is None
 
+    class _AFRootGroup(TyperGroup):
+        def get_command(self, ctx: Context, name: str) -> Command | None:
+            nonlocal selected_factory_path
+            command = super().get_command(ctx, name)
+            if command is not None or ctx.resilient_parsing:
+                return command
+            if accepts_operator_factory:
+                selected_factory_path = cast(str | None, ctx.params.get("factory_path"))
+            install_click_group_command_contributors(self, current())
+            return super().get_command(ctx, name)
+
+    cli = typer.Typer(
+        name="af",
+        no_args_is_help=True,
+        help="AF Agent Framework",
+        cls=_AFRootGroup,
+    )
+
+    def current_container() -> Container:
+        application = current()
+        if current_invocation is None:
+            if isinstance(application, AFApplication):
+                return application.container
+            raise PlatformError(
+                PlatformReason.CONTEXT_UNAVAILABLE,
+                stage="cli.container-context",
+            )
+        return current_invocation
+
     def current() -> AFApplication:
-        nonlocal cached_application
+        nonlocal cached_application, current_invocation
         if cached_application is None:
             factory = configured_factory
             external_factory = application_factory is not None
@@ -149,7 +249,28 @@ def create_cli(
                 cached_application = resolved
             else:
                 cached_application = cast(AFApplication, resolved)
+        if (
+            isinstance(cached_application, AFApplication)
+            and lifecycle_context is not None
+            and current_invocation is None
+        ):
+            current_invocation = lifecycle_context.with_resource(
+                cached_application.container.invocation_scope(
+                    context=ExecutionContext(
+                        requested_scope=AcceptanceScope.DETERMINISTIC,
+                        effective_scope=AcceptanceScope.DETERMINISTIC,
+                    ),
+                    kind=InvocationKind.INTERACTION,
+                )
+            )
         return cached_application
+
+    def interaction() -> CliInteraction:
+        nonlocal current_interaction
+        if current_interaction is None:
+            factory = interaction_factory or NonInteractiveCliInteraction
+            current_interaction = factory()
+        return current_interaction
 
     def current_version_control() -> VersionControlController:
         nonlocal cached_version_control
@@ -172,8 +293,12 @@ def create_cli(
             ),
         ] = None,
     ) -> None:
-        nonlocal selected_factory_path
+        nonlocal lifecycle_context, selected_factory_path
+        lifecycle_context = context
         selected_factory_path = None
+        context.meta[_CURRENT_APPLICATION_META_KEY] = current
+        context.meta[_CURRENT_CONTAINER_META_KEY] = current_container
+        context.meta[_CURRENT_INTERACTION_META_KEY] = interaction
         if factory_path is not None:
             if not accepts_operator_factory:
                 fail(
@@ -189,11 +314,18 @@ def create_cli(
                 fail(error)
 
         def close_owned_application() -> None:
-            nonlocal cached_application, selected_factory_path
+            nonlocal cached_application
+            nonlocal current_invocation
+            nonlocal current_interaction
+            nonlocal lifecycle_context
+            nonlocal selected_factory_path
             try:
                 if owns_application and cached_application is not None:
                     cached_application.shutdown()
             finally:
+                current_invocation = None
+                current_interaction = None
+                lifecycle_context = None
                 if owns_application:
                     cached_application = None
                 selected_factory_path = None
@@ -224,6 +356,42 @@ def create_cli(
         try:
             typer.echo(json.dumps(agent_route_to_dict(current().agent_routes.route(prompt))))
         except AFError as error:
+            fail(error)
+
+    @cli.command()
+    def routes() -> None:
+        """List installed deterministic procedures as JSON."""
+        try:
+            registry = current().container.resolve(ProcedureRegistry)
+            catalogue = sorted(registry.catalogue(), key=lambda descriptor: descriptor.procedure_id)
+            typer.echo(json.dumps([procedure_descriptor_to_dict(item) for item in catalogue]))
+        except (AFError, TypeError, ValueError) as error:
+            fail(error)
+
+    @make_commands.command("procedure")
+    def make_procedure(
+        context: typer.Context,
+        procedure_id: Annotated[
+            str | None,
+            typer.Option("--procedure-id", help="Stable deterministic procedure identifier"),
+        ] = None,
+        package: Annotated[
+            str | None,
+            typer.Option("--package", help="Python package for the generated example"),
+        ] = None,
+    ) -> None:
+        """Scaffold a runnable provider-based deterministic procedure example."""
+        try:
+            interaction = current_interaction_from_context(context)
+            resolved_procedure_id = procedure_id or interaction.text(message="Procedure ID").strip()
+            resolved_package = package or interaction.text(message="Python package").strip()
+            result = scaffold_procedure(
+                root=Path.cwd(),
+                procedure_id=resolved_procedure_id,
+                package=resolved_package,
+            )
+            typer.echo(json.dumps(result.to_dict()))
+        except (AFError, TypeError, ValueError) as error:
             fail(error)
 
     @search_commands.command("index")
@@ -467,10 +635,13 @@ def create_cli(
 
     initialization_commands.add_typer(version_commands, name="version")
     cli.add_typer(initialization_commands, name="init")
+    cli.add_typer(make_commands, name="make")
     cli.add_typer(search_commands, name="search")
     cli.add_typer(task_commands, name="tasks")
     cli.add_typer(migration_commands, name="migrations")
     cli.add_typer(ideon_commands, name="ideon")
+    if isinstance(application, AFApplication):
+        install_cli_command_contributors(cli, application)
     return cli
 
 

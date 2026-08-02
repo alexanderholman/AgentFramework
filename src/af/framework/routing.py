@@ -52,13 +52,22 @@ class RoutingPolicy:
 class ProcedureRegistry:
     def __init__(self) -> None:
         self._procedures: dict[str, Procedure] = {}
+        self._descriptors_by_identity: dict[tuple[str, str], ProcedureDescriptor] = {}
         self._descriptors: dict[str, ProcedureDescriptor] = {}
 
     def register(self, procedure: Procedure) -> None:
-        if procedure.id in self._procedures:
-            raise ValueError(f"procedure already registered: {procedure.id}")
         descriptor = self._validated_descriptor(procedure)
+        identity = (descriptor.procedure_id, descriptor.version)
+        if identity in self._descriptors_by_identity:
+            raise ValueError(
+                f"procedure already registered: {descriptor.procedure_id}@{descriptor.version}"
+            )
+        if descriptor.procedure_id in self._procedures:
+            raise ValueError(
+                f"procedure id conflicts with existing registration: {descriptor.procedure_id}"
+            )
         self._procedures[procedure.id] = procedure
+        self._descriptors_by_identity[identity] = descriptor
         self._descriptors[procedure.id] = descriptor
 
     def all(self) -> tuple[Procedure, ...]:

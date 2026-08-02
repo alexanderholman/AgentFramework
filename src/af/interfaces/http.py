@@ -345,6 +345,7 @@ def _assemble_http_app(
             resolved.tasks,
             web_profile=web_profile,
             experimental_state=experimental_state,
+            session_cookie_signing_key=resolved.settings.session_cookie_signing_key,
         )
     )
     app.include_router(create_rest_router(resolved.tasks))

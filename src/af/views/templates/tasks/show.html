@@ -2,6 +2,7 @@
 {% block title %}Task · AF{% endblock %}
 {% block content %}
   <h1>Task</h1>
+  {% if flash %}<p role="status">{{ flash }}</p>{% endif %}
   <p>{{ task.prompt }}</p>
   <p class="answer" data-testid="answer">{{ task.output }}</p>
   <p class="meta">{{ task.intent }} via {{ task.route }} ({{ task.tier }}), verified={{ task.verified }}, reused={{ task.reused }}, trace={{ task.trace_id }}</p>

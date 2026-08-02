@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import re
 from datetime import UTC, datetime
 
@@ -23,13 +27,34 @@ from af.interfaces.http import create_http_app
 from af.interfaces.http_body import HTTP_MAX_BODY_BYTES
 
 CSRF_PATTERN = re.compile(r'name="csrf_token" value="([^"]+)"')
+FLASH_PATTERN = re.compile(r'<p role="status">([^<]+)</p>')
 TEST_HOST = "127.0.0.1"
+SESSION_COOKIE_NAME = "af-session"
 
 
 def _extract_csrf_token(html: str) -> str:
     match = CSRF_PATTERN.search(html)
     assert match is not None
     return match.group(1)
+
+
+def _extract_flash_message(html: str) -> str | None:
+    match = FLASH_PATTERN.search(html)
+    return None if match is None else match.group(1)
+
+
+def _sign_session_cookie(session: dict[str, str], *, key: str) -> str:
+    payload = json.dumps(session, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(key.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii")
+    return f"{encoded}.{signature}"
+
+
+def _session_cookie_was_cleared(response) -> bool:  # type: ignore[no-untyped-def]
+    return any(
+        SESSION_COOKIE_NAME in value and "Max-Age=0" in value
+        for value in response.headers.get_list("set-cookie")
+    )
 
 
 def _graphql_client(controller: object) -> TestClient:
@@ -281,6 +306,7 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
 
         populated_list = client.get("/tasks")
         shown = client.get(task_location)
+        list_after_create = client.get("/tasks")
         update_token = _extract_csrf_token(shown.text)
         update_response = client.post(
             task_location,
@@ -288,6 +314,7 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
             follow_redirects=False,
         )
         updated = client.get(task_location)
+        shown_after_update = client.get(task_location)
         delete_token = _extract_csrf_token(updated.text)
         delete_response = client.post(
             f"{task_location}/delete",
@@ -295,6 +322,7 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
             follow_redirects=False,
         )
         deleted_list = client.get("/tasks")
+        list_after_delete = client.get("/tasks")
         missing = client.get(task_location)
 
     assert empty_list.status_code == 200
@@ -303,6 +331,9 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
     assert task_location.startswith("/tasks/")
     assert "how many rs in strawberry" in populated_list.text
     assert "→ 3" in populated_list.text
+    assert _extract_flash_message(populated_list.text) == "Saved task."
+    assert _session_cookie_was_cleared(populated_list)
+    assert _extract_flash_message(list_after_create.text) is None
     assert shown.status_code == 200
     assert 'data-testid="answer">3<' in shown.text
     assert 'maxlength="10000"' in shown.text
@@ -310,11 +341,87 @@ def test_html_task_lifecycle(application) -> None:  # type: ignore[no-untyped-de
     assert update_response.headers["location"] == task_location
     assert "how many bs in blueberry" in updated.text
     assert 'data-testid="answer">2<' in updated.text
+    assert _extract_flash_message(updated.text) == "Updated task."
+    assert _session_cookie_was_cleared(updated)
+    assert _extract_flash_message(shown_after_update.text) is None
     assert delete_response.status_code == 303
     assert delete_response.headers["location"] == "/tasks"
     assert "No persisted tasks yet." in deleted_list.text
+    assert _extract_flash_message(deleted_list.text) == "Deleted task."
+    assert _session_cookie_was_cleared(deleted_list)
+    assert _extract_flash_message(list_after_delete.text) is None
     assert missing.status_code == 404
     assert missing.json() == {"detail": f"task not found: {task_location.removeprefix('/tasks/')}"}
+
+
+def test_html_flash_cookie_round_trips_across_application_instances_with_shared_key() -> None:
+    settings = Settings(session_cookie_signing_key="shared-worker-key")
+    task_repository = InMemoryTaskRepository()
+    trace_repository = InMemoryTraceRepository()
+    first_application = create_application(
+        settings=settings,
+        task_repository=task_repository,
+        trace_repository=trace_repository,
+    )
+    second_application = create_application(
+        settings=settings,
+        task_repository=task_repository,
+        trace_repository=trace_repository,
+    )
+
+    try:
+        with (
+            _http_client(first_application) as first_client,
+            _http_client(second_application) as second_client,
+        ):
+            index = first_client.get("/")
+            created = first_client.post(
+                "/tasks",
+                data={
+                    "prompt": "how many rs in strawberry",
+                    "csrf_token": _extract_csrf_token(index.text),
+                },
+                follow_redirects=False,
+            )
+            task_location = created.headers["location"]
+            second_client.cookies.update(first_client.cookies)
+            shown = second_client.get(task_location)
+            replay = second_client.get(task_location)
+
+        assert shown.status_code == 200
+        assert _extract_flash_message(shown.text) == "Saved task."
+        assert _session_cookie_was_cleared(shown)
+        assert _extract_flash_message(replay.text) is None
+    finally:
+        first_application.shutdown()
+        second_application.shutdown()
+
+
+@pytest.mark.parametrize(
+    "cookie_value",
+    [
+        "malformed",
+        _sign_session_cookie({"flash": "Saved task."}, key="wrong-signing-key"),
+        _sign_session_cookie({"notice": "stale"}, key="html-session-key"),
+        f"{'A' * 5000}.deadbeef",
+    ],
+)
+def test_html_clears_malformed_invalid_and_obsolete_session_cookies(cookie_value: str) -> None:
+    application = create_application(
+        settings=Settings(session_cookie_signing_key="html-session-key"),
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+
+    try:
+        with _http_client(application) as client:
+            response = client.get("/tasks", cookies={SESSION_COOKIE_NAME: cookie_value})
+
+        assert response.status_code == 200
+        assert _extract_flash_message(response.text) is None
+        assert _session_cookie_was_cleared(response)
+    finally:
+        application.shutdown()
 
 
 def test_html_rejects_blank_create_with_html_feedback(application) -> None:  # type: ignore[no-untyped-def]
@@ -408,6 +515,44 @@ def test_html_csrf_cookie_sets_secure_only_over_https(application) -> None:  # t
     assert "HttpOnly" in response.headers["set-cookie"]
     assert "SameSite=strict" in response.headers["set-cookie"]
     assert "Secure" in response.headers["set-cookie"]
+
+
+def test_html_session_cookie_tracks_flash_state_and_secure_flag(application) -> None:  # type: ignore[no-untyped-def]
+    with _http_client(application) as client:
+        index = client.get("/")
+        created = client.post(
+            "/tasks",
+            data={
+                "prompt": "how many rs in strawberry",
+                "csrf_token": _extract_csrf_token(index.text),
+            },
+            follow_redirects=False,
+        )
+
+    assert "af-session=" in created.headers["set-cookie"]
+    assert "HttpOnly" in created.headers["set-cookie"]
+    assert "Path=/" in created.headers["set-cookie"]
+    assert "SameSite=lax" in created.headers["set-cookie"]
+    assert "Secure" not in created.headers["set-cookie"]
+
+    with _http_client(application, scheme="https") as secure_client:
+        response = secure_client.get("/")
+
+    assert "af-session=" not in response.headers.get("set-cookie", "")
+
+    with _http_client(application, scheme="https") as secure_client:
+        index = secure_client.get("/")
+        created = secure_client.post(
+            "/tasks",
+            data={
+                "prompt": "how many rs in strawberry",
+                "csrf_token": _extract_csrf_token(index.text),
+            },
+            follow_redirects=False,
+        )
+
+    assert "af-session=" in created.headers["set-cookie"]
+    assert "Secure" in created.headers["set-cookie"]
 
 
 def test_http_sets_security_headers_on_html_rest_and_graphql_responses(

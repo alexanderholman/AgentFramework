@@ -5,7 +5,7 @@ from __future__ import annotations
 from af.application.search import SearchIndexResult, SearchIndexSourceResult, SearchResult
 from af.domain.agent_routing import AgentRouteResult
 from af.domain.tasks import Task
-from af.framework.types import ExecutionOutcome
+from af.framework.types import ExecutionOutcome, ProcedureDescriptor
 from af.search.contracts import SearchHit
 
 
@@ -51,6 +51,37 @@ def agent_route_to_dict(route: AgentRouteResult) -> dict[str, object]:
         "agent": route.agent.value if route.agent is not None else None,
         "reason": route.reason.value,
         "candidates": [candidate.value for candidate in route.candidates],
+    }
+
+
+def procedure_descriptor_to_dict(descriptor: ProcedureDescriptor) -> dict[str, object]:
+    return {
+        "procedure_id": descriptor.procedure_id,
+        "version": descriptor.version,
+        "digest": descriptor.digest,
+        "intent": descriptor.intent,
+        "arguments": [
+            {
+                "name": argument.name,
+                "value_type": argument.value_type.value,
+                "min_length": argument.min_length,
+                "max_length": argument.max_length,
+                "allow_blank": argument.allow_blank,
+            }
+            for argument in descriptor.arguments
+        ],
+        "effect": descriptor.effect.value,
+        "risk": descriptor.risk.value,
+        "requires_confirmation": descriptor.requires_confirmation,
+        "tier": descriptor.tier.name.lower(),
+        "pure": descriptor.pure,
+        "replay_safe": descriptor.replay_safe,
+        "has_selection_grounding": descriptor.has_selection_grounding,
+        "metrics": {
+            "cost": descriptor.metrics.cost,
+            "latency": descriptor.metrics.latency,
+            "intelligence": descriptor.metrics.intelligence,
+        },
     }
 
 
