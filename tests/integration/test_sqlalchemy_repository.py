@@ -47,6 +47,17 @@ def test_sqlite_task_repository_paginates_lists(tmp_path) -> None:  # type: igno
     assert application.tasks.list(limit=1, offset=1) == [second]
 
 
+def test_sqlite_operations_snapshot_reads_recent_tasks_in_descending_order(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    settings = Settings(database_url=f"sqlite+pysqlite:///{tmp_path / 'operations.sqlite3'}")
+    application = create_application(settings=settings)
+    first = application.tasks.create("HELLO")
+    second = application.tasks.create("how many bs in blueberry")
+
+    snapshot = application.operations.snapshot()
+
+    assert [task.id for task in snapshot.recent_tasks] == [second.id, first.id]
+
+
 def test_sqlite_trace_repository_is_persistent_and_append_only(tmp_path) -> None:  # type: ignore[no-untyped-def]
     settings = Settings(database_url=f"sqlite+pysqlite:///{tmp_path / 'traces.sqlite3'}")
     first_application = create_application(settings=settings)

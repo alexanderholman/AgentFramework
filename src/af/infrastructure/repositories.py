@@ -29,6 +29,13 @@ class InMemoryTaskRepository:
         except KeyError as error:
             raise TaskNotFound(task_id) from error
 
+    def list_recent(self, *, limit: int) -> list[Task]:
+        return sorted(
+            self._tasks.values(),
+            key=lambda task: (task.created_at, task.id),
+            reverse=True,
+        )[:limit]
+
     def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
         tasks = sorted(self._tasks.values(), key=lambda task: task.created_at)
         if offset:
@@ -62,6 +69,13 @@ class SqlAlchemyTaskRepository:
             if row is None:
                 raise TaskNotFound(task_id)
             return self._to_domain(row)
+
+    def list_recent(self, *, limit: int) -> list[Task]:
+        with self._database.sessions() as session:
+            statement = (
+                select(TaskRow).order_by(TaskRow.created_at.desc(), TaskRow.id.desc()).limit(limit)
+            )
+            return [self._to_domain(row) for row in session.scalars(statement).all()]
 
     def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
         with self._database.sessions() as session:

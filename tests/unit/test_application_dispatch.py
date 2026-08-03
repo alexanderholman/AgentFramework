@@ -10,6 +10,7 @@ from af.application.dispatch import (
     CreateTask,
     DeleteTask,
     ExecuteTask,
+    GetOperationsSnapshot,
     GetTask,
     InterpretIdeon,
     ListTasks,
@@ -21,16 +22,18 @@ from af.application.dispatch import (
     build_application_endpoints,
 )
 from af.application.ideons import IdeonController
+from af.application.operations import OperationsController
 from af.application.tasks import TaskController
 from af.bootstrap import create_application
 from af.config import Settings
 from af.framework.context import AcceptanceScope, ExecutionContext
 
 
-def _controllers() -> tuple[Mock, Mock, Mock]:
+def _controllers() -> tuple[Mock, Mock, Mock, Mock]:
     tasks = Mock(spec=TaskController)
     routes = Mock(spec=AgentRoutingController)
     ideons = Mock(spec=IdeonController)
+    operations = Mock(spec=OperationsController)
     tasks.execute.return_value = "executed"
     tasks.create.return_value = "created"
     tasks.get.return_value = "found"
@@ -43,11 +46,12 @@ def _controllers() -> tuple[Mock, Mock, Mock]:
     ideons.resolve.return_value = "resolved"
     ideons.realise.return_value = "realised"
     ideons.stream.return_value = (b"streamed", "streamed")
-    return tasks, routes, ideons
+    operations.snapshot.return_value = "operations"
+    return tasks, routes, ideons, operations
 
 
 def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() -> None:
-    tasks, routes, ideons = _controllers()
+    tasks, routes, ideons, operations = _controllers()
     observed: list[tuple[MessageKind, str, AcceptanceScope | None]] = []
 
     async def record(
@@ -63,6 +67,7 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
         tasks,
         routes,
         ideons,
+        operations,
         middleware=(record,),
     )
 
@@ -78,6 +83,7 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
     assert endpoints.ideons.resolve("ref") == "resolved"
     assert endpoints.ideons.realise("ref") == "realised"
     assert endpoints.ideons.stream("request") == (b"streamed", "streamed")
+    assert endpoints.operations.snapshot() == "operations"
 
     assert endpoints.bus.registry.message_types == (
         ExecuteTask,
@@ -92,6 +98,7 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
         ResolveIdeon,
         RealiseIdeon,
         StreamIdeon,
+        GetOperationsSnapshot,
     )
     assert observed == [
         (MessageKind.COMMAND, "ExecuteTask", AcceptanceScope.DETERMINISTIC),
@@ -106,12 +113,13 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
         (MessageKind.QUERY, "ResolveIdeon", AcceptanceScope.DETERMINISTIC),
         (MessageKind.QUERY, "RealiseIdeon", AcceptanceScope.DETERMINISTIC),
         (MessageKind.QUERY, "StreamIdeon", AcceptanceScope.DETERMINISTIC),
+        (MessageKind.QUERY, "GetOperationsSnapshot", AcceptanceScope.DETERMINISTIC),
     ]
 
 
 def test_direct_and_controller_dispatch_have_equivalent_semantics() -> None:
-    tasks, routes, ideons = _controllers()
-    endpoints = build_application_endpoints(tasks, routes, ideons)
+    tasks, routes, ideons, operations = _controllers()
+    endpoints = build_application_endpoints(tasks, routes, ideons, operations)
     context = ExecutionContext(
         requested_scope=AcceptanceScope.DETERMINISTIC,
         effective_scope=AcceptanceScope.DETERMINISTIC,
@@ -128,8 +136,8 @@ def test_direct_and_controller_dispatch_have_equivalent_semantics() -> None:
 
 
 def test_sync_controller_dispatch_is_safe_inside_an_active_event_loop() -> None:
-    tasks, routes, ideons = _controllers()
-    endpoints = build_application_endpoints(tasks, routes, ideons)
+    tasks, routes, ideons, operations = _controllers()
+    endpoints = build_application_endpoints(tasks, routes, ideons, operations)
 
     async def scenario() -> None:
         assert endpoints.tasks.execute("run") == "executed"
@@ -154,6 +162,7 @@ def test_bootstrap_exposes_bus_backed_endpoints_to_every_transport() -> None:
             ResolveIdeon,
             RealiseIdeon,
             StreamIdeon,
+            GetOperationsSnapshot,
         )
     finally:
         application.shutdown()
