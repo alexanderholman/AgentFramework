@@ -93,6 +93,21 @@ curl -sS http://127.0.0.1:8000/graphql \
 REST and GraphQL share the same Task repository and application controller; transport
 modules do not duplicate counting, verification, or persistence rules.
 
+### Operations dashboard
+
+The read-only operations projection is available through the same application boundary:
+
+```bash
+uv run af operations
+uv run af operations --json
+curl -sS http://127.0.0.1:8000/api/v1/operations
+```
+
+Open `http://127.0.0.1:8000/operations` for the server-rendered view. The projection is
+bounded and excludes prompts, outputs, trace identifiers, credentials, and configuration.
+The HTTP surface remains loopback/development-only until AF has a real authentication boundary.
+See [Operations dashboard](docs/operations-dashboard.md).
+
 ## MCP and ChatGPT
 
 Run AF as a local stdio MCP server:
