@@ -148,7 +148,7 @@ def test_db_setup_command_reports_operator_facing_setup_failure(tmp_path: Path) 
     assert result.stderr == "db setup only supports local-debian mode on Debian or Ubuntu\n"
 
 
-def test_installed_console_loads_db_setup_controller_from_application_factory(
+def test_installed_console_accepts_explicit_db_setup_controller_with_application_factory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -158,13 +158,13 @@ def test_installed_console_loads_db_setup_controller_from_application_factory(
     )
 
     def build_application():  # type: ignore[no-untyped-def]
-        return create_application(providers=(DatabaseSetupProvider(controller),))
+        return create_application()
 
     module.build_application = build_application  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, module.__name__, module)
 
     result = runner.invoke(
-        create_cli(),
+        create_cli(database_setup=controller),
         [
             "--application-factory",
             "test_db_setup_operator_profile:build_application",
