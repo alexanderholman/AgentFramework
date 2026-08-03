@@ -318,8 +318,8 @@ def test_search_manager_refuses_query_to_source_without_policy_pushdown(
             "version": expected_binding.driver_version,
         }
         evidence_digest = hashlib.sha256(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         return CapabilityEvidence(
             binding=expected_binding,
             capabilities=_limited_caps,
