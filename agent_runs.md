@@ -1937,3 +1937,53 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - DEC-050
 - Issue #20
 - PR #153
+
+---
+
+## Run #036 - Shared Operations Dashboard Projection
+**Date**: 2026-08-03 18:05:00 UTC
+**Agent**: Zordon
+**Status**: Completed
+
+### Inputs
+- Direct maintainer request for an AgentFramework-native GUI/TUI/API dashboard
+- Issue #178
+- Related open outcomes #27, #29, and #33
+- Pinned base `cad24eee7bc8fb6d5af60184f8fd8bce99eda985`
+
+### Outputs
+- Added one immutable, bounded, redacted operations snapshot routed through the application bus
+- Added deterministic recent-Task reads for in-memory and SQL repositories
+- Added server-rendered `/operations`, REST `GET /api/v1/operations`, and plain/JSON
+  `af operations` views
+- Added focused unit, feature, SQL integration, OpenAPI, accessibility, redaction, and
+  no-side-effect coverage
+- Added operator documentation and explicit loopback/authentication and TUI limitations
+
+### Verified Results
+- `uv run pytest -q tests/unit/test_operations.py tests/unit/test_application_dispatch.py
+  tests/feature/test_operations_dashboard.py tests/integration/test_sqlalchemy_repository.py`:
+  13 passed
+- Locked release validation, Ruff formatting/lint, and strict mypy: passed
+- Full pytest coverage run: 2143 passed, 52 optional real-service tests skipped, 90.06% total
+  coverage; two isolated-OpenCode tests were then rerun under a neutral execution username and
+  all 7 tests in those files passed
+- Node route gate: 9 passed
+- Package gate: passed; sdist SHA-256
+  `97c9a63055bcaec35b48cdbcbd4b61bfe4f9ae07d19960ee461fd1b0b8fd4ac5`; wheel SHA-256
+  `660b1b40c4f6dd5fb276b98b2d8958de58d0425c04e67658ea2c007da5a45998`
+- `PATH="$HOME/.local/bin:$PATH" ./validate_agents.sh`: 36 passed
+
+### Issues Encountered
+- The canonical local gate initially used system Python 3.10; rerunning the registered
+  `[SCRIPT:af-dev]` with the project's Python 3.12 environment resolved interpreter selection
+- Two contamination tests intentionally reject the local account name `zordon` when it appears in
+  pytest temporary paths; a neutral-user rerun proved those tests pass without changing product code
+- A full-screen refreshing TUI was intentionally deferred because issue #29's restoration, resize,
+  cancellation, focus, and accessibility contracts are not yet complete
+
+### Related References
+- SPEC-038
+- DEC-051
+- Issues #27, #29, #33, #178
+- Script: `[SCRIPT:af-dev]`
