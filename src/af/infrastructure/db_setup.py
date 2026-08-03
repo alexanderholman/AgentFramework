@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -63,7 +64,8 @@ class LocalMariaDBProvisioner(LocalDatabaseProvisioner):
             failure="could not enable and start the MariaDB service",
         )
         self._run(
-            ("sudo", "mariadb", "--execute", _sql_for_request(request)),
+            ("sudo", "mariadb"),
+            stdin=_sql_for_request(request).encode("utf-8"),
             failure="could not create or update the MariaDB database and user",
         )
         return plan
@@ -73,10 +75,11 @@ class LocalMariaDBProvisioner(LocalDatabaseProvisioner):
         command: tuple[str, ...],
         *,
         env: dict[str, str] | None = None,
+        stdin: bytes | None = None,
         failure: str,
     ) -> None:
         try:
-            self._runner(command, env=env)
+            self._runner(command, env=env, stdin=stdin)
         except DatabaseSetupError:
             raise
         except Exception as error:
@@ -110,7 +113,7 @@ class AtomicEnvFileWriter(ConnectionUrlWriter):
         temp_path: Path | None = None
         try:
             if backup_file is not None:
-                backup_file.write_text(original, encoding="utf-8")
+                _write_text_with_mode(backup_file, original, mode=_file_mode(env_file))
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -219,7 +222,23 @@ def _quote_identifier(value: str) -> str:
 def _quote_literal(value: str) -> str:
     if type(value) is not str:
         raise DatabaseSetupError("database SQL values must be text")
-    return "'" + value.replace("'", "''") + "'"
+    escaped = value.replace("\\", "\\\\").replace("'", "''")
+    return "'" + escaped + "'"
+
+
+def _file_mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def _write_text_with_mode(path: Path, content: str, *, mode: int) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+    except Exception:
+        with suppress(OSError):
+            os.close(descriptor)
+        raise
 
 
 def _merge_env_value(content: str, *, key: str, value: str) -> str:
@@ -260,6 +279,7 @@ def _default_runner(
     command: tuple[str, ...],
     *,
     env: dict[str, str] | None = None,
+    stdin: bytes | None = None,
 ) -> None:
     resolved_env = os.environ.copy()
     if env is not None:
@@ -268,7 +288,7 @@ def _default_runner(
         command,
         check=True,
         env=resolved_env,
-        stdin=subprocess.DEVNULL,
+        input=stdin,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

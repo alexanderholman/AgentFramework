@@ -169,6 +169,8 @@ def test_database_setup_service_rejects_invalid_root_port_and_password(tmp_path:
         service.setup(_request(tmp_path, port=0, execute=True))
     with pytest.raises(DatabaseSetupError, match="must not be blank"):
         service.setup(_request(tmp_path, password="", execute=True))
+    with pytest.raises(DatabaseSetupError, match="default port 3306"):
+        service.setup(_request(tmp_path, port=3307, execute=True))
 
 
 def test_database_setup_service_rejects_non_string_host_and_non_boolean_execute(

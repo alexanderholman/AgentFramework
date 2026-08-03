@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
@@ -19,15 +20,16 @@ from af.infrastructure.db_setup import (
 
 class RecordingRunner:
     def __init__(self) -> None:
-        self.calls: list[tuple[tuple[str, ...], dict[str, str] | None]] = []
+        self.calls: list[tuple[tuple[str, ...], dict[str, str] | None, bytes | None]] = []
 
     def __call__(
         self,
         command: tuple[str, ...],
         *,
         env: dict[str, str] | None = None,
+        stdin: bytes | None = None,
     ) -> None:
-        self.calls.append((command, env))
+        self.calls.append((command, env, stdin))
 
 
 def _request(tmp_path: Path, **overrides: object) -> DatabaseSetupRequest:
@@ -70,11 +72,12 @@ def test_local_mariadb_provisioner_uses_safe_idempotent_sql_and_supported_comman
     assert runner.calls[0] == (
         ("sudo", "apt-get", "install", "-y", "mariadb-server", "mariadb-client"),
         {"DEBIAN_FRONTEND": "noninteractive"},
+        None,
     )
-    assert runner.calls[1] == (("sudo", "systemctl", "enable", "--now", "mariadb"), None)
+    assert runner.calls[1] == (("sudo", "systemctl", "enable", "--now", "mariadb"), None, None)
     sql_command = runner.calls[2][0]
-    assert sql_command[:3] == ("sudo", "mariadb", "--execute")
-    sql = sql_command[3]
+    assert sql_command == ("sudo", "mariadb")
+    sql = runner.calls[2][2].decode("utf-8")
     assert "CREATE DATABASE IF NOT EXISTS `af_test`" in sql
     assert "CREATE USER IF NOT EXISTS 'af_test'@'127.0.0.1' IDENTIFIED BY 'pa''ss;word'" in sql
     assert "ALTER USER 'af_test'@'127.0.0.1' IDENTIFIED BY 'pa''ss;word'" in sql
@@ -82,11 +85,25 @@ def test_local_mariadb_provisioner_uses_safe_idempotent_sql_and_supported_comman
     assert "DROP DATABASE" not in sql
 
 
+def test_local_mariadb_provisioner_escapes_backslashes_in_sql_literals(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    provisioner = LocalMariaDBProvisioner(
+        runner=runner,
+        os_release=lambda: {"ID": "ubuntu", "ID_LIKE": "debian"},
+    )
+
+    provisioner.apply(_request(tmp_path, password="pa\\'ss"))
+
+    sql = runner.calls[2][2].decode("utf-8")
+    assert "IDENTIFIED BY 'pa\\\\''ss'" in sql
+
+
 def test_atomic_env_file_writer_preserves_existing_content_and_creates_backup(
     tmp_path: Path,
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("EXISTING=1\nKEEP=2\n", encoding="utf-8")
+    env_file.chmod(0o600)
 
     result = AtomicEnvFileWriter().update(
         env_file=env_file,
@@ -96,6 +113,7 @@ def test_atomic_env_file_writer_preserves_existing_content_and_creates_backup(
 
     assert result.changed is True
     assert result.backup_file == str(tmp_path / ".env.bak")
+    assert stat.S_IMODE((tmp_path / ".env.bak").stat().st_mode) == 0o600
     assert env_file.read_text(encoding="utf-8") == (
         "EXISTING=1\nKEEP=2\n"
         "AF_MARIADB_TEST_URL=mariadb+pymysql://af_test:encoded@127.0.0.1:3306/af_test\n"

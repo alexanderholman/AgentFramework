@@ -219,6 +219,8 @@ def _validate_request(request: DatabaseSetupRequest) -> DatabaseSetupRequest:
         raise DatabaseSetupError("local-debian mode must use a local host")
     if type(request.port) is not int or not 1 <= request.port <= 65_535:
         raise DatabaseSetupError("database port must be a valid TCP port")
+    if request.mode is DatabaseSetupMode.LOCAL_DEBIAN and request.port != 3306:
+        raise DatabaseSetupError("local-debian mode only supports MariaDB's default port 3306")
     if not isinstance(request.project_root, Path) or not request.project_root.is_dir():
         raise DatabaseSetupError("project root must be an existing directory")
     if type(request.execute) is not bool:
