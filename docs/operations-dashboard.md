@@ -22,6 +22,10 @@ metadata. It deliberately excludes prompts, outputs, trace identifiers, configur
 credentials, and raw telemetry payloads. The activity count describes only the displayed
 window; it is not an unbounded historical total.
 
+Repositories may provide the optional bounded recent-Task reader. Applications injecting an
+older Task repository remain compatible: the dashboard marks Task activity as unavailable rather
+than loading unbounded history or failing the request.
+
 Readiness is conservative. The initial projection reports component readiness as `unknown`
 until fresh component evidence is connected to the shared health model. Unknown health is
 never converted to healthy merely because no failure has been observed.

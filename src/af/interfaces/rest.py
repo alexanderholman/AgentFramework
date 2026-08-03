@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from af.application.operations import OperationsController, OperationsSnapshot
+from af.application.operations import (
+    LifecycleStateValue,
+    LivenessValue,
+    OperationsController,
+    OperationsSnapshot,
+    ReadinessValue,
+)
 from af.application.tasks import TaskController
 from af.domain.tasks import Task
 from af.framework.types import PROMPT_MAX_LENGTH
@@ -51,18 +58,19 @@ class TaskListResponse(BaseModel):
 
 
 class RuntimeResponse(BaseModel):
-    lifecycle_state: str
-    liveness: str
-    readiness: str
+    lifecycle_state: LifecycleStateValue
+    liveness: LivenessValue
+    readiness: ReadinessValue
     reason: str
 
 
 class TaskActivityResponse(BaseModel):
-    window_limit: int
-    observed: int
+    available: bool
+    window_limit: int = Field(ge=1, le=25)
+    observed: int = Field(ge=0, le=25)
     by_status: dict[str, int]
-    verified: int
-    reused: int
+    verified: int = Field(ge=0, le=25)
+    reused: int = Field(ge=0, le=25)
 
 
 class RecentTaskResponse(BaseModel):
@@ -77,11 +85,11 @@ class RecentTaskResponse(BaseModel):
 
 
 class OperationsResponse(BaseModel):
-    schema_version: str
+    schema_version: Literal["1"]
     observed_at: datetime
     runtime: RuntimeResponse
     activity: TaskActivityResponse
-    recent_tasks: list[RecentTaskResponse]
+    recent_tasks: list[RecentTaskResponse] = Field(max_length=10)
 
     @classmethod
     def from_snapshot(cls, snapshot: OperationsSnapshot) -> OperationsResponse:
@@ -95,6 +103,7 @@ class OperationsResponse(BaseModel):
                 reason=snapshot.runtime.reason,
             ),
             activity=TaskActivityResponse(
+                available=snapshot.activity.available,
                 window_limit=snapshot.activity.window_limit,
                 observed=snapshot.activity.observed,
                 by_status=dict(snapshot.activity.by_status),
@@ -110,7 +119,7 @@ class OperationsResponse(BaseModel):
 
 def create_rest_router(
     controller: TaskController,
-    operations: OperationsController,
+    operations: OperationsController | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
@@ -119,9 +128,11 @@ def create_rest_router(
         outcome = controller.execute("hello")
         return {"output": outcome.output, "verified": outcome.verified}
 
-    @router.get("/operations", response_model=OperationsResponse, tags=["operations"])
-    def get_operations() -> OperationsResponse:
-        return OperationsResponse.from_snapshot(operations.snapshot())
+    if operations is not None:
+
+        @router.get("/operations", response_model=OperationsResponse, tags=["operations"])
+        def get_operations() -> OperationsResponse:
+            return OperationsResponse.from_snapshot(operations.snapshot())
 
     @router.get("/tasks", response_model=TaskListResponse)
     def list_tasks() -> TaskListResponse:

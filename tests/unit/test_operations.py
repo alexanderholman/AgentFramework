@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from af.application.operations import OperationsService
+from af.application.operations import OperationsService, RepositoryOperationsTaskReader
 from af.domain.tasks import Task
 from af.framework.application import ApplicationState
 
@@ -11,6 +11,10 @@ class _RecentTaskRepository:
     def __init__(self, tasks: list[Task]) -> None:
         self.tasks = tasks
         self.requested_limits: list[int] = []
+
+    @property
+    def available(self) -> bool:
+        return True
 
     def list_recent(self, *, limit: int) -> list[Task]:
         self.requested_limits.append(limit)
@@ -84,3 +88,39 @@ def test_operations_snapshot_reports_non_serving_states_without_false_readiness(
     assert snapshot.runtime.liveness == "live"
     assert snapshot.runtime.readiness == "not_ready"
     assert "draining" in snapshot.runtime.reason
+
+
+def test_operations_snapshot_clamps_an_over_returning_reader() -> None:
+    repository = _RecentTaskRepository(
+        [_task(index, status="completed", verified=True, reused=False) for index in range(30)]
+    )
+    service = OperationsService(
+        repository,
+        lifecycle_state=lambda: ApplicationState.SERVING,
+        clock=lambda: datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    snapshot = service.snapshot()
+
+    assert snapshot.activity.observed == 25
+    assert snapshot.activity.verified == 25
+    assert len(snapshot.recent_tasks) == 10
+
+
+def test_legacy_task_repository_reports_activity_as_unavailable_instead_of_failing() -> None:
+    class LegacyTaskRepository:
+        def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
+            del limit, offset
+            return [_task(1, status="completed", verified=True, reused=False)]
+
+    service = OperationsService(
+        RepositoryOperationsTaskReader(LegacyTaskRepository()),  # type: ignore[arg-type]
+        lifecycle_state=lambda: ApplicationState.SERVING,
+        clock=lambda: datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    snapshot = service.snapshot()
+
+    assert snapshot.activity.available is False
+    assert snapshot.activity.observed == 0
+    assert snapshot.recent_tasks == ()

@@ -37,6 +37,7 @@ def test_operations_dashboard_has_shared_redacted_html_rest_and_terminal_views(a
         "reason": "component readiness has not been observed",
     }
     assert rest_payload["activity"]["observed"] == 1
+    assert rest_payload["activity"]["available"] is True
     assert rest_payload["recent_tasks"][0]["id"] == created.id
     assert set(rest_payload["recent_tasks"][0]) == {
         "id",
@@ -55,6 +56,7 @@ def test_operations_dashboard_has_shared_redacted_html_rest_and_terminal_views(a
 
     assert html_response.status_code == 200
     assert '<main aria-labelledby="operations-title">' in html_response.text
+    assert '<table aria-labelledby="recent-title">' in html_response.text
     assert "Operations" in html_response.text
     assert created.id in html_response.text
     assert created.prompt not in html_response.text

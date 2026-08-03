@@ -44,6 +44,7 @@ def operations_to_dict(snapshot: OperationsSnapshot) -> dict[str, object]:
             "reason": snapshot.runtime.reason,
         },
         "activity": {
+            "available": snapshot.activity.available,
             "window_limit": snapshot.activity.window_limit,
             "observed": snapshot.activity.observed,
             "by_status": dict(snapshot.activity.by_status),
@@ -72,16 +73,18 @@ def operations_to_text(snapshot: OperationsSnapshot) -> str:
         if not snapshot.recent_tasks
         else ", ".join(f"{task.id} ({task.status})" for task in snapshot.recent_tasks)
     )
+    activity = (
+        (f"Activity window: {snapshot.activity.observed}/{snapshot.activity.window_limit} tasks")
+        if snapshot.activity.available
+        else "Activity window: unavailable"
+    )
     return "\n".join(
         (
             "AF Operations",
             f"Lifecycle: {snapshot.runtime.lifecycle_state}",
             f"Liveness: {snapshot.runtime.liveness}",
             f"Readiness: {snapshot.runtime.readiness} ({snapshot.runtime.reason})",
-            (
-                f"Activity window: {snapshot.activity.observed}/"
-                f"{snapshot.activity.window_limit} tasks"
-            ),
+            activity,
             f"Verified: {snapshot.activity.verified} | Reused: {snapshot.activity.reused}",
             f"Recent tasks: {recent}",
         )

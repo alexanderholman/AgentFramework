@@ -17,6 +17,7 @@
 
   <section aria-labelledby="activity-title">
     <h2 id="activity-title">Bounded task activity</h2>
+    {% if snapshot.activity.available %}
     <p>{{ snapshot.activity.observed }} of at most {{ snapshot.activity.window_limit }} tasks observed.</p>
     <p>{{ snapshot.activity.verified }} verified · {{ snapshot.activity.reused }} reused</p>
     {% if snapshot.activity.by_status %}
@@ -24,12 +25,13 @@
       {% for status, count in snapshot.activity.by_status %}<li>{{ status }}: {{ count }}</li>{% endfor %}
     </ul>
     {% else %}<p>No task activity.</p>{% endif %}
+    {% else %}<p>Task activity is unavailable for this repository.</p>{% endif %}
   </section>
 
   <section aria-labelledby="recent-title">
     <h2 id="recent-title">Recent tasks</h2>
     {% if snapshot.recent_tasks %}
-    <table>
+    <table aria-labelledby="recent-title">
       <thead><tr><th scope="col">ID</th><th scope="col">Status</th><th scope="col">Route</th><th scope="col">Verified</th><th scope="col">Reused</th></tr></thead>
       <tbody>
       {% for task in snapshot.recent_tasks %}

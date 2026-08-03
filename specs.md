@@ -1968,6 +1968,8 @@ moving aggregation, persistence, or health semantics into transport adapters.
   imply readiness.
 - MUST expose the same versioned projection through HTML, REST, plain terminal output, and stable
   terminal JSON.
+- MUST preserve applications with repositories that predate the recent-Task capability by marking
+  activity unavailable rather than failing or reading unbounded history.
 - MUST remain read-only and MUST NOT execute routes, create Tasks or traces, initialize lazy search
   connections, or acquire external resources.
 - MUST describe the unauthenticated HTTP view as loopback/development-only until AF has a verified

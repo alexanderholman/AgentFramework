@@ -135,6 +135,14 @@ def test_direct_and_controller_dispatch_have_equivalent_semantics() -> None:
     assert direct.value == endpoints.tasks.execute("run") == "executed"
 
 
+def test_existing_endpoint_factory_signature_remains_valid_without_operations() -> None:
+    tasks, routes, ideons, _ = _controllers()
+
+    endpoints = build_application_endpoints(tasks, routes, ideons)
+
+    assert endpoints.operations is None
+
+
 def test_sync_controller_dispatch_is_safe_inside_an_active_event_loop() -> None:
     tasks, routes, ideons, operations = _controllers()
     endpoints = build_application_endpoints(tasks, routes, ideons, operations)

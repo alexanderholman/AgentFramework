@@ -28,7 +28,7 @@ from af.application.ideons import IdeonController, IdeonService
 from af.application.operations import (
     OperationsController,
     OperationsService,
-    OperationsTaskReader,
+    RepositoryOperationsTaskReader,
 )
 from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
@@ -554,7 +554,7 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
     container = build.lifecycle.container
     operations = OperationsController(
         OperationsService(
-            cast(OperationsTaskReader, container.resolve_token(TaskRepository)),
+            RepositoryOperationsTaskReader(container.resolve_token(TaskRepository)),
             lifecycle_state=lambda: build.lifecycle.state,
         )
     )
@@ -576,7 +576,7 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         verifier=container.resolve(DeterministicVerifier),
         agent_routes=endpoints.agent_routes,
         ideons=endpoints.ideons,
-        operations=endpoints.operations,
+        operations=cast(OperationsController, endpoints.operations),
         lifecycle=build.lifecycle,
     )
 

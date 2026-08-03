@@ -180,11 +180,11 @@ def _csrf_forbidden() -> HTMLResponse:
 
 def create_web_router(
     controller: TaskController,
-    operations: OperationsController,
     *,
     web_profile: WebProfile,
     experimental_state: Literal["disabled", "fallback", "enabled"],
     session_cookie_signing_key: str,
+    operations: OperationsController | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["web"])
     templates = Jinja2Templates(directory=TEMPLATE_DIRECTORY)
@@ -266,16 +266,18 @@ def create_web_router(
         _clear_flash(request, response, signing_key=signing_key)
         return response
 
-    @router.get("/operations", response_class=HTMLResponse)
-    def show_operations(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request=request,
-            name="operations.html",
-            context={
-                "snapshot": operations.snapshot(),
-                **profile_context(),
-            },
-        )
+    if operations is not None:
+
+        @router.get("/operations", response_class=HTMLResponse)
+        def show_operations(request: Request) -> HTMLResponse:
+            return templates.TemplateResponse(
+                request=request,
+                name="operations.html",
+                context={
+                    "snapshot": operations.snapshot(),
+                    **profile_context(),
+                },
+            )
 
     @router.post("/tasks")
     def create_task(

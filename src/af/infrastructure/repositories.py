@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from heapq import nlargest
 
 from sqlalchemy import select
 
@@ -30,11 +31,11 @@ class InMemoryTaskRepository:
             raise TaskNotFound(task_id) from error
 
     def list_recent(self, *, limit: int) -> list[Task]:
-        return sorted(
+        return nlargest(
+            limit,
             self._tasks.values(),
             key=lambda task: (task.created_at, task.id),
-            reverse=True,
-        )[:limit]
+        )
 
     def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
         tasks = sorted(self._tasks.values(), key=lambda task: task.created_at)

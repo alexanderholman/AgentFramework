@@ -248,7 +248,7 @@ class ApplicationEndpoints:
     tasks: TaskController
     agent_routes: AgentRoutingController
     ideons: IdeonController
-    operations: OperationsController
+    operations: OperationsController | None
 
 
 def _register[M: Message](
@@ -269,7 +269,7 @@ def build_application_endpoints(
     tasks: TaskController,
     agent_routes: AgentRoutingController,
     ideons: IdeonController,
-    operations: OperationsController,
+    operations: OperationsController | None = None,
     *,
     middleware: Iterable[Middleware] = (),
     context_factory: ContextFactory = _default_context,
@@ -300,7 +300,8 @@ def build_application_endpoints(
     _register(registry, ResolveIdeon, lambda message: ideons.resolve(message.ref))
     _register(registry, RealiseIdeon, lambda message: ideons.realise(message.ref))
     _register(registry, StreamIdeon, lambda message: ideons.stream(message.request))
-    _register(registry, GetOperationsSnapshot, lambda message: operations.snapshot())
+    if operations is not None:
+        _register(registry, GetOperationsSnapshot, lambda message: operations.snapshot())
 
     bus = ApplicationBus(registry, middleware=middleware)
     dispatcher = _SyncDispatcher(bus, context_factory)
@@ -309,5 +310,5 @@ def build_application_endpoints(
         tasks=_TaskControllerFacade(dispatcher),
         agent_routes=_AgentRoutingControllerFacade(dispatcher),
         ideons=_IdeonControllerFacade(dispatcher),
-        operations=_OperationsControllerFacade(dispatcher),
+        operations=_OperationsControllerFacade(dispatcher) if operations is not None else None,
     )
