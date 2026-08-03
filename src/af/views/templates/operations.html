@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Operations · AF Agent Framework{% endblock %}
+{% block content %}
+<main aria-labelledby="operations-title">
+  <h1 id="operations-title">Operations</h1>
+  <p class="meta">Observed {{ snapshot.observed_at.isoformat() }} · schema {{ snapshot.schema_version }}</p>
+
+  <section aria-labelledby="runtime-title">
+    <h2 id="runtime-title">Runtime</h2>
+    <dl>
+      <dt>Lifecycle</dt><dd>{{ snapshot.runtime.lifecycle_state }}</dd>
+      <dt>Liveness</dt><dd>{{ snapshot.runtime.liveness }}</dd>
+      <dt>Readiness</dt><dd>{{ snapshot.runtime.readiness }}</dd>
+      <dt>Reason</dt><dd>{{ snapshot.runtime.reason }}</dd>
+    </dl>
+  </section>
+
+  <section aria-labelledby="activity-title">
+    <h2 id="activity-title">Bounded task activity</h2>
+    <p>{{ snapshot.activity.observed }} of at most {{ snapshot.activity.window_limit }} tasks observed.</p>
+    <p>{{ snapshot.activity.verified }} verified · {{ snapshot.activity.reused }} reused</p>
+    {% if snapshot.activity.by_status %}
+    <ul>
+      {% for status, count in snapshot.activity.by_status %}<li>{{ status }}: {{ count }}</li>{% endfor %}
+    </ul>
+    {% else %}<p>No task activity.</p>{% endif %}
+  </section>
+
+  <section aria-labelledby="recent-title">
+    <h2 id="recent-title">Recent tasks</h2>
+    {% if snapshot.recent_tasks %}
+    <table>
+      <thead><tr><th scope="col">ID</th><th scope="col">Status</th><th scope="col">Route</th><th scope="col">Verified</th><th scope="col">Reused</th></tr></thead>
+      <tbody>
+      {% for task in snapshot.recent_tasks %}
+        <tr><td>{{ task.id }}</td><td>{{ task.status }}</td><td>{{ task.route }}</td><td>{{ task.verified }}</td><td>{{ task.reused }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p>No recent tasks.</p>{% endif %}
+  </section>
+</main>
+{% endblock %}

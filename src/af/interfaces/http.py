@@ -343,12 +343,13 @@ def _assemble_http_app(
     app.include_router(
         create_web_router(
             resolved.tasks,
+            resolved.operations,
             web_profile=web_profile,
             experimental_state=experimental_state,
             session_cookie_signing_key=resolved.settings.session_cookie_signing_key,
         )
     )
-    app.include_router(create_rest_router(resolved.tasks))
+    app.include_router(create_rest_router(resolved.tasks, resolved.operations))
     app.include_router(create_ideon_router(resolved.ideons))
     app.include_router(create_graphql_router(resolved.tasks), prefix="/graphql")
 

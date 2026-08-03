@@ -7,6 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from af.application.operations import OperationsController, OperationsSnapshot
 from af.application.tasks import TaskController
 from af.domain.tasks import Task
 from af.framework.types import PROMPT_MAX_LENGTH
@@ -49,13 +50,78 @@ class TaskListResponse(BaseModel):
     total: int
 
 
-def create_rest_router(controller: TaskController) -> APIRouter:
+class RuntimeResponse(BaseModel):
+    lifecycle_state: str
+    liveness: str
+    readiness: str
+    reason: str
+
+
+class TaskActivityResponse(BaseModel):
+    window_limit: int
+    observed: int
+    by_status: dict[str, int]
+    verified: int
+    reused: int
+
+
+class RecentTaskResponse(BaseModel):
+    id: str
+    status: str
+    route: str
+    tier: str
+    verified: bool
+    reused: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class OperationsResponse(BaseModel):
+    schema_version: str
+    observed_at: datetime
+    runtime: RuntimeResponse
+    activity: TaskActivityResponse
+    recent_tasks: list[RecentTaskResponse]
+
+    @classmethod
+    def from_snapshot(cls, snapshot: OperationsSnapshot) -> OperationsResponse:
+        return cls(
+            schema_version=snapshot.schema_version,
+            observed_at=snapshot.observed_at,
+            runtime=RuntimeResponse(
+                lifecycle_state=snapshot.runtime.lifecycle_state,
+                liveness=snapshot.runtime.liveness,
+                readiness=snapshot.runtime.readiness,
+                reason=snapshot.runtime.reason,
+            ),
+            activity=TaskActivityResponse(
+                window_limit=snapshot.activity.window_limit,
+                observed=snapshot.activity.observed,
+                by_status=dict(snapshot.activity.by_status),
+                verified=snapshot.activity.verified,
+                reused=snapshot.activity.reused,
+            ),
+            recent_tasks=[
+                RecentTaskResponse.model_validate(task, from_attributes=True)
+                for task in snapshot.recent_tasks
+            ],
+        )
+
+
+def create_rest_router(
+    controller: TaskController,
+    operations: OperationsController,
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
     @router.post("/hello")
     def hello() -> dict[str, object]:
         outcome = controller.execute("hello")
         return {"output": outcome.output, "verified": outcome.verified}
+
+    @router.get("/operations", response_model=OperationsResponse, tags=["operations"])
+    def get_operations() -> OperationsResponse:
+        return OperationsResponse.from_snapshot(operations.snapshot())
 
     @router.get("/tasks", response_model=TaskListResponse)
     def list_tasks() -> TaskListResponse:

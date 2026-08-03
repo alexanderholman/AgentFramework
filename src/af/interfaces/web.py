@@ -16,6 +16,7 @@ from fastapi import APIRouter, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from af.application.operations import OperationsController
 from af.application.tasks import TaskController
 from af.framework.types import PROMPT_MAX_LENGTH
 
@@ -179,6 +180,7 @@ def _csrf_forbidden() -> HTMLResponse:
 
 def create_web_router(
     controller: TaskController,
+    operations: OperationsController,
     *,
     web_profile: WebProfile,
     experimental_state: Literal["disabled", "fallback", "enabled"],
@@ -263,6 +265,17 @@ def create_web_router(
         )
         _clear_flash(request, response, signing_key=signing_key)
         return response
+
+    @router.get("/operations", response_class=HTMLResponse)
+    def show_operations(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="operations.html",
+            context={
+                "snapshot": operations.snapshot(),
+                **profile_context(),
+            },
+        )
 
     @router.post("/tasks")
     def create_task(

@@ -36,6 +36,8 @@ from af.interfaces.cli_interactions import CliInteraction, NonInteractiveCliInte
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
+    operations_to_dict,
+    operations_to_text,
     procedure_descriptor_to_dict,
     search_index_result_to_dict,
     search_result_to_dict,
@@ -441,6 +443,30 @@ def create_cli(
             registry = current().container.resolve(ProcedureRegistry)
             catalogue = sorted(registry.catalogue(), key=lambda descriptor: descriptor.procedure_id)
             typer.echo(json.dumps([procedure_descriptor_to_dict(item) for item in catalogue]))
+        except (AFError, TypeError, ValueError) as error:
+            fail(error)
+
+    @cli.command()
+    def operations(
+        as_json: Annotated[
+            bool,
+            typer.Option("--json", help="Emit the operations snapshot as stable JSON"),
+        ] = False,
+    ) -> None:
+        """Show the bounded, read-only AF operations dashboard."""
+        try:
+            snapshot = current().operations.snapshot()
+            if as_json:
+                typer.echo(
+                    json.dumps(
+                        operations_to_dict(snapshot),
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                )
+            else:
+                typer.echo(operations_to_text(snapshot))
         except (AFError, TypeError, ValueError) as error:
             fail(error)
 
