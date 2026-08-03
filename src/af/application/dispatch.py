@@ -248,7 +248,7 @@ class ApplicationEndpoints:
     tasks: TaskController
     agent_routes: AgentRoutingController
     ideons: IdeonController
-    operations: OperationsController | None
+    operations: OperationsController | None = None
 
 
 def _register[M: Message](

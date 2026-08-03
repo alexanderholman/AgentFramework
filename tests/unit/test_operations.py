@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from af.application.operations import OperationsService, RepositoryOperationsTaskReader
 from af.domain.tasks import Task
 from af.framework.application import ApplicationState
+from af.interfaces.presenters import operations_to_text
 
 
 class _RecentTaskRepository:
@@ -124,3 +125,6 @@ def test_legacy_task_repository_reports_activity_as_unavailable_instead_of_faili
     assert snapshot.activity.available is False
     assert snapshot.activity.observed == 0
     assert snapshot.recent_tasks == ()
+    assert operations_to_text(snapshot).endswith(
+        "Verified: unavailable | Reused: unavailable\nRecent tasks: unavailable"
+    )

@@ -194,6 +194,7 @@ def create_web_router(
         return {
             "web_profile": web_profile,
             "experimental_state": experimental_state,
+            "operations_available": "true" if operations is not None else "false",
         }
 
     def render_index(

@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from af.application.agent_routing import AgentRoutingController
 from af.application.bus import ApplicationResult, DispatchRequest, MessageKind
 from af.application.dispatch import (
+    ApplicationEndpoints,
     CountCharacters,
     CreateTask,
     DeleteTask,
@@ -83,6 +84,7 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
     assert endpoints.ideons.resolve("ref") == "resolved"
     assert endpoints.ideons.realise("ref") == "realised"
     assert endpoints.ideons.stream("request") == (b"streamed", "streamed")
+    assert endpoints.operations is not None
     assert endpoints.operations.snapshot() == "operations"
 
     assert endpoints.bus.registry.message_types == (
@@ -141,6 +143,13 @@ def test_existing_endpoint_factory_signature_remains_valid_without_operations() 
     endpoints = build_application_endpoints(tasks, routes, ideons)
 
     assert endpoints.operations is None
+    legacy = ApplicationEndpoints(
+        endpoints.bus,
+        endpoints.tasks,
+        endpoints.agent_routes,
+        endpoints.ideons,
+    )
+    assert legacy.operations is None
 
 
 def test_sync_controller_dispatch_is_safe_inside_an_active_event_loop() -> None:

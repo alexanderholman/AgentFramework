@@ -30,6 +30,7 @@
 
   <section aria-labelledby="recent-title">
     <h2 id="recent-title">Recent tasks</h2>
+    {% if snapshot.activity.available %}
     {% if snapshot.recent_tasks %}
     <table aria-labelledby="recent-title">
       <thead><tr><th scope="col">ID</th><th scope="col">Status</th><th scope="col">Route</th><th scope="col">Verified</th><th scope="col">Reused</th></tr></thead>
@@ -40,6 +41,7 @@
       </tbody>
     </table>
     {% else %}<p>No recent tasks.</p>{% endif %}
+    {% else %}<p>Recent task activity is unavailable.</p>{% endif %}
   </section>
 </main>
 {% endblock %}

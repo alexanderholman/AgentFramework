@@ -68,16 +68,20 @@ def operations_to_dict(snapshot: OperationsSnapshot) -> dict[str, object]:
 
 
 def operations_to_text(snapshot: OperationsSnapshot) -> str:
-    recent = (
-        "none"
-        if not snapshot.recent_tasks
-        else ", ".join(f"{task.id} ({task.status})" for task in snapshot.recent_tasks)
-    )
-    activity = (
-        (f"Activity window: {snapshot.activity.observed}/{snapshot.activity.window_limit} tasks")
-        if snapshot.activity.available
-        else "Activity window: unavailable"
-    )
+    if snapshot.activity.available:
+        activity = (
+            f"Activity window: {snapshot.activity.observed}/{snapshot.activity.window_limit} tasks"
+        )
+        counts = f"Verified: {snapshot.activity.verified} | Reused: {snapshot.activity.reused}"
+        recent = (
+            "none"
+            if not snapshot.recent_tasks
+            else ", ".join(f"{task.id} ({task.status})" for task in snapshot.recent_tasks)
+        )
+    else:
+        activity = "Activity window: unavailable"
+        counts = "Verified: unavailable | Reused: unavailable"
+        recent = "unavailable"
     return "\n".join(
         (
             "AF Operations",
@@ -85,7 +89,7 @@ def operations_to_text(snapshot: OperationsSnapshot) -> str:
             f"Liveness: {snapshot.runtime.liveness}",
             f"Readiness: {snapshot.runtime.readiness} ({snapshot.runtime.reason})",
             activity,
-            f"Verified: {snapshot.activity.verified} | Reused: {snapshot.activity.reused}",
+            counts,
             f"Recent tasks: {recent}",
         )
     )
