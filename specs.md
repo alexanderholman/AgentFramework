@@ -1946,3 +1946,43 @@ transaction guarantees.
 ### Related Specs
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 - Issue #20
+
+---
+
+## [SPEC-038] Shared Bounded Operations Dashboard Projection
+**Date**: 2026-08-03
+**Status**: Implemented
+**Priority**: SHOULD
+
+### Description
+Provide one read-only AgentFramework operations projection through the application bus and expose
+it consistently through server-rendered HTML, versioned REST, and terminal presentations without
+moving aggregation, persistence, or health semantics into transport adapters.
+
+### Requirements
+- MUST read a fixed maximum of 25 recent Tasks and label activity as a bounded window rather than
+  an all-time total.
+- MUST exclude prompts, outputs, trace identifiers, configuration values, credentials, and raw
+  telemetry payloads from every operations representation.
+- MUST report unobserved component readiness as `unknown`; absence of a recorded failure MUST NOT
+  imply readiness.
+- MUST expose the same versioned projection through HTML, REST, plain terminal output, and stable
+  terminal JSON.
+- MUST remain read-only and MUST NOT execute routes, create Tasks or traces, initialize lazy search
+  connections, or acquire external resources.
+- MUST describe the unauthenticated HTTP view as loopback/development-only until AF has a verified
+  authentication and authorization boundary.
+
+### Tests
+- **TEST-038-1**: The application service requests only the fixed window and emits deterministic,
+  immutable, redacted status and recent-task values.
+- **TEST-038-2**: REST, HTML, and terminal JSON expose the same projection without sensitive Task
+  fields or read-side effects.
+- **TEST-038-3**: OpenAPI names the explicit operations response model and the HTML view uses
+  accessible headings and table semantics.
+- **TEST-038-4**: The SQL repository returns the bounded recent Task window in deterministic
+  descending creation order.
+
+### Related Specs
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- Issues #27, #29, #33, and #178
