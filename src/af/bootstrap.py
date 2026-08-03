@@ -7,11 +7,22 @@ from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from sqlalchemy.engine import make_url
 
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
 from af.application.bus import ApplicationBus
+from af.application.database_setup import (
+    ConnectionUrlWriter,
+    ConnectionUrlWriterToken,
+    DatabaseConnectionVerifier,
+    DatabaseConnectionVerifierToken,
+    DatabaseSetupController,
+    DatabaseSetupService,
+    LocalDatabaseProvisioner,
+    LocalDatabaseProvisionerToken,
+)
 from af.application.dispatch import build_application_endpoints
 from af.application.ideons import IdeonController, IdeonService
 from af.application.search import SearchController, SearchService
@@ -50,6 +61,11 @@ from af.framework.types import (
     parse_probability,
 )
 from af.infrastructure.database import Database
+from af.infrastructure.db_setup import (
+    AtomicEnvFileWriter,
+    LocalMariaDBProvisioner,
+    MariaDBConnectionVerifier,
+)
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
@@ -321,6 +337,38 @@ class _ApplicationProvider(ServiceProvider):
         container.bind(
             AgentRoutingController,
             lambda current: AgentRoutingController(current.resolve(AgentRoutingService)),
+            scope=Scope.TRANSIENT,
+        )
+        container.bind(
+            LocalDatabaseProvisionerToken,
+            lambda _: LocalMariaDBProvisioner(),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            DatabaseConnectionVerifierToken,
+            lambda _: MariaDBConnectionVerifier(),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            ConnectionUrlWriterToken,
+            lambda _: AtomicEnvFileWriter(),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            DatabaseSetupService,
+            lambda current: DatabaseSetupService(
+                cast(LocalDatabaseProvisioner, current.resolve(LocalDatabaseProvisionerToken)),
+                cast(
+                    DatabaseConnectionVerifier,
+                    current.resolve(DatabaseConnectionVerifierToken),
+                ),
+                cast(ConnectionUrlWriter, current.resolve(ConnectionUrlWriterToken)),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            DatabaseSetupController,
+            lambda current: DatabaseSetupController(current.resolve(DatabaseSetupService)),
             scope=Scope.TRANSIENT,
         )
 
