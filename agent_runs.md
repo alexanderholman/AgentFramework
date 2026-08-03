@@ -1987,3 +1987,41 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - DEC-051
 - Issues #27, #29, #33, #178
 - Script: `[SCRIPT:af-dev]`
+
+---
+
+## Run #037 - Operations Dashboard Review Corrections
+**Date**: 2026-08-03 18:35:00 UTC
+**Agent**: Zordon
+**Status**: Completed
+
+### Inputs
+- Independent review of the issue #178 implementation
+- Run #036
+- Commits `80d105d` and `b29157f`
+
+### Outputs
+- Preserved compatibility for injected Task repositories and public endpoint/router factories
+- Added explicit unavailable activity semantics instead of false zero/healthy implications
+- Defensively clamped over-returning readers and replaced full in-memory sorting with bounded top-k
+- Added OpenAPI bounds and literals, accessible table naming, conditional navigation, and regressions
+
+### Verified Results
+- Focused operations/application/interface/SQL suite: 16 passed
+- Ruff formatting/lint and strict mypy: passed
+- Full coverage selection: 2137 passed, 52 optional real-service tests skipped, 7
+  environment-sensitive isolated-OpenCode tests selected separately, 90.06% coverage
+- Environment-sensitive development/governance/release tests with the registered `uv` and `python`
+  executables: 93 passed; neutral-user isolated-OpenCode tests: 7 passed
+- Independent final review: approved with no remaining actionable correctness or security findings
+- Node route gate: 9 passed; governance validation: 36 passed
+- Final package gate: passed; sdist SHA-256
+  `ead94be81d7777a06ea6e1bcdc477909e3449093496d87654e1b9c9a6249f718`; wheel SHA-256
+  `25e18cb49530f649f0cc87a67f46be2f4d27aaf520ddde480b7365b2a7d6ae77`
+
+### Related References
+- Run #036
+- SPEC-038
+- DEC-051
+- Issue #178
+- Script: `[SCRIPT:af-dev]`
