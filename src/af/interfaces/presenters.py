@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
+from af.application.operations import OperationsSnapshot
 from af.application.search import SearchIndexResult, SearchIndexSourceResult, SearchResult
 from af.domain.agent_routing import AgentRouteResult
 from af.domain.tasks import Task
 from af.framework.types import ExecutionOutcome, ProcedureDescriptor
 from af.search.contracts import SearchHit
+
+
+def _isoformat(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def task_to_dict(task: Task) -> dict[str, object]:
@@ -24,6 +31,68 @@ def task_to_dict(task: Task) -> dict[str, object]:
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
     }
+
+
+def operations_to_dict(snapshot: OperationsSnapshot) -> dict[str, object]:
+    return {
+        "schema_version": snapshot.schema_version,
+        "observed_at": _isoformat(snapshot.observed_at),
+        "runtime": {
+            "lifecycle_state": snapshot.runtime.lifecycle_state,
+            "liveness": snapshot.runtime.liveness,
+            "readiness": snapshot.runtime.readiness,
+            "reason": snapshot.runtime.reason,
+        },
+        "activity": {
+            "available": snapshot.activity.available,
+            "window_limit": snapshot.activity.window_limit,
+            "observed": snapshot.activity.observed,
+            "by_status": dict(snapshot.activity.by_status),
+            "verified": snapshot.activity.verified,
+            "reused": snapshot.activity.reused,
+        },
+        "recent_tasks": [
+            {
+                "id": task.id,
+                "status": task.status,
+                "route": task.route,
+                "tier": task.tier,
+                "verified": task.verified,
+                "reused": task.reused,
+                "created_at": _isoformat(task.created_at),
+                "updated_at": _isoformat(task.updated_at),
+            }
+            for task in snapshot.recent_tasks
+        ],
+    }
+
+
+def operations_to_text(snapshot: OperationsSnapshot) -> str:
+    if snapshot.activity.available:
+        activity = (
+            f"Activity window: {snapshot.activity.observed}/{snapshot.activity.window_limit} tasks"
+        )
+        counts = f"Verified: {snapshot.activity.verified} | Reused: {snapshot.activity.reused}"
+        recent = (
+            "none"
+            if not snapshot.recent_tasks
+            else ", ".join(f"{task.id} ({task.status})" for task in snapshot.recent_tasks)
+        )
+    else:
+        activity = "Activity window: unavailable"
+        counts = "Verified: unavailable | Reused: unavailable"
+        recent = "unavailable"
+    return "\n".join(
+        (
+            "AF Operations",
+            f"Lifecycle: {snapshot.runtime.lifecycle_state}",
+            f"Liveness: {snapshot.runtime.liveness}",
+            f"Readiness: {snapshot.runtime.readiness} ({snapshot.runtime.reason})",
+            activity,
+            counts,
+            f"Recent tasks: {recent}",
+        )
+    )
 
 
 def delete_to_dict(task_id: str) -> dict[str, object]:

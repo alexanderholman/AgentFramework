@@ -2934,3 +2934,51 @@ fail closed before work is accepted.
 - Updated: `src/af/queue/contracts.py`, `src/af/queue/manager.py`, `src/af/queue/sync.py`,
   `src/af/queue/database.py`
 - Tested by: `tests/unit/test_queue_manager.py`, `tests/unit/test_queue_drivers.py`
+
+---
+
+## [DEC-051] Keep Operations Meaning in One Redacted Application Projection
+**Date**: 2026-08-03
+**Status**: Accepted
+**Decision Maker**: Zordon implementation for issue #178
+
+### Context
+Operators need visibility into an AF-backed server through graphical, API, and terminal surfaces.
+AF already has lifecycle and Task contracts, but no queryable operations projection, authenticated
+operator product, or complete stateful TUI kernel. Computing status independently in FastAPI,
+Jinja, and Typer would duplicate semantics and encourage adapters to read repositories directly.
+
+### Decision
+1. Build one immutable, bounded `OperationsSnapshot` in the application layer and route reads
+   through the shared application bus.
+2. Add a narrow recent-Task read operation implemented by in-memory and SQL repositories; never
+   load unbounded Task or trace history for a dashboard request.
+3. Expose only operational Task metadata and omit content, trace identifiers, and configuration.
+4. Report lifecycle liveness separately from component readiness and leave readiness `unknown`
+   until fresh component evidence is genuinely available.
+5. Use server-rendered HTML, versioned REST, and stable plain/JSON terminal adapters as the first
+   slice. Defer a refreshing full-screen TUI until terminal restoration, resize, cancellation,
+   focus, and accessibility contracts exist.
+6. Keep HTTP loopback/development-only until the separate authentication dependency is complete.
+
+### Consequences
+**Positive:**
+- Every operator interface presents the same bounded and testable status meaning.
+- Sensitive Task content is absent by construction rather than filtered ad hoc in templates.
+- Future health contributors and TUI renderers can extend one stable query boundary.
+
+**Negative:**
+- Readiness remains explicitly unknown in the first slice.
+- The activity window is useful for recent visibility but is not a historical metrics product.
+- This slice does not satisfy the complete operator-product or TUI outcomes in issues #29 and #33.
+
+### Related Decisions
+- DEC-029 (Use Providers, Managers, Named Drivers, and Honest Delivery Semantics)
+- SPEC-038
+- Issue #178
+
+### Output References
+- Added: `src/af/application/operations.py`, `docs/operations-dashboard.md`
+- Updated: bootstrap, application dispatch, HTML, REST, CLI, and Task repositories
+- Tested by: `tests/unit/test_operations.py`, `tests/feature/test_operations_dashboard.py`,
+  `tests/integration/test_sqlalchemy_repository.py`

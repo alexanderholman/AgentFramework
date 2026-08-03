@@ -19,6 +19,7 @@ from af.application.bus import (
     Query,
 )
 from af.application.ideons import IdeonController, InterpretRequest
+from af.application.operations import OperationsController, OperationsSnapshot
 from af.application.tasks import TaskController
 from af.domain.agent_routing import AgentRouteResult
 from af.domain.ideons import IdeonGraph, IdeonRef
@@ -37,6 +38,7 @@ __all__ = (
     "CreateTask",
     "DeleteTask",
     "ExecuteTask",
+    "GetOperationsSnapshot",
     "GetTask",
     "InterpretIdeon",
     "ListTasks",
@@ -70,6 +72,11 @@ class GetTask(Query):
 class ListTasks(Query):
     limit: int | None = None
     offset: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class GetOperationsSnapshot(Query):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +211,14 @@ class _AgentRoutingControllerFacade(AgentRoutingController):
         return cast(AgentRouteResult, self._dispatcher.dispatch(RouteAgent(prompt)))
 
 
+class _OperationsControllerFacade(OperationsController):
+    def __init__(self, dispatcher: _SyncDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    def snapshot(self) -> OperationsSnapshot:
+        return cast(OperationsSnapshot, self._dispatcher.dispatch(GetOperationsSnapshot()))
+
+
 class _IdeonControllerFacade(IdeonController):
     def __init__(self, dispatcher: _SyncDispatcher) -> None:
         self._dispatcher = dispatcher
@@ -233,6 +248,7 @@ class ApplicationEndpoints:
     tasks: TaskController
     agent_routes: AgentRoutingController
     ideons: IdeonController
+    operations: OperationsController | None = None
 
 
 def _register[M: Message](
@@ -253,6 +269,7 @@ def build_application_endpoints(
     tasks: TaskController,
     agent_routes: AgentRoutingController,
     ideons: IdeonController,
+    operations: OperationsController | None = None,
     *,
     middleware: Iterable[Middleware] = (),
     context_factory: ContextFactory = _default_context,
@@ -283,6 +300,8 @@ def build_application_endpoints(
     _register(registry, ResolveIdeon, lambda message: ideons.resolve(message.ref))
     _register(registry, RealiseIdeon, lambda message: ideons.realise(message.ref))
     _register(registry, StreamIdeon, lambda message: ideons.stream(message.request))
+    if operations is not None:
+        _register(registry, GetOperationsSnapshot, lambda message: operations.snapshot())
 
     bus = ApplicationBus(registry, middleware=middleware)
     dispatcher = _SyncDispatcher(bus, context_factory)
@@ -291,4 +310,5 @@ def build_application_endpoints(
         tasks=_TaskControllerFacade(dispatcher),
         agent_routes=_AgentRoutingControllerFacade(dispatcher),
         ideons=_IdeonControllerFacade(dispatcher),
+        operations=_OperationsControllerFacade(dispatcher) if operations is not None else None,
     )

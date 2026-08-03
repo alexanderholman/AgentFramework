@@ -16,7 +16,7 @@
     </style>
   </head>
   <body data-af-web-profile="{{ web_profile|default('basic') }}" data-af-experimental="{{ experimental_state|default('disabled') }}">
-    <nav><a href="/">AF</a><a href="/tasks">Tasks</a><a href="/docs">REST docs</a><a href="/graphql">GraphQL</a></nav>
+    <nav><a href="/">AF</a><a href="/tasks">Tasks</a>{% if operations_available|default('true') == 'true' %}<a href="/operations">Operations</a>{% endif %}<a href="/docs">REST docs</a><a href="/graphql">GraphQL</a></nav>
     {% block content %}{% endblock %}
   </body>
 </html>

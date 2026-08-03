@@ -25,6 +25,11 @@ from af.application.database_setup import (
 )
 from af.application.dispatch import build_application_endpoints
 from af.application.ideons import IdeonController, IdeonService
+from af.application.operations import (
+    OperationsController,
+    OperationsService,
+    RepositoryOperationsTaskReader,
+)
 from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
@@ -386,6 +391,7 @@ class AFApplication:
     verifier: DeterministicVerifier
     agent_routes: AgentRoutingController
     ideons: IdeonController
+    operations: OperationsController
     lifecycle: Application
 
     def shutdown(self) -> None:
@@ -546,10 +552,17 @@ def _shutdown_lifecycle_at_sync_boundary(lifecycle: Application) -> None:
 
 def _assemble_application(build: _ApplicationBuild) -> AFApplication:
     container = build.lifecycle.container
+    operations = OperationsController(
+        OperationsService(
+            RepositoryOperationsTaskReader(container.resolve_token(TaskRepository)),
+            lifecycle_state=lambda: build.lifecycle.state,
+        )
+    )
     endpoints = build_application_endpoints(
         container.resolve(TaskController),
         container.resolve(AgentRoutingController),
         container.resolve(IdeonController),
+        operations,
     )
     return AFApplication(
         settings=build.settings,
@@ -563,6 +576,7 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         verifier=container.resolve(DeterministicVerifier),
         agent_routes=endpoints.agent_routes,
         ideons=endpoints.ideons,
+        operations=cast(OperationsController, endpoints.operations),
         lifecycle=build.lifecycle,
     )
 

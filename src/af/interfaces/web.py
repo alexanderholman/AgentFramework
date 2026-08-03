@@ -16,6 +16,7 @@ from fastapi import APIRouter, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from af.application.operations import OperationsController
 from af.application.tasks import TaskController
 from af.framework.types import PROMPT_MAX_LENGTH
 
@@ -183,6 +184,7 @@ def create_web_router(
     web_profile: WebProfile,
     experimental_state: Literal["disabled", "fallback", "enabled"],
     session_cookie_signing_key: str,
+    operations: OperationsController | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["web"])
     templates = Jinja2Templates(directory=TEMPLATE_DIRECTORY)
@@ -192,6 +194,7 @@ def create_web_router(
         return {
             "web_profile": web_profile,
             "experimental_state": experimental_state,
+            "operations_available": "true" if operations is not None else "false",
         }
 
     def render_index(
@@ -263,6 +266,19 @@ def create_web_router(
         )
         _clear_flash(request, response, signing_key=signing_key)
         return response
+
+    if operations is not None:
+
+        @router.get("/operations", response_class=HTMLResponse)
+        def show_operations(request: Request) -> HTMLResponse:
+            return templates.TemplateResponse(
+                request=request,
+                name="operations.html",
+                context={
+                    "snapshot": operations.snapshot(),
+                    **profile_context(),
+                },
+            )
 
     @router.post("/tasks")
     def create_task(
