@@ -69,12 +69,18 @@ jobs:
           set -o pipefail
           {
             uv run ruff format --check \
+              src/af/application/database_setup.py \
               src/af/framework/migrations.py \
               src/af/framework/relational.py \
+              src/af/infrastructure/db_setup.py \
+              src/af/interfaces/console.py \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
               src/af/messaging/relay.py \
+              tests/feature/test_cli_database_setup.py \
+              tests/unit/test_database_setup.py \
+              tests/unit/test_local_mariadb_setup.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
               tests/unit/test_outbox_relay.py \
@@ -83,12 +89,18 @@ jobs:
               tests/integration/test_transactional_outbox_relational.py \
               tests/integration/test_outbox_relay_relational.py
             uv run ruff check \
+              src/af/application/database_setup.py \
               src/af/framework/migrations.py \
               src/af/framework/relational.py \
+              src/af/infrastructure/db_setup.py \
+              src/af/interfaces/console.py \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
               src/af/messaging/relay.py \
+              tests/feature/test_cli_database_setup.py \
+              tests/unit/test_database_setup.py \
+              tests/unit/test_local_mariadb_setup.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
               tests/unit/test_outbox_relay.py \
@@ -97,13 +109,19 @@ jobs:
               tests/integration/test_transactional_outbox_relational.py \
               tests/integration/test_outbox_relay_relational.py
             uv run mypy \
+              src/af/application/database_setup.py \
               src/af/framework/migrations.py \
               src/af/framework/relational.py \
+              src/af/infrastructure/db_setup.py \
+              src/af/interfaces/console.py \
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
               src/af/messaging/relay.py
             uv run pytest -q \
+              tests/feature/test_cli_database_setup.py \
+              tests/unit/test_database_setup.py \
+              tests/unit/test_local_mariadb_setup.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
               tests/unit/test_outbox_relay.py
@@ -115,8 +133,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          uv run --with "pymysql==1.1.2" \
-            pytest -q \
+          uv run pytest -q \
               tests/integration/test_mysql_relational.py \
               tests/integration/test_migrations_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
@@ -142,12 +159,18 @@ jobs:
             mysql-quality.log
             mysql-integration.log
             canonical-gate.log
+            src/af/application/database_setup.py
             src/af/framework/migrations.py
             src/af/framework/relational.py
+            src/af/infrastructure/db_setup.py
+            src/af/interfaces/console.py
             src/af/infrastructure/mysql.py
             src/af/infrastructure/mysql_manager.py
             src/af/messaging/outbox.py
             src/af/messaging/relay.py
+            tests/feature/test_cli_database_setup.py
+            tests/unit/test_database_setup.py
+            tests/unit/test_local_mariadb_setup.py
             tests/unit/test_mysql_driver.py
             tests/unit/test_mysql_manager.py
             tests/unit/test_outbox_relay.py

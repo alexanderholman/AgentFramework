@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
+from typing import Annotated
 
 import typer
 
+from af.application.database_setup import (
+    DatabaseSetupController,
+    DatabaseSetupMode,
+    DatabaseSetupRequest,
+)
 from af.application.self_design_execution import SelfDesignExecutionController
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication
@@ -24,6 +31,7 @@ def create_cli(
     *,
     application_factory: Callable[[], AFApplication] | None = None,
     interaction_factory: Callable[[], CliInteraction] | None = None,
+    database_setup: DatabaseSetupController | None = None,
     version_control: VersionControlController | None = None,
     self_alignment_operation: SelfAlignmentOperation | None = None,
     self_analysis_operation: SelfAnalysisOperation | None = None,
@@ -126,6 +134,89 @@ def create_cli(
         except (AFError, TypeError, ValueError) as error:
             typer.echo(str(error), err=True)
             raise typer.Exit(code=2) from None
+
+    db_cli = typer.Typer(
+        name="db",
+        no_args_is_help=True,
+        help="Safe local database setup for AF integration testing.",
+    )
+
+    @db_cli.command("setup")
+    def setup_database(
+        context: typer.Context,
+        mode: Annotated[DatabaseSetupMode, typer.Option("--mode")] = DatabaseSetupMode.LOCAL_DEBIAN,
+        user: Annotated[
+            str,
+            typer.Option("--user", help="Database user to create or update."),
+        ] = "af_test",
+        password: Annotated[
+            str,
+            typer.Option("--password", help="Password for the configured database user."),
+        ] = "af_test_pass",
+        database: Annotated[
+            str,
+            typer.Option("--database", help="Database name to create or reuse."),
+        ] = "af_test",
+        host: Annotated[
+            str,
+            typer.Option(
+                "--host",
+                help="Connection host. local-debian mode only supports localhost or 127.0.0.1.",
+            ),
+        ] = "127.0.0.1",
+        port: Annotated[int, typer.Option("--port", help="Connection port.")] = 3306,
+        project_root: Annotated[
+            Path | None,
+            typer.Option("--project-root", help="Project root whose .env file should be updated."),
+        ] = None,
+        execute: Annotated[
+            bool,
+            typer.Option(
+                "--execute",
+                help="Apply provisioning, verification, and env updates after previewing the plan.",
+            ),
+        ] = False,
+    ) -> None:
+        """Preview or apply safe local MariaDB setup through the application boundary."""
+        try:
+            controller = database_setup
+            if controller is None:
+                try:
+                    controller = current_application_from_context(context).container.resolve(
+                        DatabaseSetupController
+                    )
+                except ServiceNotBound:
+                    controller = None
+            if controller is None:
+                raise PlatformError(
+                    PlatformReason.CONFIGURATION_INVALID,
+                    stage="cli.db-setup.controller",
+                )
+            result = controller.setup(
+                DatabaseSetupRequest(
+                    mode=mode,
+                    user=user,
+                    password=password,
+                    database=database,
+                    host=host,
+                    port=port,
+                    project_root=Path.cwd() if project_root is None else project_root,
+                    execute=execute,
+                )
+            )
+            typer.echo(
+                json.dumps(
+                    result.to_dict(),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+        except (AFError, TypeError, ValueError) as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(code=2) from None
+
+    cli.add_typer(db_cli, name="db")
 
     return cli
 
