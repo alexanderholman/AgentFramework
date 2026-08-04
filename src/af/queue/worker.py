@@ -114,6 +114,16 @@ class _SettledJobFailure(Exception):
         self.error = error
 
 
+def _validate_handler(consumer: object) -> None:
+    if not callable(consumer):
+        raise TypeError("sync queue worker handler must be callable")
+    if inspect.iscoroutinefunction(consumer) or inspect.isasyncgenfunction(consumer):
+        raise TypeError("sync queue worker returned an asynchronous result")
+    call = inspect.getattr_static(consumer, "__call__", None)
+    if inspect.iscoroutinefunction(call) or inspect.isasyncgenfunction(call):
+        raise TypeError("sync queue worker returned an asynchronous result")
+
+
 def _validate_sync_result(result: object) -> None:
     if inspect.iscoroutine(result):
         result.close()
@@ -278,6 +288,7 @@ class WorkerKernel:
         A settled handler failure is re-raised to direct callers. Infrastructure and
         settlement failures are always propagated.
         """
+        _validate_handler(consumer)
         try:
             return self._run_once(consumer, lane=lane)
         except _SettledJobFailure as failure:
@@ -351,6 +362,7 @@ class WorkerKernel:
         """Poll serially until shutdown or drain begins."""
         if poll_interval <= timedelta(0):
             raise ValueError("worker poll interval must be positive")
+        _validate_handler(consumer)
         while True:
             with self._condition:
                 if self._closed or self._draining:

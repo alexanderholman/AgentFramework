@@ -216,7 +216,7 @@ def test_worker_kernel_tracks_failures() -> None:
     assert stats.jobs_failed == 1
 
 
-def test_worker_kernel_retries_instead_of_acknowledging_async_handler() -> None:
+def test_worker_kernel_rejects_async_handler_before_reserving() -> None:
     driver = _make_driver()
     driver.dispatch(_job("job-async", max_attempts=2))
     kernel = WorkerKernel(driver, clock=lambda: _NOW)
@@ -228,7 +228,20 @@ def test_worker_kernel_retries_instead_of_acknowledging_async_handler() -> None:
         kernel.run_once(consumer=async_consumer)  # type: ignore[arg-type]
 
     assert driver.acked == []
-    assert driver.retried == ["job-async"]
+    assert driver.retried == []
+    assert driver.queued_message_ids == ["job-async"]
+
+
+def test_worker_kernel_run_loop_rejects_invalid_handler_before_polling() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-invalid-handler"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    with pytest.raises(TypeError, match="callable"):
+        kernel.run_loop(None)  # type: ignore[arg-type]
+
+    assert driver.queued_message_ids == ["job-invalid-handler"]
+    assert driver.rejected == []
 
 
 def test_worker_kernel_tracks_runtime() -> None:
@@ -902,6 +915,10 @@ class _TestQueueDriver:
     @property
     def features(self) -> frozenset[QueueFeature]:
         return self._features
+
+    @property
+    def queued_message_ids(self) -> list[str]:
+        return [job.envelope.metadata.message_id for job in self._queue]
 
     def supports(self, feature: QueueFeature, /) -> bool:
         return feature in self._features
