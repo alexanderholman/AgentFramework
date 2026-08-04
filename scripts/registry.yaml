@@ -255,6 +255,30 @@ scripts:
       - "exit_code == 0"
     status: "active"
 
+  - id: "af-epic-worker"
+    intent:
+      - "epic-worker"
+      - "unattended-execution"
+      - "continuity"
+    capabilities:
+      - "epic-iteration"
+      - "memlog-checkpoint"
+      - "bounded-runtime"
+    description: "Run bounded unattended epic iterations with stable memlog continuity"
+    command: "scripts/af_epic_worker"
+    parameters:
+      - "AF_EPIC_REPO"
+      - "AF_EPIC_NUMBER"
+      - "AF_EPIC_MEMLOG_SESSION_ID"
+    outputs:
+      - "iteration-state"
+      - "iteration-logs"
+      - "memlog-checkpoints"
+    validation:
+      - "exit_code == 0"
+      - "memlog checkpoints include --session-id"
+    status: "active"
+
 policy:
   only_write_once: true
   require_lookup_before_repeatable_action: true

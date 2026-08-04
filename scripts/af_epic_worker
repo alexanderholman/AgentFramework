@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+REPO="${AF_EPIC_REPO:-alexanderholman/AgentFramework}"
+REPO_DIR="${AF_EPIC_REPO_DIR:-$HOME/AgentFramework}"
+EPIC_NUMBER="${AF_EPIC_NUMBER:-177}"
+STATE_DIR="${AF_EPIC_STATE_DIR:-$HOME/run/agentframework-epic-$EPIC_NUMBER}"
+LANE_DIR="${AF_EPIC_LANE_DIR:-/opt/pr/mmpr/opencode/pr-universe/workspaces/alpha/wip/epic-$EPIC_NUMBER}"
+DIRECTIVE_FILE="${AF_EPIC_DIRECTIVE_FILE:-$LANE_DIR/directive.md}"
+MODEL="${AF_EPIC_MODEL:-github-copilot/gpt-5.4}"
+AGENT="${AF_EPIC_AGENT:-alpha-coder}"
+ITERATION_TIMEOUT="${AF_EPIC_ITERATION_TIMEOUT:-21600}"
+POLL_SECONDS="${AF_EPIC_POLL_SECONDS:-60}"
+RUN_SECONDS="${AF_EPIC_RUN_SECONDS:-604800}"
+OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}"
+MEMLOG_BIN="${MEMLOG_BIN:-$HOME/.local/bin/memlog}"
+MEMLOG_ROOT="${AF_EPIC_MEMLOG_ROOT:-$HOME/opencode}"
+MEMLOG_AGENT_ID="${AF_EPIC_MEMLOG_AGENT_ID:-pr.command.alpha}"
+MEMLOG_AGENT_NAME="${AF_EPIC_MEMLOG_AGENT_NAME:-Alpha}"
+MEMLOG_SESSION_ID="${AF_EPIC_MEMLOG_SESSION_ID:-agentframework-epic-$EPIC_NUMBER-worker}"
+
+mkdir -p "$STATE_DIR/logs" "$LANE_DIR"
+exec 9>"$STATE_DIR/worker.lock"
+flock -n 9 || {
+  printf '%s epic #%s worker already running\n' "$(date -Is)" "$EPIC_NUMBER"
+  exit 0
+}
+
+log() {
+  printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$STATE_DIR/worker.log"
+}
+
+deadline_file="$STATE_DIR/deadline.epoch"
+if [[ ! -s "$deadline_file" ]]; then
+  deadline=$(( $(date +%s) + RUN_SECONDS ))
+  printf '%s\n' "$deadline" >"$deadline_file"
+  date --date="@$deadline" -Is >"$STATE_DIR/deadline.iso"
+else
+  read -r deadline <"$deadline_file"
+fi
+
+iteration_file="$STATE_DIR/iteration"
+[[ -s "$iteration_file" ]] || printf '0\n' >"$iteration_file"
+
+log "starting epic #$EPIC_NUMBER worker repo=$REPO model=$MODEL deadline=$(<"$STATE_DIR/deadline.iso")"
+
+while [[ ! -e "$STATE_DIR/STOP" ]]; do
+  now="$(date +%s)"
+  if (( now >= deadline )); then
+    log "seven-day deadline reached; exiting cleanly"
+    exit 0
+  fi
+
+  read -r iteration <"$iteration_file"
+  iteration=$((iteration + 1))
+  printf '%s\n' "$iteration" >"$iteration_file"
+
+  git -C "$REPO_DIR" fetch --prune origin master >>"$STATE_DIR/worker.log" 2>&1 || {
+    log "git fetch failed; retrying after ${POLL_SECONDS}s"
+    sleep "$POLL_SECONDS"
+    continue
+  }
+
+  master_sha="$(git -C "$REPO_DIR" rev-parse origin/master)"
+  open_prs="$(gh pr list -R "$REPO" --state open --limit 100 --json number,title,isDraft,url --jq 'length' 2>/dev/null || printf 'unknown')"
+  open_issues="$(gh issue list -R "$REPO" --state open --limit 500 --json number --jq 'length' 2>/dev/null || printf 'unknown')"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  run_log="$STATE_DIR/logs/iteration-${iteration}-${stamp}.log"
+
+  printf '{"iteration":%s,"startedAt":"%s","deadline":"%s","master":"%s","openPRs":"%s","openIssues":"%s","log":"%s"}\n' \
+    "$iteration" "$(date -Is)" "$(<"$STATE_DIR/deadline.iso")" "$master_sha" \
+    "$open_prs" "$open_issues" "$run_log" >"$STATE_DIR/current.json"
+
+  if [[ -x "$MEMLOG_BIN" ]]; then
+    "$MEMLOG_BIN" log --root "$MEMLOG_ROOT" \
+      --agent-id "$MEMLOG_AGENT_ID" --agent-name "$MEMLOG_AGENT_NAME" \
+      --session-id "$MEMLOG_SESSION_ID" \
+      --event-type checkpoint --title "AF epic #$EPIC_NUMBER iteration $iteration" \
+      --summary "Continuing the oldest dependency-ready work under epic #$EPIC_NUMBER." \
+      --message "master=$master_sha open_prs=$open_prs open_issues=$open_issues deadline=$(<"$STATE_DIR/deadline.iso") log=$run_log" \
+      >>"$STATE_DIR/worker.log" 2>&1 || true
+  fi
+
+  directive="$(<"$DIRECTIVE_FILE")"
+  prompt=$(cat <<EOF
+$directive
+
+## Live iteration context
+
+- Iteration: $iteration
+- Current origin/master: $master_sha
+- Open pull requests at dispatch: $open_prs
+- Open issues at dispatch: $open_issues
+- Worker deadline: $(<"$STATE_DIR/deadline.iso")
+- Continuity state: $STATE_DIR
+- Alpha WIP lane: $LANE_DIR
+EOF
+)
+
+  log "iteration $iteration starting master=$master_sha open_prs=$open_prs open_issues=$open_issues"
+  set +e
+  timeout --signal=TERM --kill-after=120 "$ITERATION_TIMEOUT" \
+    "$OPENCODE_BIN" run --dir "$REPO_DIR" --agent "$AGENT" --model "$MODEL" \
+      --variant high --auto --title "AF epic #$EPIC_NUMBER iteration $iteration" \
+      "$prompt" 2>&1 | tee "$run_log"
+  rc=${PIPESTATUS[0]}
+  set -e
+  log "iteration $iteration completed rc=$rc log=$run_log"
+
+  sleep "$POLL_SECONDS"
+done
+
+log "STOP file detected; exiting cleanly"
