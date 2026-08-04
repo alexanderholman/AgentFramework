@@ -216,6 +216,21 @@ def test_worker_kernel_tracks_failures() -> None:
     assert stats.jobs_failed == 1
 
 
+def test_worker_kernel_retries_instead_of_acknowledging_async_handler() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-async", max_attempts=2))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    async def async_consumer(job: QueueJob) -> None:
+        return None
+
+    with pytest.raises(TypeError, match="asynchronous result"):
+        kernel.run_once(consumer=async_consumer)  # type: ignore[arg-type]
+
+    assert driver.acked == []
+    assert driver.retried == ["job-async"]
+
+
 def test_worker_kernel_tracks_runtime() -> None:
     driver = _make_driver()
     kernel = WorkerKernel(driver, clock=lambda: _NOW)

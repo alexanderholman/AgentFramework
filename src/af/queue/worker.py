@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -11,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Condition, RLock, get_ident
 from types import TracebackType
-from typing import Protocol
+from typing import Protocol, cast
 
 from af.framework.errors import PlatformReason
 from af.queue.contracts import QueueJob, QueueOperationError, QueueReservation
@@ -105,6 +106,16 @@ class InMemoryIdempotencyStore:
 
 
 JobScopeFactory = Callable[[QueueJob], AbstractContextManager[None]]
+
+
+def _validate_sync_result(result: object) -> None:
+    if inspect.iscoroutine(result):
+        result.close()
+        raise TypeError("sync queue worker returned an asynchronous result")
+    if inspect.isawaitable(result) or inspect.isasyncgen(result):
+        raise TypeError("sync queue worker returned an asynchronous result")
+    if result is not None:
+        raise TypeError("sync queue worker handler must return None")
 
 
 class WorkerKernel:
@@ -274,7 +285,9 @@ class WorkerKernel:
                     duplicate = claim.already_processed
                     if not duplicate:
                         with self._scope_factory(reservation.job):
-                            consumer(reservation.job)
+                            sync_consumer = cast(Callable[[QueueJob], object], consumer)
+                            result = sync_consumer(reservation.job)
+                            _validate_sync_result(result)
                             claim.record()
             except Exception as error:
                 self._increment("jobs_failed")
