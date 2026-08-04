@@ -145,6 +145,7 @@ class WorkerKernel:
         consumer: JobHandler,
         *,
         lane: str | None = None,
+        _bypass_drain: bool = False,
     ) -> QueueReservation | None:
         """Poll the driver for work and execute up to max_concurrency jobs.
 
@@ -159,7 +160,7 @@ class WorkerKernel:
         self._check_idle_timeout()
         self._update_heartbeat()
 
-        if self._draining and len(self._active_jobs) == 0:
+        if not _bypass_drain and self._draining and len(self._active_jobs) == 0:
             return None
 
         if len(self._active_jobs) >= self._max_concurrency:
@@ -217,11 +218,10 @@ class WorkerKernel:
         import time
 
         while not self._closed:
-            if self._draining and len(self._active_jobs) == 0:
-                break
-
-            reservation = self.run_once(consumer, lane=lane)
+            reservation = self.run_once(consumer, lane=lane, _bypass_drain=True)
             if reservation is None:
+                if self._draining and len(self._active_jobs) == 0:
+                    break
                 time.sleep(poll_interval.total_seconds())
 
     # -- Internal helpers -----------------------------------------------------

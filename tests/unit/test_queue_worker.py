@@ -371,6 +371,131 @@ def test_worker_kernel_tracks_saturation() -> None:
     assert stats.saturation >= 0.0
 
 
+def test_worker_kernel_reports_stopped_state_after_close() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+    kernel.close()
+    assert kernel.state is WorkerState.STOPPED
+
+
+def test_worker_kernel_reports_draining_state() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+    kernel.start_draining()
+    assert kernel.state is WorkerState.DRAINING
+
+
+def test_worker_kernel_context_manager_closes_on_exit() -> None:
+    driver = _make_driver()
+    with WorkerKernel(driver, clock=lambda: _NOW) as kernel:
+        assert kernel.state is WorkerState.IDLE
+    assert kernel.state is WorkerState.STOPPED
+
+
+def test_worker_kernel_context_manager_closes_on_exception() -> None:
+    driver = _make_driver()
+    try:
+        with WorkerKernel(driver, clock=lambda: _NOW) as kernel:
+            assert kernel.state is WorkerState.IDLE
+            raise ValueError("simulated failure")
+    except ValueError:
+        pass
+    assert driver._closed is True
+
+
+def test_worker_kernel_run_loop_processes_until_empty() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    driver.dispatch(_job("loop-1"))
+    driver.dispatch(_job("loop-2"))
+
+    # Start draining so run_loop exits once queue is empty
+    kernel.start_draining()
+
+    processed: list[str] = []
+    kernel.run_loop(
+        consumer=lambda job: processed.append(job.envelope.metadata.message_id),
+        poll_interval=timedelta(milliseconds=1),
+    )
+    assert set(processed) == {"loop-1", "loop-2"}
+
+
+def test_worker_kernel_run_loop_stops_when_drained() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    kernel.start_draining()
+    # run_loop should exit immediately when draining with no active jobs
+    kernel.run_loop(
+        consumer=lambda job: None,
+        poll_interval=timedelta(milliseconds=1),
+    )
+    assert kernel.is_draining
+
+
+def test_worker_kernel_run_loop_stops_when_closed() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    # Close before run_loop; it should exit immediately
+    kernel.close()
+    kernel.run_loop(
+        consumer=lambda job: None,
+        poll_interval=timedelta(milliseconds=1),
+    )
+
+
+def test_worker_kernel_idle_timeout_increments_counter() -> None:
+    driver = _make_driver()
+    t = _NOW
+
+    def advancing_clock() -> datetime:
+        nonlocal t
+        t += timedelta(seconds=60)
+        return t
+
+    kernel = WorkerKernel(
+        driver,
+        max_idle_time=timedelta(seconds=30),
+        clock=advancing_clock,
+    )
+
+    # First call sets heartbeat, second call should detect idle timeout
+    driver.dispatch(_job("idle-1"))
+    kernel.run_once(consumer=lambda job: None)
+    driver.dispatch(_job("idle-2"))
+    kernel.run_once(consumer=lambda job: None)
+
+    stats = kernel.stats
+    assert stats.idle_timeouts >= 1
+
+
+def test_worker_kernel_lag_calculated_from_reservation() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    occurred = _NOW - timedelta(seconds=5)
+    job = _job(
+        "lag-explicit",
+        envelope=MessageEnvelope.create(
+            metadata=MessageMetadata(
+                message_id="lag-explicit",
+                message_type="jobs.example",
+                schema_version=1,
+                kind=EnvelopeKind.JOB,
+                occurred_at=occurred,
+            ),
+            payload={"message_id": "lag-explicit"},
+        ),
+    )
+    driver.dispatch(job)
+    kernel.run_once(consumer=lambda job: None)
+
+    stats = kernel.stats
+    assert stats.lag == timedelta(seconds=5)
+
+
 # -- Fake driver helper -------------------------------------------------------
 
 
