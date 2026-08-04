@@ -179,6 +179,19 @@ legacy AgentFactory governance suite. It also validates the production-MVP manif
 builds, inspects, temporarily installs, and smokes a wheel produced from the sdist. The
 framework tests are deliberately network-free.
 
+Long-running epic execution uses the registered `[SCRIPT:af-epic-worker]` harness. Each
+iteration records a checkpoint under a stable session ID so service restarts preserve one
+continuity stream:
+
+```bash
+AF_EPIC_NUMBER=177 \
+AF_EPIC_MEMLOG_SESSION_ID=agentframework-epic-177-worker \
+scripts/af_epic_worker
+```
+
+All repository, state, lane, model, timeout, polling, OpenCode, and memlog settings are
+environment-configurable. Deploy the tracked script rather than maintaining an unversioned copy.
+
 Inspect canonical policy declarations separately; a complete declaration report still does
 not verify evidence or authorize production deployment:
 
