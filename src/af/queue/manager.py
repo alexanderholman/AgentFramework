@@ -47,6 +47,8 @@ class QueueDriver(Protocol):
 
     def reject(self, reservation: QueueReservation, /) -> None: ...
 
+    def release(self, reservation: QueueReservation, /) -> None: ...
+
     def retry(
         self,
         reservation: QueueReservation,
@@ -170,6 +172,10 @@ class QueueManager(Manager[QueueDriver]):
 
     def reject(self, reservation: QueueReservation, *, name: str | None = None) -> None:
         self.connection(name, requires=(QueueFeature.RESERVATION,)).reject(reservation)
+
+    def release(self, reservation: QueueReservation, *, name: str | None = None) -> None:
+        """Release an interrupted reservation without consuming an attempt."""
+        self.connection(name, requires=(QueueFeature.RESERVATION,)).release(reservation)
 
     def retry(
         self,

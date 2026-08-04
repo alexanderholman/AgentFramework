@@ -134,6 +134,10 @@ class SyncQueueDriver:
         del reservation
         raise UnsupportedQueueFeature(QueueFeature.RESERVATION.value)
 
+    def release(self, reservation: QueueReservation, /) -> None:
+        del reservation
+        raise UnsupportedQueueFeature(QueueFeature.RESERVATION.value)
+
     def retry(
         self,
         reservation: QueueReservation,
