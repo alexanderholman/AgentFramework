@@ -31,6 +31,7 @@ from af.application.operations import (
     RepositoryOperationsTaskReader,
 )
 from af.application.search import SearchController, SearchService
+from af.application.resource_leases import ResourceLeaseService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
 from af.domain.agent_routing import DeterministicAgentRouter
@@ -41,6 +42,7 @@ from af.domain.classifiers import (
     UnknownClassifier,
 )
 from af.domain.procedures import CharacterCountProcedure, HelloProcedure
+from af.domain.resources import LeaseRepository
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier
 from af.framework.application import Application
@@ -73,6 +75,7 @@ from af.infrastructure.db_setup import (
 )
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
+from af.infrastructure.resource_leases import InMemoryLeaseRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
 from af.search.embedded_manager import embedded_search_registration
 from af.search.manager import SearchManager, bind_search_manager
@@ -86,10 +89,12 @@ class _PersistenceProvider(ServiceProvider):
         settings: Settings,
         task_repository: TaskRepository | None,
         trace_repository: TraceRepository | None,
+        lease_repository: LeaseRepository | None,
     ) -> None:
         self._settings = settings
         self._task_repository = task_repository
         self._trace_repository = trace_repository
+        self._lease_repository = lease_repository
 
     def register(self, container: ProviderRegistrar) -> None:
         if self._task_repository is not None:
@@ -108,7 +113,15 @@ class _PersistenceProvider(ServiceProvider):
                 scope=Scope.APPLICATION,
                 owned=False,
             )
-        if self._task_repository is not None and self._trace_repository is not None:
+        if self._lease_repository is not None:
+            lease_repository = self._lease_repository
+            container.bind(
+                LeaseRepository,
+                lambda _: lease_repository,
+                scope=Scope.APPLICATION,
+                owned=False,
+            )
+        if self._task_repository is not None and self._trace_repository is not None and self._lease_repository is not None:
             return
 
         container.bind(
@@ -376,6 +389,11 @@ class _ApplicationProvider(ServiceProvider):
             lambda current: DatabaseSetupController(current.resolve(DatabaseSetupService)),
             scope=Scope.TRANSIENT,
         )
+        container.bind(
+            ResourceLeaseService,
+            lambda current: ResourceLeaseService(current.resolve(LeaseRepository)),
+            scope=Scope.APPLICATION,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +406,7 @@ class AFApplication:
     tasks: TaskController
     search: SearchController
     traces: TraceRepository
+    leases: ResourceLeaseService
     verifier: DeterministicVerifier
     agent_routes: AgentRoutingController
     ideons: IdeonController
@@ -414,6 +433,7 @@ def create_application(
     config: ConfigSnapshot | None = None,
     task_repository: TaskRepository | None = None,
     trace_repository: TraceRepository | None = None,
+    lease_repository: LeaseRepository | None = None,
     ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
@@ -426,6 +446,7 @@ def create_application(
         config=config,
         task_repository=task_repository,
         trace_repository=trace_repository,
+        lease_repository=lease_repository,
         ideon_service=ideon_service,
         reuse_store=reuse_store,
         selector=selector,
@@ -446,6 +467,7 @@ async def create_application_async(
     config: ConfigSnapshot | None = None,
     task_repository: TaskRepository | None = None,
     trace_repository: TraceRepository | None = None,
+    lease_repository: LeaseRepository | None = None,
     ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
@@ -457,6 +479,7 @@ async def create_application_async(
         config=config,
         task_repository=task_repository,
         trace_repository=trace_repository,
+        lease_repository=lease_repository,
         ideon_service=ideon_service,
         reuse_store=reuse_store,
         selector=selector,
@@ -481,6 +504,7 @@ def _prepare_application(
     config: ConfigSnapshot | None,
     task_repository: TaskRepository | None,
     trace_repository: TraceRepository | None,
+    lease_repository: LeaseRepository | None,
     ideon_service: IdeonService | None,
     reuse_store: ReuseStore | None,
     selector: Selector | None,
@@ -512,7 +536,7 @@ def _prepare_application(
     root.instance(Settings, resolved_settings)
     root.instance(ConfigSnapshot, resolved_config)
     application_providers: tuple[ServiceProvider, ...] = (
-        _PersistenceProvider(resolved_settings, task_repository, trace_repository),
+        _PersistenceProvider(resolved_settings, task_repository, trace_repository, lease_repository),
         _FrameworkProvider(
             reuse_store,
             selector,
@@ -573,6 +597,7 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         tasks=endpoints.tasks,
         search=container.resolve(SearchController),
         traces=container.resolve_token(TraceRepository),
+        leases=container.resolve(ResourceLeaseService),
         verifier=container.resolve(DeterministicVerifier),
         agent_routes=endpoints.agent_routes,
         ideons=endpoints.ideons,
