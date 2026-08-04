@@ -272,3 +272,56 @@ class TraceNotFound(AFError):
     def __init__(self, trace_id: str) -> None:
         self.trace_id = trace_id
         super().__init__(f"trace not found: {trace_id}")
+
+
+class LeaseNotFound(AFError):
+    def __init__(self, lease_id: str) -> None:
+        self.lease_id = lease_id
+        super().__init__(f"lease not found: {lease_id}")
+
+
+class LeaseBudgetExceeded(AFError, ValueError):
+    def __init__(self, lease_id: str, requested: float, available: float) -> None:
+        self.lease_id = lease_id
+        self.requested = requested
+        self.available = available
+        super().__init__(f"lease budget exceeded: requested {requested}, available {available}")
+
+
+class LeaseConcurrencyExceeded(AFError, ValueError):
+    def __init__(self, lease_id: str, requested: int, max_concurrent: int) -> None:
+        self.lease_id = lease_id
+        self.requested = requested
+        self.max_concurrent = max_concurrent
+        super().__init__(f"lease concurrency exceeded: requested {requested}, max {max_concurrent}")
+
+
+class LeaseStateTransitionError(AFError, ValueError):
+    def __init__(self, lease_id: str, from_state: str, to_state: str) -> None:
+        self.lease_id = lease_id
+        self.from_state = from_state
+        self.to_state = to_state
+        super().__init__(f"invalid lease state transition: {from_state} -> {to_state}")
+
+
+class LeaseFenceTokenStale(AFError, ValueError):
+    def __init__(self, lease_id: str, expected: int, provided: int) -> None:
+        self.lease_id = lease_id
+        self.expected = expected
+        self.provided = provided
+        super().__init__(f"stale fence token: expected >= {expected}, got {provided}")
+
+
+class LeaseAuthorizationExpired(AFError, ValueError):
+    def __init__(self, lease_id: str, authorized_by: str) -> None:
+        self.lease_id = lease_id
+        self.authorized_by = authorized_by
+        super().__init__(f"authorization expired for lease {lease_id} (authorized by {authorized_by})")
+
+
+class LeaseScopeWidened(AFError, ValueError):
+    def __init__(self, lease_id: str, original: str, requested: str) -> None:
+        self.lease_id = lease_id
+        self.original = original
+        self.requested = requested
+        super().__init__(f"scope widened on renewal: original={original}, requested={requested}")
