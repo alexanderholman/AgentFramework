@@ -8,6 +8,55 @@ from af.framework.contracts import Classifier
 from af.framework.types import Classification, WorkRequest
 
 
+class TimeClassifier:
+    """Classify time-related requests with zero confidence (deterministic match)."""
+
+    id = "time-classifier"
+
+    def __init__(self) -> None:
+        self._patterns = [
+            re.compile(r"\bwhat\s+time\b", re.IGNORECASE),
+            re.compile(r"\bwhat\s+is\s+(the\s+)?time\b", re.IGNORECASE),
+            re.compile(r"\bwhat[''']s\s+(the\s+)?time\b", re.IGNORECASE),
+            re.compile(r"\bcurrent\s+time\b", re.IGNORECASE),
+            re.compile(r"\bcurrent\s+datetime\b", re.IGNORECASE),
+            re.compile(r"\btime\s+now\b", re.IGNORECASE),
+            re.compile(r"\belapsed\s+time\b", re.IGNORECASE),
+            re.compile(r"\btime\s+today\b", re.IGNORECASE),
+        ]
+        self._exclusions = [
+            re.compile(r"\btime\s+management\b", re.IGNORECASE),
+            re.compile(r"\bwastetime\b", re.IGNORECASE),
+            re.compile(r"\bsavetime\b", re.IGNORECASE),
+        ]
+        self._timezone_pattern = re.compile(
+            r"\bin\s+(?:the\s+)?(?:timezone\s+)?(\w+)", re.IGNORECASE
+        )
+
+    def classify(self, request: WorkRequest) -> Classification | None:
+        prompt = request.prompt
+        if not prompt:
+            return None
+
+        for exclusion in self._exclusions:
+            if exclusion.search(prompt):
+                return None
+
+        for pattern in self._patterns:
+            if pattern.search(prompt):
+                arguments: dict[str, str] = {}
+                tz_match = self._timezone_pattern.search(prompt)
+                if tz_match:
+                    arguments["timezone"] = tz_match.group(1)
+                return Classification(
+                    intent="system.current_time",
+                    confidence=0,
+                    arguments=arguments,
+                    classifier=self.id,
+                )
+        return None
+
+
 class ClassifierChain:
     def __init__(self, classifiers: list[Classifier]) -> None:
         self._classifiers = tuple(classifiers)

@@ -39,9 +39,14 @@ from af.domain.classifiers import (
     CharacterCountClassifier,
     ClassifierChain,
     HelloClassifier,
+    TimeClassifier,
     UnknownClassifier,
 )
-from af.domain.procedures import CharacterCountProcedure, HelloProcedure
+from af.domain.procedures import (
+    CharacterCountProcedure,
+    CurrentTimeProcedure,
+    HelloProcedure,
+)
 from af.domain.resources import LeaseRepository
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier
@@ -173,12 +178,17 @@ class _FrameworkProvider(ServiceProvider):
             registry = ProcedureRegistry()
             registry.register(HelloProcedure())
             registry.register(CharacterCountProcedure())
+            registry.register(CurrentTimeProcedure())
             for contribution in resolve_procedure_contributions(resolver):
                 registry.register(contribution.procedure)
             return registry
 
         def create_classifier(resolver: Resolver) -> ClassifierChain:
-            classifiers: list[FrameworkClassifier] = [HelloClassifier(), CharacterCountClassifier()]
+            classifiers: list[FrameworkClassifier] = [
+                HelloClassifier(),
+                CharacterCountClassifier(),
+                TimeClassifier(),
+            ]
             classifiers.extend(
                 contribution.classifier
                 for contribution in resolve_procedure_contributions(resolver)
