@@ -77,7 +77,7 @@ while [[ ! -e "$STATE_DIR/STOP" ]]; do
       --session-id "$MEMLOG_SESSION_ID" \
       --event-type checkpoint --title "AF epic #$EPIC_NUMBER iteration $iteration" \
       --summary "Continuing the oldest dependency-ready work under epic #$EPIC_NUMBER." \
-      --message "master=$master_sha open_prs=$open_prs open_issues=$open_issues deadline=$(<"$STATE_DIR/deadline.iso") log=$run_log" \
+      --message "I will continue epic #$EPIC_NUMBER; master=$master_sha open_prs=$open_prs open_issues=$open_issues deadline=$(<"$STATE_DIR/deadline.iso") log=$run_log" \
       >>"$STATE_DIR/worker.log" 2>&1 || true
   fi
 
