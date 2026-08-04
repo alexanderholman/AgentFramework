@@ -1,25 +1,25 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
 
 from af.domain.resources import (
     FenceToken,
-    Lease,
     LeaseState,
     ResourceBudget,
     ResourceIdentity,
     ResourceKind,
 )
 from af.framework.errors import (
-    LeaseNotFound,
-    LeaseStateTransitionError,
-    LeaseFenceTokenStale,
     LeaseBudgetExceeded,
+    LeaseFenceTokenStale,
+    LeaseNotFound,
     LeaseScopeWidened,
+    LeaseStateTransitionError,
 )
 
 if TYPE_CHECKING:
@@ -79,7 +79,7 @@ class TestResourceLeaseServiceCreate:
             authorization_digest="abc123",
         )
 
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             lease.state = LeaseState.ACTIVE  # type: ignore[attr-defined]
 
     def test_create_lease_quantity_exceeds_budget_raises(
@@ -172,7 +172,7 @@ class TestResourceLeaseServiceActivate:
         with pytest.raises(LeaseStateTransitionError):
             application.leases.activate_lease(
                 lease_id=lease_id,
-                fence_token=FenceToken(value=2, created_at=datetime.now(timezone.utc)),
+                fence_token=FenceToken(value=2, created_at=datetime.now(UTC)),
             )
 
     def test_activate_stale_fence_token_raises(
@@ -191,18 +191,16 @@ class TestResourceLeaseServiceActivate:
         with pytest.raises(LeaseFenceTokenStale):
             application.leases.activate_lease(
                 lease_id=lease_id,
-                fence_token=FenceToken(value=0, created_at=datetime.now(timezone.utc)),
+                fence_token=FenceToken(value=0, created_at=datetime.now(UTC)),
             )
 
-    def test_activate_nonexistent_lease_raises(
-        self, application: AFApplication
-    ) -> None:
+    def test_activate_nonexistent_lease_raises(self, application: AFApplication) -> None:
         lease_id = str(uuid.uuid4())
 
         with pytest.raises(LeaseNotFound):
             application.leases.activate_lease(
                 lease_id=lease_id,
-                fence_token=FenceToken(value=1, created_at=datetime.now(timezone.utc)),
+                fence_token=FenceToken(value=1, created_at=datetime.now(UTC)),
             )
 
 
@@ -496,9 +494,7 @@ class TestResourceLeaseServiceGet:
         assert fetched.id == original.id
         assert fetched.state == original.state
 
-    def test_get_nonexistent_lease_raises(
-        self, application: AFApplication
-    ) -> None:
+    def test_get_nonexistent_lease_raises(self, application: AFApplication) -> None:
         lease_id = str(uuid.uuid4())
 
         with pytest.raises(LeaseNotFound):

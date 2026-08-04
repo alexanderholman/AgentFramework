@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from abc import ABC, abstractmethod
+from zoneinfo import ZoneInfo
 
 from af.framework.errors import InvalidCharacter, InvalidSelectionProposal
 from af.framework.types import (
@@ -170,3 +172,52 @@ class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
             "text": match.group("text").strip(),
             "character": match.group("character").casefold(),
         }
+
+
+class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
+    id = "current-time"
+    selection_descriptor = ProcedureDescriptor(
+        procedure_id=id,
+        version=BaseProcedure.version,
+        intent="system.current_time",
+        arguments=(
+            ProcedureArgumentDescriptor(
+                name="timezone",
+                value_type=ArgumentValueType.TEXT,
+                min_length=1,
+                max_length=64,
+                allow_blank=True,
+            ),
+        ),
+        effect=ProcedureEffect.READ_ONLY,
+        risk=ProcedureRisk.NONE,
+        requires_confirmation=False,
+    )
+    tier = WorkTier.STATIC
+    metrics = RouteMetrics(cost=0, latency=0, intelligence=0)
+
+    def supports(self, classification: Classification) -> bool:
+        return classification.intent == "system.current_time"
+
+    def execute(self, classification: Classification) -> ProcedureResult:
+        tz_name = classification.arguments.get("timezone")
+        if tz_name:
+            try:
+                tz = ZoneInfo(tz_name)
+            except (KeyError, ValueError):
+                tz = ZoneInfo("UTC")
+            now = dt.datetime.now(tz)
+        else:
+            now = dt.datetime.now(dt.UTC)
+        iso = now.isoformat()
+        return ProcedureResult(
+            output=iso,
+            evidence={"timezone": tz_name or "UTC", "iso": iso},
+        )
+
+    def validate(self, classification: Classification) -> None:
+        if classification.intent != "system.current_time":
+            raise InvalidSelectionProposal("unsupported intent for current-time")
+        allowed = {"timezone"}
+        if not set(classification.arguments.keys()).issubset(allowed):
+            raise InvalidSelectionProposal("invalid arguments for current-time")

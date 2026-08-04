@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta
 
 import pytest
@@ -72,7 +73,7 @@ def test_budget_validation_accepts_within_limits(cpu_budget: ResourceBudget) -> 
 
 
 def test_budget_validation_rejects_quantity_overflow(cpu_budget: ResourceBudget) -> None:
-    with pytest.raises(LeaseBudgetExceeded, match="requested 150.0, available 100.0"):
+    with pytest.raises(LeaseBudgetExceeded, match=r"requested 150.0, available 100.0"):
         _validate_quantity(cpu_budget, 150.0)
 
 
@@ -178,7 +179,7 @@ def test_lease_is_immutable(cpu_budget: ResourceBudget) -> None:
         requested_at=now,
         created_at=now,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         lease.state = LeaseState.ACTIVE  # type: ignore[attr-defined]
 
 

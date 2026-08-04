@@ -349,7 +349,7 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             manifest_result = await session.read_resource("af://manifest")
             manifest = json.loads(manifest_result.contents[0].text)
             assert manifest["version"].endswith("a0")
-            assert manifest["routes"] == ["character-count", "hello"]
+            assert manifest["routes"] == ["character-count", "current-time", "hello"]
             assert manifest["route_identities"] == [
                 {
                     "procedure_id": "character-count",
@@ -357,9 +357,14 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
                     "digest": manifest["route_identities"][0]["digest"],
                 },
                 {
-                    "procedure_id": "hello",
+                    "procedure_id": "current-time",
                     "version": "1.0.0",
                     "digest": manifest["route_identities"][1]["digest"],
+                },
+                {
+                    "procedure_id": "hello",
+                    "version": "1.0.0",
+                    "digest": manifest["route_identities"][2]["digest"],
                 },
             ]
             assert all(

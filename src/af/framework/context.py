@@ -261,12 +261,12 @@ def without_context() -> Iterator[None]:
 def derive_context(
     parent: ExecutionContext,
     *,
-    correlation_id: str | None | _UnsetType = _UNSET,
-    causation_id: str | None | _UnsetType = _UNSET,
-    deadline: datetime | None | _UnsetType = _UNSET,
-    trace: TraceContext | None | _UnsetType = _UNSET,
-    locale: str | None | _UnsetType = _UNSET,
-    requested_scope: AcceptanceScope | None | _UnsetType = _UNSET,
+    correlation_id: str | _UnsetType | None = _UNSET,
+    causation_id: str | _UnsetType | None = _UNSET,
+    deadline: datetime | _UnsetType | None = _UNSET,
+    trace: TraceContext | _UnsetType | None = _UNSET,
+    locale: str | _UnsetType | None = _UNSET,
+    requested_scope: AcceptanceScope | _UnsetType | None = _UNSET,
 ) -> ExecutionContext:
     child_deadline = parent.deadline if deadline is _UNSET else cast(datetime | None, deadline)
     if (child_deadline is None and parent.deadline is not None) or (

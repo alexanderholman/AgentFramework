@@ -30,8 +30,8 @@ from af.application.operations import (
     OperationsService,
     RepositoryOperationsTaskReader,
 )
-from af.application.search import SearchController, SearchService
 from af.application.resource_leases import ResourceLeaseService
+from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
 from af.domain.agent_routing import DeterministicAgentRouter
@@ -39,9 +39,14 @@ from af.domain.classifiers import (
     CharacterCountClassifier,
     ClassifierChain,
     HelloClassifier,
+    TimeClassifier,
     UnknownClassifier,
 )
-from af.domain.procedures import CharacterCountProcedure, HelloProcedure
+from af.domain.procedures import (
+    CharacterCountProcedure,
+    CurrentTimeProcedure,
+    HelloProcedure,
+)
 from af.domain.resources import LeaseRepository
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier
@@ -121,7 +126,17 @@ class _PersistenceProvider(ServiceProvider):
                 scope=Scope.APPLICATION,
                 owned=False,
             )
-        if self._task_repository is not None and self._trace_repository is not None and self._lease_repository is not None:
+        else:
+            container.bind(
+                LeaseRepository,
+                lambda _: InMemoryLeaseRepository(),
+                scope=Scope.APPLICATION,
+            )
+        if (
+            self._task_repository is not None
+            and self._trace_repository is not None
+            and self._lease_repository is not None
+        ):
             return
 
         container.bind(
@@ -173,12 +188,17 @@ class _FrameworkProvider(ServiceProvider):
             registry = ProcedureRegistry()
             registry.register(HelloProcedure())
             registry.register(CharacterCountProcedure())
+            registry.register(CurrentTimeProcedure())
             for contribution in resolve_procedure_contributions(resolver):
                 registry.register(contribution.procedure)
             return registry
 
         def create_classifier(resolver: Resolver) -> ClassifierChain:
-            classifiers: list[FrameworkClassifier] = [HelloClassifier(), CharacterCountClassifier()]
+            classifiers: list[FrameworkClassifier] = [
+                HelloClassifier(),
+                CharacterCountClassifier(),
+                TimeClassifier(),
+            ]
             classifiers.extend(
                 contribution.classifier
                 for contribution in resolve_procedure_contributions(resolver)
@@ -391,7 +411,7 @@ class _ApplicationProvider(ServiceProvider):
         )
         container.bind(
             ResourceLeaseService,
-            lambda current: ResourceLeaseService(current.resolve(LeaseRepository)),
+            lambda current: ResourceLeaseService(current.resolve_token(LeaseRepository)),
             scope=Scope.APPLICATION,
         )
 
@@ -536,7 +556,9 @@ def _prepare_application(
     root.instance(Settings, resolved_settings)
     root.instance(ConfigSnapshot, resolved_config)
     application_providers: tuple[ServiceProvider, ...] = (
-        _PersistenceProvider(resolved_settings, task_repository, trace_repository, lease_repository),
+        _PersistenceProvider(
+            resolved_settings, task_repository, trace_repository, lease_repository
+        ),
         _FrameworkProvider(
             reuse_store,
             selector,

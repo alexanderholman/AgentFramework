@@ -42,7 +42,7 @@ def test_default_sqlite_is_boot_owned_application_state_and_disposed_once(
     root.instance(Settings, settings)
     lifecycle = Application(
         root,
-        (bootstrap._PersistenceProvider(settings, None, None),),
+        (bootstrap._PersistenceProvider(settings, None, None, None),),
     )
     lifecycle.register()
 

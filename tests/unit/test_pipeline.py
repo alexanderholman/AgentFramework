@@ -462,6 +462,28 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 has_selection_grounding=True,
                 metrics=RouteMetrics(cost=1, latency=1, intelligence=1),
             ),
+            ProcedureDescriptor(
+                procedure_id="current-time",
+                version="1.0.0",
+                intent="system.current_time",
+                arguments=(
+                    ProcedureArgumentDescriptor(
+                        name="timezone",
+                        value_type=ArgumentValueType.TEXT,
+                        min_length=1,
+                        max_length=64,
+                        allow_blank=True,
+                    ),
+                ),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
+                tier=WorkTier.STATIC,
+                pure=True,
+                replay_safe=True,
+                has_selection_grounding=False,
+                metrics=RouteMetrics(cost=0, latency=0, intelligence=0),
+            ),
         )
     ]
     assert outcome.route == "character-count"

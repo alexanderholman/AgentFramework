@@ -47,6 +47,20 @@ class DeterministicVerifier:
                 passed,
                 "independent count matched" if passed else "independent count mismatch",
             )
+        if classification.intent == "system.current_time":
+            del request, procedure
+            try:
+                from datetime import datetime
+
+                iso = result.output
+                datetime.fromisoformat(iso)
+                passed = True
+            except (ValueError, TypeError):
+                passed = False
+            return VerificationResult(
+                passed,
+                "valid ISO 8601 timestamp" if passed else "invalid ISO 8601 timestamp",
+            )
         for verifier in self._verifiers:
             verdict = verifier.verify(request, classification, procedure, result)
             if verdict is not None:

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from af.domain.resources import (
     FenceToken,
@@ -21,7 +20,6 @@ from af.framework.errors import (
     LeaseScopeWidened,
     LeaseStateTransitionError,
 )
-
 
 # Valid state transitions
 _VALID_TRANSITIONS: dict[LeaseState, set[LeaseState]] = {
@@ -50,14 +48,14 @@ class ResourceLeaseService:
         scope: dict[str, str],
         authorized_by: str,
         authorization_digest: str,
-        invocation_id: Optional[str] = None,
-        capability_digest: Optional[str] = None,
-        runtime_digest: Optional[str] = None,
+        invocation_id: str | None = None,
+        capability_digest: str | None = None,
+        runtime_digest: str | None = None,
     ) -> Lease:
         """Create a new lease in RESERVED state."""
         self._validate_quantity(budget, quantity)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         token = FenceToken(value=1, created_at=now)
 
         lease = Lease(
@@ -84,7 +82,7 @@ class ResourceLeaseService:
         self,
         lease_id: str,
         fence_token: FenceToken,
-        authorization_digest: Optional[str] = None,
+        authorization_digest: str | None = None,
     ) -> Lease:
         """Transition a lease from RESERVED to ACTIVE."""
         lease = self._get_lease(lease_id)
@@ -94,7 +92,7 @@ class ResourceLeaseService:
         if authorization_digest:
             self._validate_authorization(lease, authorization_digest)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = Lease(
             id=lease.id,
             budget=lease.budget,
@@ -102,7 +100,7 @@ class ResourceLeaseService:
             quantity=lease.quantity,
             requested_at=lease.requested_at,
             activated_at=now,
-            expires_at=now + lease.budget.max_duration,
+            expires_at=now + lease.budget.max_duration if lease.budget.max_duration else None,
             fence_token=FenceToken(value=fence_token.value + 1, created_at=now),
             invocation_id=lease.invocation_id,
             capability_digest=lease.capability_digest,
@@ -121,7 +119,7 @@ class ResourceLeaseService:
         self,
         lease_id: str,
         fence_token: FenceToken,
-        new_scope: Optional[dict[str, str]] = None,
+        new_scope: dict[str, str] | None = None,
     ) -> Lease:
         """Renew an active lease, extending its expiration."""
         lease = self._get_lease(lease_id)
@@ -137,7 +135,7 @@ class ResourceLeaseService:
         if new_scope:
             self._validate_non_widening_scope(lease, new_scope)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = Lease(
             id=lease.id,
             budget=lease.budget,
@@ -145,7 +143,7 @@ class ResourceLeaseService:
             quantity=lease.quantity,
             requested_at=lease.requested_at,
             activated_at=lease.activated_at,
-            expires_at=now + lease.budget.max_duration,
+            expires_at=now + lease.budget.max_duration if lease.budget.max_duration else None,
             fence_token=FenceToken(value=fence_token.value + 1, created_at=now),
             invocation_id=lease.invocation_id,
             capability_digest=lease.capability_digest,
@@ -171,7 +169,7 @@ class ResourceLeaseService:
         self._validate_fence_token(lease, fence_token)
         self._validate_transition(lease, LeaseState.RELEASED)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = Lease(
             id=lease.id,
             budget=lease.budget,
@@ -204,7 +202,7 @@ class ResourceLeaseService:
         self._validate_fence_token(lease, fence_token)
         self._validate_transition(lease, LeaseState.REVOKED)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = Lease(
             id=lease.id,
             budget=lease.budget,
@@ -237,7 +235,7 @@ class ResourceLeaseService:
         self._validate_fence_token(lease, fence_token)
         self._validate_transition(lease, LeaseState.RECONCILED)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = Lease(
             id=lease.id,
             budget=lease.budget,
@@ -336,6 +334,5 @@ class ResourceLeaseService:
         if lease.authorization_digest and lease.authorization_digest != authorization_digest:
             raise LeaseAuthorizationExpired(
                 lease_id=lease.id,
-                expected=lease.authorization_digest,
-                provided=authorization_digest,
+                authorized_by=lease.authorization_digest or "unknown",
             )
