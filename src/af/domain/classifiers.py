@@ -30,7 +30,7 @@ class TimeClassifier:
             re.compile(r"\bsavetime\b", re.IGNORECASE),
         ]
         self._timezone_pattern = re.compile(
-            r"\bin\s+(?:the\s+)?(?:timezone\s+)?(\w+)", re.IGNORECASE
+            r"\bin\s+(?:the\s+)?(?:timezone\s+)?([\w\s]+?)\s*(?:\.|$|,)", re.IGNORECASE
         )
 
     def classify(self, request: WorkRequest) -> Classification | None:
@@ -50,7 +50,7 @@ class TimeClassifier:
                     arguments["timezone"] = tz_match.group(1)
                 return Classification(
                     intent="system.current_time",
-                    confidence=0,
+                    confidence=1.0,
                     arguments=arguments,
                     classifier=self.id,
                 )

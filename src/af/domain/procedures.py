@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from abc import ABC, abstractmethod
+from zoneinfo import ZoneInfo
 
 from af.framework.errors import InvalidCharacter, InvalidSelectionProposal
 from af.framework.types import (
@@ -202,8 +203,8 @@ class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
         tz_name = classification.arguments.get("timezone")
         if tz_name:
             try:
-                tz = dt.timezone(dt.timedelta(0), tz_name)
-            except Exception:
+                tz = ZoneInfo(tz_name)
+            except (KeyError, ValueError):
                 tz = dt.timezone.utc
             now = dt.datetime.now(tz)
         else:
