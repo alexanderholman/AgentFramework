@@ -4,11 +4,12 @@ import pytest
 
 from af.domain.classifiers import TimeClassifier
 from af.domain.procedures import CurrentTimeProcedure
+from af.framework.errors import InvalidSelectionProposal
 from af.framework.types import (
     Classification,
+    ProcedureResult,
     WorkRequest,
     WorkTier,
-    ProcedureResult,
 )
 
 
@@ -108,7 +109,7 @@ class TestCurrentTimeProcedure:
             confidence=1.0,
             classifier="character-count-classifier",
         )
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidSelectionProposal):
             procedure.validate(classification)
 
     def test_execute_returns_procedure_result(self, procedure):
