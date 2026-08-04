@@ -26,9 +26,7 @@ class InMemoryLeaseRepository(LeaseRepository):
     ) -> list[Lease]:
         result = list(self._store.values())
         if host_id:
-            result = [
-                l for l in result if l.budget.identity.host_id == host_id
-            ]
+            result = [l for l in result if l.budget.identity.host_id == host_id]
         if state:
             result = [l for l in result if l.state.value == state]
         return result

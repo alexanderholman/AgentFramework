@@ -10,6 +10,7 @@ from typing import Optional, Protocol
 
 class LeaseState(str, Enum):
     """Lease lifecycle states matching the issue specification."""
+
     RESERVED = "reserved"
     ACTIVE = "active"
     EXPIRED = "expired"
@@ -20,6 +21,7 @@ class LeaseState(str, Enum):
 
 class ResourceKind(str, Enum):
     """Resource types that can be leased."""
+
     CPU = "cpu"
     RAM = "ram"
     ACCELERATOR = "accelerator"
@@ -31,6 +33,7 @@ class ResourceKind(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ResourceIdentity:
     """Immutable identity for a resource instance."""
+
     kind: ResourceKind
     host_id: str
     instance_id: str
@@ -40,6 +43,7 @@ class ResourceIdentity:
 @dataclass(frozen=True, slots=True)
 class ResourceBudget:
     """Immutable budget constraints for a resource."""
+
     identity: ResourceIdentity
     max_quantity: float
     max_duration: timedelta | None = None
@@ -49,6 +53,7 @@ class ResourceBudget:
 @dataclass(frozen=True, slots=True)
 class FenceToken:
     """Monotonically increasing token for fenced operations."""
+
     value: int
     created_at: datetime
 
@@ -56,6 +61,7 @@ class FenceToken:
 @dataclass(frozen=True, slots=True)
 class Lease:
     """Immutable lease record with full lifecycle tracking."""
+
     id: str
     budget: ResourceBudget
     state: LeaseState
@@ -78,6 +84,7 @@ class Lease:
 
 class LeaseRepository(Protocol):
     """Repository port for lease persistence."""
+
     def save(self, lease: Lease) -> None: ...
 
     def get(self, lease_id: str) -> Optional[Lease]: ...

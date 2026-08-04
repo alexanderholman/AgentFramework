@@ -194,9 +194,7 @@ class TestResourceLeaseServiceActivate:
                 fence_token=FenceToken(value=0, created_at=datetime.now(timezone.utc)),
             )
 
-    def test_activate_nonexistent_lease_raises(
-        self, application: AFApplication
-    ) -> None:
+    def test_activate_nonexistent_lease_raises(self, application: AFApplication) -> None:
         lease_id = str(uuid.uuid4())
 
         with pytest.raises(LeaseNotFound):
@@ -496,9 +494,7 @@ class TestResourceLeaseServiceGet:
         assert fetched.id == original.id
         assert fetched.state == original.state
 
-    def test_get_nonexistent_lease_raises(
-        self, application: AFApplication
-    ) -> None:
+    def test_get_nonexistent_lease_raises(self, application: AFApplication) -> None:
         lease_id = str(uuid.uuid4())
 
         with pytest.raises(LeaseNotFound):

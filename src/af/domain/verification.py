@@ -51,6 +51,7 @@ class DeterministicVerifier:
             del request, procedure
             try:
                 from datetime import datetime
+
                 iso = result.output
                 datetime.fromisoformat(iso)
                 passed = True

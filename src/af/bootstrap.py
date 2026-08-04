@@ -126,7 +126,11 @@ class _PersistenceProvider(ServiceProvider):
                 scope=Scope.APPLICATION,
                 owned=False,
             )
-        if self._task_repository is not None and self._trace_repository is not None and self._lease_repository is not None:
+        if (
+            self._task_repository is not None
+            and self._trace_repository is not None
+            and self._lease_repository is not None
+        ):
             return
 
         container.bind(
@@ -546,7 +550,9 @@ def _prepare_application(
     root.instance(Settings, resolved_settings)
     root.instance(ConfigSnapshot, resolved_config)
     application_providers: tuple[ServiceProvider, ...] = (
-        _PersistenceProvider(resolved_settings, task_repository, trace_repository, lease_repository),
+        _PersistenceProvider(
+            resolved_settings, task_repository, trace_repository, lease_repository
+        ),
         _FrameworkProvider(
             reuse_store,
             selector,
