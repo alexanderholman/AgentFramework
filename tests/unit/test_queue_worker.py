@@ -773,6 +773,26 @@ def test_worker_kernel_run_loop_stops_when_closed() -> None:
     )
 
 
+def test_worker_kernel_run_loop_continues_after_settled_job_failure() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-terminal-failure"))
+    driver.dispatch(_job("job-after-failure"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+    processed: list[str] = []
+
+    def consumer(job: QueueJob) -> None:
+        message_id = job.envelope.metadata.message_id
+        if message_id == "job-terminal-failure":
+            raise ValueError("terminal")
+        processed.append(message_id)
+        kernel.start_draining()
+
+    kernel.run_loop(consumer, poll_interval=timedelta(milliseconds=1))
+
+    assert driver.rejected == ["job-terminal-failure"]
+    assert processed == ["job-after-failure"]
+
+
 def test_worker_kernel_idle_timeout_increments_counter() -> None:
     driver = _make_driver()
     t = _NOW

@@ -108,6 +108,12 @@ class InMemoryIdempotencyStore:
 JobScopeFactory = Callable[[QueueJob], AbstractContextManager[None]]
 
 
+class _SettledJobFailure(Exception):
+    def __init__(self, error: Exception) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
 def _validate_sync_result(result: object) -> None:
     if inspect.iscoroutine(result):
         result.close()
@@ -267,7 +273,22 @@ class WorkerKernel:
         *,
         lane: str | None = None,
     ) -> QueueReservation | None:
-        """Admit and synchronously execute at most one job."""
+        """Admit and synchronously execute at most one job.
+
+        A settled handler failure is re-raised to direct callers. Infrastructure and
+        settlement failures are always propagated.
+        """
+        try:
+            return self._run_once(consumer, lane=lane)
+        except _SettledJobFailure as failure:
+            raise failure.error.with_traceback(failure.error.__traceback__) from None
+
+    def _run_once(
+        self,
+        consumer: JobHandler,
+        *,
+        lane: str | None = None,
+    ) -> QueueReservation | None:
         reservation = self._admit(lane=lane)
         if reservation is None:
             return None
@@ -292,7 +313,7 @@ class WorkerKernel:
             except Exception as error:
                 self._increment("jobs_failed")
                 self._settle_failure(reservation, error)
-                raise
+                raise _SettledJobFailure(error) from error
             except BaseException as cancellation:
                 self._increment("cancellations")
                 self._release_cancelled(reservation, cancellation)
@@ -302,6 +323,8 @@ class WorkerKernel:
                 self._driver.ack(reservation)
             except BaseException as acknowledgement_error:
                 self._release_uncertain(reservation, acknowledgement_error)
+                if isinstance(acknowledgement_error, Exception):
+                    raise _SettledJobFailure(acknowledgement_error) from acknowledgement_error
                 raise
             self._increment("duplicates" if duplicate else "jobs_processed")
             return reservation
@@ -332,7 +355,11 @@ class WorkerKernel:
             with self._condition:
                 if self._closed or self._draining:
                     return
-            if self.run_once(consumer, lane=lane) is None:
+            try:
+                reservation = self._run_once(consumer, lane=lane)
+            except _SettledJobFailure:
+                continue
+            if reservation is None:
                 time.sleep(poll_interval.total_seconds())
 
     def _admit(self, *, lane: str | None) -> QueueReservation | None:
