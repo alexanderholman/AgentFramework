@@ -51,7 +51,7 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
     _executable(fake_bin / "gh", "#!/bin/sh\nprintf '%s\\n' '0'\n")
     _executable(
         fake_bin / "memlog",
-        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$MEMLOG_CAPTURE"\n',
+        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$MEMLOG_CAPTURE"\n',
     )
     _executable(
         fake_bin / "opencode",
@@ -86,9 +86,12 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
     )
 
     assert completed.returncode == 0, completed.stderr
-    arguments = capture.read_text(encoding="utf-8").split()
+    arguments = capture.read_text(encoding="utf-8").splitlines()
     session_index = arguments.index("--session-id")
     assert arguments[session_index + 1] == expected_session_id
+    message_index = arguments.index("--message")
+    checkpoint_message = arguments[message_index + 1]
+    assert "I will continue" in checkpoint_message
     assert "the following arguments are required: --session-id" not in (
         state_dir / "worker.log"
     ).read_text(encoding="utf-8")
