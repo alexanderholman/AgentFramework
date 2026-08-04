@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Protocol
+from typing import Protocol
 
 
 class LeaseState(str, Enum):
@@ -87,12 +87,12 @@ class LeaseRepository(Protocol):
 
     def save(self, lease: Lease) -> None: ...
 
-    def get(self, lease_id: str) -> Optional[Lease]: ...
+    def get(self, lease_id: str) -> Lease | None: ...
 
     def list(
         self,
-        host_id: Optional[str] = None,
-        state: Optional[str] = None,
+        host_id: str | None = None,
+        state: str | None = None,
     ) -> list[Lease]: ...
 
     def delete(self, lease_id: str) -> bool: ...

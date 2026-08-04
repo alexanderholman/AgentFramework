@@ -30,8 +30,8 @@ from af.application.operations import (
     OperationsService,
     RepositoryOperationsTaskReader,
 )
-from af.application.search import SearchController, SearchService
 from af.application.resource_leases import ResourceLeaseService
+from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
 from af.domain.agent_routing import DeterministicAgentRouter
@@ -80,7 +80,6 @@ from af.infrastructure.db_setup import (
 )
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
-from af.infrastructure.resource_leases import InMemoryLeaseRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
 from af.search.embedded_manager import embedded_search_registration
 from af.search.manager import SearchManager, bind_search_manager

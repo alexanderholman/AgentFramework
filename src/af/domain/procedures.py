@@ -205,10 +205,10 @@ class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
             try:
                 tz = ZoneInfo(tz_name)
             except (KeyError, ValueError):
-                tz = dt.timezone.utc
+                tz = dt.UTC
             now = dt.datetime.now(tz)
         else:
-            now = dt.datetime.now(dt.timezone.utc)
+            now = dt.datetime.now(dt.UTC)
         iso = now.isoformat()
         return ProcedureResult(
             output=iso,

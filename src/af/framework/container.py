@@ -2914,10 +2914,10 @@ class ServiceProvider(ABC):
         self,
         container: Container,
         resources: ProviderResourceRegistry,
-    ) -> None | Awaitable[None]:
+    ) -> Awaitable[None] | None:
         del container, resources
         return None
 
-    def shutdown(self, container: Container) -> None | Awaitable[None]:
+    def shutdown(self, container: Container) -> Awaitable[None] | None:
         del container
         return None
