@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
-from typing import Optional, Protocol
+from enum import Enum, StrEnum
+from typing import Protocol
 
 
-class LeaseState(str, Enum):
+class LeaseState(StrEnum, Enum):
     """Lease lifecycle states matching the issue specification."""
+
     RESERVED = "reserved"
     ACTIVE = "active"
     EXPIRED = "expired"
@@ -18,8 +19,9 @@ class LeaseState(str, Enum):
     RECONCILED = "reconciled"
 
 
-class ResourceKind(str, Enum):
+class ResourceKind(StrEnum, Enum):
     """Resource types that can be leased."""
+
     CPU = "cpu"
     RAM = "ram"
     ACCELERATOR = "accelerator"
@@ -31,6 +33,7 @@ class ResourceKind(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ResourceIdentity:
     """Immutable identity for a resource instance."""
+
     kind: ResourceKind
     host_id: str
     instance_id: str
@@ -40,6 +43,7 @@ class ResourceIdentity:
 @dataclass(frozen=True, slots=True)
 class ResourceBudget:
     """Immutable budget constraints for a resource."""
+
     identity: ResourceIdentity
     max_quantity: float
     max_duration: timedelta | None = None
@@ -49,6 +53,7 @@ class ResourceBudget:
 @dataclass(frozen=True, slots=True)
 class FenceToken:
     """Monotonically increasing token for fenced operations."""
+
     value: int
     created_at: datetime
 
@@ -56,6 +61,7 @@ class FenceToken:
 @dataclass(frozen=True, slots=True)
 class Lease:
     """Immutable lease record with full lifecycle tracking."""
+
     id: str
     budget: ResourceBudget
     state: LeaseState
@@ -78,14 +84,15 @@ class Lease:
 
 class LeaseRepository(Protocol):
     """Repository port for lease persistence."""
+
     def save(self, lease: Lease) -> None: ...
 
-    def get(self, lease_id: str) -> Optional[Lease]: ...
+    def get(self, lease_id: str) -> Lease | None: ...
 
     def list(
         self,
-        host_id: Optional[str] = None,
-        state: Optional[str] = None,
+        host_id: str | None = None,
+        state: str | None = None,
     ) -> list[Lease]: ...
 
     def delete(self, lease_id: str) -> bool: ...

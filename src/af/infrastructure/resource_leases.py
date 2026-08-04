@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from af.domain.resources import Lease, LeaseRepository
 
 
@@ -16,21 +14,21 @@ class InMemoryLeaseRepository(LeaseRepository):
     def save(self, lease: Lease) -> None:
         self._store[lease.id] = lease
 
-    def get(self, lease_id: str) -> Optional[Lease]:
+    def get(self, lease_id: str) -> Lease | None:
         return self._store.get(lease_id)
 
     def list(
         self,
-        host_id: Optional[str] = None,
-        state: Optional[str] = None,
+        host_id: str | None = None,
+        state: str | None = None,
     ) -> list[Lease]:
         result = list(self._store.values())
         if host_id:
             result = [
-                l for l in result if l.budget.identity.host_id == host_id
+                item for item in result if item.budget.identity.host_id == host_id
             ]
         if state:
-            result = [l for l in result if l.state.value == state]
+            result = [item for item in result if item.state.value == state]
         return result
 
     def delete(self, lease_id: str) -> bool:

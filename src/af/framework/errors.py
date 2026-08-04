@@ -316,7 +316,9 @@ class LeaseAuthorizationExpired(AFError, ValueError):
     def __init__(self, lease_id: str, authorized_by: str) -> None:
         self.lease_id = lease_id
         self.authorized_by = authorized_by
-        super().__init__(f"authorization expired for lease {lease_id} (authorized by {authorized_by})")
+        super().__init__(
+            f"authorization expired for lease {lease_id} (authorized by {authorized_by})"
+        )
 
 
 class LeaseScopeWidened(AFError, ValueError):

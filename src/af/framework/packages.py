@@ -498,10 +498,10 @@ class ManifestProviderAdapter(ServiceProvider):
         self,
         container: Container,
         resources: ProviderResourceRegistry,
-    ) -> None | Awaitable[None]:
+    ) -> Awaitable[None] | None:
         return self._provider.boot(container, resources)
 
-    def shutdown(self, container: Container) -> None | Awaitable[None]:
+    def shutdown(self, container: Container) -> Awaitable[None] | None:
         return self._provider.shutdown(container)
 
 

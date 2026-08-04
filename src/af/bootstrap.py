@@ -30,8 +30,8 @@ from af.application.operations import (
     OperationsService,
     RepositoryOperationsTaskReader,
 )
-from af.application.search import SearchController, SearchService
 from af.application.resource_leases import ResourceLeaseService
+from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
 from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
 from af.domain.agent_routing import DeterministicAgentRouter
@@ -39,9 +39,14 @@ from af.domain.classifiers import (
     CharacterCountClassifier,
     ClassifierChain,
     HelloClassifier,
+    TimeClassifier,
     UnknownClassifier,
 )
-from af.domain.procedures import CharacterCountProcedure, HelloProcedure
+from af.domain.procedures import (
+    CharacterCountProcedure,
+    CurrentTimeProcedure,
+    HelloProcedure,
+)
 from af.domain.resources import LeaseRepository
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier
@@ -75,7 +80,6 @@ from af.infrastructure.db_setup import (
 )
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
-from af.infrastructure.resource_leases import InMemoryLeaseRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
 from af.search.embedded_manager import embedded_search_registration
 from af.search.manager import SearchManager, bind_search_manager
@@ -121,7 +125,11 @@ class _PersistenceProvider(ServiceProvider):
                 scope=Scope.APPLICATION,
                 owned=False,
             )
-        if self._task_repository is not None and self._trace_repository is not None and self._lease_repository is not None:
+        if (
+            self._task_repository is not None
+            and self._trace_repository is not None
+            and self._lease_repository is not None
+        ):
             return
 
         container.bind(
@@ -173,12 +181,17 @@ class _FrameworkProvider(ServiceProvider):
             registry = ProcedureRegistry()
             registry.register(HelloProcedure())
             registry.register(CharacterCountProcedure())
+            registry.register(CurrentTimeProcedure())
             for contribution in resolve_procedure_contributions(resolver):
                 registry.register(contribution.procedure)
             return registry
 
         def create_classifier(resolver: Resolver) -> ClassifierChain:
-            classifiers: list[FrameworkClassifier] = [HelloClassifier(), CharacterCountClassifier()]
+            classifiers: list[FrameworkClassifier] = [
+                HelloClassifier(),
+                CharacterCountClassifier(),
+                TimeClassifier(),
+            ]
             classifiers.extend(
                 contribution.classifier
                 for contribution in resolve_procedure_contributions(resolver)
@@ -536,7 +549,9 @@ def _prepare_application(
     root.instance(Settings, resolved_settings)
     root.instance(ConfigSnapshot, resolved_config)
     application_providers: tuple[ServiceProvider, ...] = (
-        _PersistenceProvider(resolved_settings, task_repository, trace_repository, lease_repository),
+        _PersistenceProvider(
+            resolved_settings, task_repository, trace_repository, lease_repository
+        ),
         _FrameworkProvider(
             reuse_store,
             selector,
