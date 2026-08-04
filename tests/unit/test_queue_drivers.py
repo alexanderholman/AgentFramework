@@ -17,8 +17,9 @@ from af.framework.managers import (
     DriverResolutionError,
     HealthStatus,
 )
+from af.framework.relational import DatabaseStatement
 from af.infrastructure.sqlite import SQLiteDriver
-from af.messaging import EnvelopeKind, MessageEnvelope, MessageMetadata
+from af.messaging import EnvelopeKind, JsonEnvelopeCodec, MessageEnvelope, MessageMetadata
 from af.queue import (
     DatabaseQueueDriver,
     QueueDispatchDisposition,
@@ -228,6 +229,95 @@ def test_queue_manager_routes_database_driver_retry_and_dead_letter(tmp_path: Pa
 
     assert manager.reserve() is None
     manager.close()
+
+
+def test_queue_manager_releases_cancelled_reservation_without_consuming_attempt(
+    tmp_path: Path,
+) -> None:
+    manager = QueueManager(
+        connections={"primary": {"driver": "database"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=FakeClock(_NOW),
+    )
+    manager.install(
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(tmp_path / "queue-release.sqlite3"),
+            clock=FakeClock(_NOW),
+        )
+    )
+    manager.dispatch(_job("job-release"))
+
+    first = manager.reserve()
+    assert first is not None
+    assert first.attempt == 1
+    manager.release(first)
+
+    second = manager.reserve()
+    assert second is not None
+    assert second.attempt == 1
+    with pytest.raises(Exception) as stale:
+        manager.ack(first)
+    assert getattr(stale.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+    manager.ack(second)
+    manager.close()
+
+
+def test_database_queue_upgrades_legacy_table_without_losing_queued_work(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDriver(tmp_path / "queue-legacy.sqlite3")
+    job = _job("job-before-upgrade")
+    encoded = JsonEnvelopeCodec().encode(job.envelope).decode("utf-8")
+    timestamp = _NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    with database.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement(
+                """CREATE TABLE af_queue_jobs (
+                    message_id VARCHAR(200) PRIMARY KEY,
+                    message_type VARCHAR(128) NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    occurred_at VARCHAR(32) NOT NULL,
+                    lane VARCHAR(128) NOT NULL,
+                    available_at VARCHAR(32) NOT NULL,
+                    envelope_text TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL,
+                    backoff_seconds REAL NULL,
+                    reserved_at VARCHAR(32) NULL,
+                    dead_lettered_at VARCHAR(32) NULL
+                )"""
+            )
+        )
+        transaction.execute(
+            DatabaseStatement(
+                """INSERT INTO af_queue_jobs (
+                    message_id, message_type, schema_version, occurred_at, lane,
+                    available_at, envelope_text, attempt_count, max_attempts,
+                    backoff_seconds, reserved_at, dead_lettered_at
+                ) VALUES (
+                    :message_id, :message_type, 1, :occurred_at, 'default',
+                    :available_at, :envelope_text, 0, 1, NULL, NULL, NULL
+                )""",
+                {
+                    "message_id": "job-before-upgrade",
+                    "message_type": "jobs.example",
+                    "occurred_at": timestamp,
+                    "available_at": timestamp,
+                    "envelope_text": encoded,
+                },
+            )
+        )
+
+    driver = DatabaseQueueDriver(database, clock=FakeClock(_NOW))
+    reservation = driver.reserve()
+
+    assert reservation is not None
+    assert reservation.job.envelope.metadata.message_id == "job-before-upgrade"
+    assert reservation.fencing_token == 1
+    driver.ack(reservation)
+    driver.close()
 
 
 def test_database_queue_driver_reports_terminal_rejections_and_shutdown(tmp_path: Path) -> None:

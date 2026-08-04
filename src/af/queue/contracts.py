@@ -138,6 +138,7 @@ class QueueReservation:
     job: QueueJob
     attempt: int
     reserved_at: datetime
+    fencing_token: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.job, QueueJob):
@@ -145,9 +146,14 @@ class QueueReservation:
         if type(self.attempt) is not int or self.attempt < 1:
             raise ValueError("queue reservation attempt must be a positive integer")
         object.__setattr__(self, "reserved_at", _aware_utc(self.reserved_at, "reservation time"))
+        if self.fencing_token is not None and (
+            type(self.fencing_token) is not int or self.fencing_token < 1
+        ):
+            raise ValueError("queue reservation fencing token must be a positive integer")
 
     def __repr__(self) -> str:
         return (
             f"QueueReservation(message_id={self.job.envelope.metadata.message_id!r}, "
-            f"attempt={self.attempt!r}, reserved_at={self.reserved_at.isoformat()!r})"
+            f"attempt={self.attempt!r}, reserved_at={self.reserved_at.isoformat()!r}, "
+            f"fencing_token={self.fencing_token!r})"
         )
