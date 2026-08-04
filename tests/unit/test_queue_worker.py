@@ -395,7 +395,7 @@ def test_worker_kernel_cancellation_aborts_job() -> None:
     with pytest.raises(KeyboardInterrupt):
         kernel.run_once(consumer=consumer)
 
-    assert driver.retried == ["job-cancel"]
+    assert driver.released == ["job-cancel"]
     assert kernel.stats.cancellations == 1
     assert kernel.state is WorkerState.IDLE
 
@@ -439,7 +439,7 @@ def test_worker_kernel_durable_idempotency_survives_ack_failure() -> None:
 
     assert processed == ["job-ack-failure"]
     assert driver.acked == ["job-ack-failure"]
-    assert driver.retried == ["job-ack-failure"]
+    assert driver.released == ["job-ack-failure"]
 
 
 def test_worker_kernel_cancellation_during_ack_releases_reservation() -> None:
@@ -451,7 +451,7 @@ def test_worker_kernel_cancellation_during_ack_releases_reservation() -> None:
     with pytest.raises(KeyboardInterrupt):
         kernel.run_once(consumer=lambda job: None)
 
-    assert driver.retried == ["job-ack-cancel"]
+    assert driver.released == ["job-ack-cancel"]
 
 
 def test_worker_kernel_idempotency_failure_releases_reservation() -> None:
@@ -851,7 +851,7 @@ def test_worker_kernel_detects_idle_timeout_before_first_job() -> None:
 
 def test_worker_kernel_preserves_cancellation_when_release_fails() -> None:
     driver = _make_driver()
-    driver.fail_next_retry = True
+    driver.fail_next_release = True
     driver.dispatch(_job("job-cancel-release"))
     kernel = WorkerKernel(driver, clock=lambda: _NOW)
 
@@ -906,9 +906,11 @@ class _TestQueueDriver:
         self.acked: list[str] = []
         self.rejected: list[str] = []
         self.retried: list[str] = []
+        self.released: list[str] = []
         self.fail_next_ack = False
         self.next_ack_error: BaseException | None = None
         self.fail_next_retry = False
+        self.fail_next_release = False
         self.fail_next_close = False
         self._features = frozenset({QueueFeature.RESERVATION, QueueFeature.INLINE_EXECUTION})
 
@@ -991,6 +993,15 @@ class _TestQueueDriver:
             self.fail_next_retry = False
             raise RuntimeError("retry failed")
         self.retried.append(reservation.job.envelope.metadata.message_id)
+        self._queue.appendleft(reservation.job)
+
+    def release(self, reservation: QueueReservation, /) -> None:
+        if self.fail_next_release:
+            self.fail_next_release = False
+            raise RuntimeError("release failed")
+        self.released.append(reservation.job.envelope.metadata.message_id)
+        message_id = reservation.job.envelope.metadata.message_id
+        self._attempts[message_id] = max(0, self._attempts.get(message_id, 1) - 1)
         self._queue.appendleft(reservation.job)
 
     def close(self) -> None:

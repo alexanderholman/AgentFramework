@@ -164,7 +164,7 @@ class WorkerKernel:
             raise ValueError("worker heartbeat interval must be positive")
         if max_idle_time is not None and max_idle_time <= timedelta(0):
             raise ValueError("worker maximum idle time must be positive")
-        for method in ("reserve", "ack", "reject", "retry", "close"):
+        for method in ("reserve", "ack", "reject", "release", "retry", "close"):
             if not callable(getattr(driver, method, None)):
                 raise TypeError(f"worker driver requires callable {method}")
         if idempotency is not None and not callable(getattr(idempotency, "claim", None)):
@@ -425,7 +425,7 @@ class WorkerKernel:
         cancellation: BaseException,
     ) -> None:
         try:
-            self._driver.retry(reservation)
+            self._driver.release(reservation)
         except Exception as settlement_error:
             raise BaseExceptionGroup(
                 "queue cancellation and release both failed",
@@ -438,7 +438,7 @@ class WorkerKernel:
         acknowledgement_error: BaseException,
     ) -> None:
         try:
-            self._driver.retry(reservation)
+            self._driver.release(reservation)
         except Exception as settlement_error:
             raise BaseExceptionGroup(
                 "queue acknowledgement and release both failed",
