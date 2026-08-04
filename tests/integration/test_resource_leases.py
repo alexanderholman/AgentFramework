@@ -8,7 +8,6 @@ import pytest
 
 from af.domain.resources import (
     FenceToken,
-    Lease,
     LeaseState,
     ResourceBudget,
     ResourceIdentity,

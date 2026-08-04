@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Protocol
 
 
-class LeaseState(str, Enum):
+class LeaseState(StrEnum, Enum):
     """Lease lifecycle states matching the issue specification."""
 
     RESERVED = "reserved"
@@ -19,7 +19,7 @@ class LeaseState(str, Enum):
     RECONCILED = "reconciled"
 
 
-class ResourceKind(str, Enum):
+class ResourceKind(StrEnum, Enum):
     """Resource types that can be leased."""
 
     CPU = "cpu"
