@@ -100,7 +100,7 @@ class ResourceLeaseService:
             quantity=lease.quantity,
             requested_at=lease.requested_at,
             activated_at=now,
-            expires_at=now + lease.budget.max_duration,
+            expires_at=now + lease.budget.max_duration if lease.budget.max_duration else None,
             fence_token=FenceToken(value=fence_token.value + 1, created_at=now),
             invocation_id=lease.invocation_id,
             capability_digest=lease.capability_digest,
@@ -143,7 +143,7 @@ class ResourceLeaseService:
             quantity=lease.quantity,
             requested_at=lease.requested_at,
             activated_at=lease.activated_at,
-            expires_at=now + lease.budget.max_duration,
+            expires_at=now + lease.budget.max_duration if lease.budget.max_duration else None,
             fence_token=FenceToken(value=fence_token.value + 1, created_at=now),
             invocation_id=lease.invocation_id,
             capability_digest=lease.capability_digest,
@@ -334,6 +334,5 @@ class ResourceLeaseService:
         if lease.authorization_digest and lease.authorization_digest != authorization_digest:
             raise LeaseAuthorizationExpired(
                 lease_id=lease.id,
-                expected=lease.authorization_digest,
-                provided=authorization_digest,
+                authorized_by=lease.authorization_digest or "unknown",
             )

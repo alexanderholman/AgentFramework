@@ -205,7 +205,7 @@ class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
             try:
                 tz = ZoneInfo(tz_name)
             except (KeyError, ValueError):
-                tz = dt.UTC
+                tz = ZoneInfo("UTC")
             now = dt.datetime.now(tz)
         else:
             now = dt.datetime.now(dt.UTC)

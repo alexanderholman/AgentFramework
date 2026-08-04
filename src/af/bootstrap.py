@@ -80,6 +80,7 @@ from af.infrastructure.db_setup import (
 )
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
+from af.infrastructure.resource_leases import InMemoryLeaseRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
 from af.search.embedded_manager import embedded_search_registration
 from af.search.manager import SearchManager, bind_search_manager
@@ -124,6 +125,12 @@ class _PersistenceProvider(ServiceProvider):
                 lambda _: lease_repository,
                 scope=Scope.APPLICATION,
                 owned=False,
+            )
+        else:
+            container.bind(
+                LeaseRepository,
+                lambda _: InMemoryLeaseRepository(),
+                scope=Scope.APPLICATION,
             )
         if (
             self._task_repository is not None
@@ -404,7 +411,7 @@ class _ApplicationProvider(ServiceProvider):
         )
         container.bind(
             ResourceLeaseService,
-            lambda current: ResourceLeaseService(current.resolve(LeaseRepository)),
+            lambda current: ResourceLeaseService(current.resolve_token(LeaseRepository)),
             scope=Scope.APPLICATION,
         )
 
