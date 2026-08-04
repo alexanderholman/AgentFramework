@@ -27,6 +27,20 @@ from af.queue.worker import (
 _NOW = datetime(2026, 8, 1, 15, tzinfo=UTC)
 
 
+def test_queue_public_api_exports_worker_reliability_boundaries() -> None:
+    from af.queue import (
+        IdempotencyClaim,
+        IdempotencyStore,
+        InMemoryIdempotencyStore,
+        JobScopeFactory,
+    )
+
+    assert IdempotencyClaim is not None
+    assert IdempotencyStore is not None
+    assert InMemoryIdempotencyStore is not None
+    assert JobScopeFactory is not None
+
+
 def _job(message_id: str, **overrides: object) -> QueueJob:
     fields: dict[str, Any] = {
         "envelope": MessageEnvelope.create(
