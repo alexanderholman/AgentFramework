@@ -5,14 +5,14 @@ import pytest
 from af.graph.contracts import (
     GraphPath,
     GraphQuery,
-    GraphTransaction,
     GraphSchema,
+    GraphTransaction,
     GraphTraversal,
 )
 
 
 class TestParameterizedQuery:
-    """Acceptance criterion: Queries bind parameters and reject interpolation of untrusted values."""
+    """Acceptance criterion: Queries bind parameters and reject interpolation."""
 
     def test_query_accepts_parameterized_text_with_placeholders(self) -> None:
         query = GraphQuery(
@@ -128,7 +128,7 @@ class TestGraphPath:
 
 
 class TestGraphTransaction:
-    """Acceptance criterion: Transactions and unsupported Community/vendor capabilities are explicit."""
+    """Acceptance criterion: Transactions and unsupported capabilities are explicit."""
 
     def test_transaction_validates_id(self) -> None:
         txn = GraphTransaction(

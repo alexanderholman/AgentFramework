@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from af.framework.managers import CapabilitySet
-from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
+from af.graph.contracts import GraphFeature, GraphQuery
 from af.graph.drivers.neo4j import Neo4jCommunityDriver
 
 
@@ -45,10 +45,12 @@ class TestNeo4jCommunityDriver:
     def test_driver_query_rejects_untrusted_text(self) -> None:
         driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
         with pytest.raises(ValueError, match="untrusted"):
-            driver.query(GraphQuery(
-                text="MATCH (n) RETURN n; DROP DATABASE",
-                limit=10,
-            ))
+            driver.query(
+                GraphQuery(
+                    text="MATCH (n) RETURN n; DROP DATABASE",
+                    limit=10,
+                )
+            )
 
     def test_driver_create_node_stores_node(self) -> None:
         driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")

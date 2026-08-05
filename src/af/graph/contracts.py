@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
-
-import re
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -46,7 +45,9 @@ def _properties(props: Mapping[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _PARAMETER_PLACEHOLDER_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
-_UNTRUSTED_VALUE_RE = re.compile(r"(;|--|/\*|\*/|DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|EXEC)", re.IGNORECASE)
+_UNTRUSTED_VALUE_RE = re.compile(
+    r"(;|--|/\*|\*/|DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|EXEC)", re.IGNORECASE
+)
 
 
 def _validate_parameter_value(value: Any) -> None:
@@ -64,9 +65,12 @@ def _validate_parameterized_query(text: str, parameters: Mapping[str, Any]) -> N
         raise ValueError("Query contains placeholders but no parameters provided")
 
     if not placeholder_names and parameters:
-        raise ValueError("Query contains no placeholders but parameters provided - possible interpolation attempt")
+        raise ValueError(
+            "Query contains no placeholders but parameters provided — "
+            "possible interpolation attempt"
+        )
 
-    for key, value in parameters.items():
+    for _, value in parameters.items():
         _validate_parameter_value(value)
 
     if placeholder_names and set(parameters.keys()) != placeholder_names:

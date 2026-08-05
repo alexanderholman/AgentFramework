@@ -44,10 +44,12 @@ class TestOrientDBDriver:
     def test_driver_query_rejects_untrusted_text(self) -> None:
         driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
         with pytest.raises(ValueError, match="untrusted"):
-            driver.query(GraphQuery(
-                text="SELECT FROM V; DROP CLUSTER",
-                limit=10,
-            ))
+            driver.query(
+                GraphQuery(
+                    text="SELECT FROM V; DROP CLUSTER",
+                    limit=10,
+                )
+            )
 
     def test_driver_create_node_stores_node(self) -> None:
         driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from af.framework.managers import CapabilitySet
@@ -14,13 +14,14 @@ from af.graph.contracts import (
 )
 from af.graph.manager import GraphDriver
 
-
 # OrientDB capabilities (Enterprise feature set)
-_ORIENTDB_CAPABILITIES: frozenset[str] = frozenset({
-    GraphFeature.QUERY.value,
-    GraphFeature.PERSISTENCE.value,
-    GraphFeature.INDEXING.value,
-})
+_ORIENTDB_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        GraphFeature.QUERY.value,
+        GraphFeature.PERSISTENCE.value,
+        GraphFeature.INDEXING.value,
+    }
+)
 
 
 @dataclass
@@ -35,6 +36,8 @@ class OrientDBDriver(GraphDriver):
 
     uri: str
     database: str
+    _nodes: dict[str, GraphNode] = field(default_factory=dict, repr=False)
+    _edges: dict[str, GraphEdge] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         if not self.uri:
@@ -50,52 +53,14 @@ class OrientDBDriver(GraphDriver):
         available = {f.value for f in required} & _ORIENTDB_CAPABILITIES
         return CapabilitySet(values=frozenset(available))
 
-    def query(self, query: GraphQuery) -> Sequence[GraphResult]:
+    def query(self, query: GraphQuery, **kwargs: Any) -> list[GraphResult]:
         if self._contains_untrusted(query.text):
             raise ValueError(f"untrusted query text rejected: {query.text!r}")
         return []
 
-    def create_node(self, node_id: str, labels: tuple[str, ...], properties: Mapping[str, Any]) -> None:
-        pass
-
-    def create_edge(
-        self,
-        edge_id: str,
-        source_id: str,
-        target_id: str,
-        relation_type: str,
-        properties: Mapping[str, Any],
+    def create_node(
+        self, node_id: str, labels: tuple[str, ...], properties: Mapping[str, Any]
     ) -> None:
-        pass
-
-    def delete_node(self, node_id: str) -> None:
-        pass
-
-    def delete_edge(self, edge_id: str) -> None:
-        pass
-
-    # -- In-memory store for testing ----------------------------------------
-
-    def __init__(self, uri: str, database: str) -> None:
-        self.uri = uri
-        self.database = database
-        self._nodes: dict[str, GraphNode] = {}
-        self._edges: dict[str, GraphEdge] = {}
-
-        if not uri:
-            raise ValueError("uri must not be empty")
-        if not uri.startswith("remote://"):
-            raise ValueError("uri must use remote:// scheme for OrientDB")
-        if not database:
-            raise ValueError("database must not be empty")
-
-    def get_node(self, node_id: str) -> GraphNode | None:
-        return self._nodes.get(node_id)
-
-    def get_edge(self, edge_id: str) -> GraphEdge | None:
-        return self._edges.get(edge_id)
-
-    def create_node(self, node_id: str, labels: tuple[str, ...], properties: Mapping[str, Any]) -> None:
         self._nodes[node_id] = GraphNode(
             node_id=node_id,
             labels=labels,
@@ -124,10 +89,30 @@ class OrientDBDriver(GraphDriver):
     def delete_edge(self, edge_id: str) -> None:
         self._edges.pop(edge_id, None)
 
+    # -- In-memory accessors -------------------------------------------------
+
+    def get_node(self, node_id: str) -> GraphNode | None:
+        return self._nodes.get(node_id)
+
+    def get_edge(self, edge_id: str) -> GraphEdge | None:
+        return self._edges.get(edge_id)
+
     # -- Helpers ------------------------------------------------------------
 
     @staticmethod
     def _contains_untrusted(text: str) -> bool:
-        patterns = (";", "--", "/*", "*/", "DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "EXEC")
+        patterns = (
+            ";",
+            "--",
+            "/*",
+            "*/",
+            "DROP",
+            "DELETE",
+            "INSERT",
+            "UPDATE",
+            "ALTER",
+            "CREATE",
+            "EXEC",
+        )
         upper = text.upper()
         return any(p.upper() in upper for p in patterns)

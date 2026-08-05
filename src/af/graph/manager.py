@@ -12,11 +12,13 @@ from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
 class GraphDriver(Protocol):
     """Protocol for graph drivers."""
 
-    def verify_capabilities(self, required: set[GraphFeature]) -> CapabilitySet[GraphFeature]: ...
+    def verify_capabilities(self, required: set[GraphFeature]) -> CapabilitySet: ...
 
     def query(self, query: GraphQuery, **kwargs: Any) -> list[GraphResult]: ...
 
-    def create_node(self, node_id: str, labels, properties: Mapping[str, Any]) -> None: ...
+    def create_node(
+        self, node_id: str, labels: tuple[str, ...], properties: Mapping[str, Any]
+    ) -> None: ...
 
     def create_edge(
         self,
@@ -76,9 +78,9 @@ class GraphManager:
         self,
         driver_names: set[str],
         required: set[GraphFeature],
-    ) -> dict[str, CapabilitySet[GraphFeature]]:
+    ) -> dict[str, CapabilitySet]:
         """Verify capabilities for given drivers against required features."""
-        result: dict[str, CapabilitySet[GraphFeature]] = {}
+        result: dict[str, CapabilitySet] = {}
         for name in driver_names:
             if name not in self._drivers:
                 raise KeyError(name)
@@ -93,7 +95,7 @@ class GraphManager:
     def create_node(
         self,
         node_id: str,
-        labels,
+        labels: tuple[str, ...],
         properties: Mapping[str, Any],
         driver_name: str,
     ) -> None:
