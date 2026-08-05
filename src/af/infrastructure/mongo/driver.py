@@ -22,7 +22,6 @@ from af.domain.document.contracts import (
     AggregationPipeline,
     BulkOperation,
     BulkWriteResult,
-    DocumentChange,
     DocumentFeature,
     DocumentFilter,
     DocumentOperationError,
@@ -225,9 +224,7 @@ class MongoDBDriver:
     def require(self, feature: DocumentFeature) -> None:
         if not self.supports(feature):
             if feature is DocumentFeature.TRANSACTION:
-                raise TransactionNotSupportedError(
-                    "transactions require a replica set topology"
-                )
+                raise TransactionNotSupportedError("transactions require a replica set topology")
             raise UnsupportedDocumentFeature(feature)
 
     def _assert_open(self) -> None:

@@ -8,7 +8,7 @@ import pytest
 
 from af.framework.managers import CapabilitySet
 from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
-from af.graph.manager import GraphDriver, GraphManager
+from af.graph.manager import GraphDriver, GraphManager, bind_graph_manager
 
 
 @dataclass
@@ -266,3 +266,34 @@ def test_graph_driver_protocol_requires_methods() -> None:
     assert hasattr(driver, "create_edge")
     assert hasattr(driver, "delete_node")
     assert hasattr(driver, "delete_edge")
+
+
+def test_bind_graph_manager_default_registry_has_neo4j() -> None:
+    """bind_graph_manager() registers Neo4j Community by default."""
+    mgr = bind_graph_manager()
+    assert mgr.default_name == "neo4j-community"
+    from af.graph.drivers.neo4j import Neo4jCommunityDriver
+
+    assert isinstance(mgr.get_default(), Neo4jCommunityDriver)
+
+
+def test_bind_graph_manager_default_registry_has_orientdb() -> None:
+    """bind_graph_manager() registers OrientDB by default."""
+    mgr = bind_graph_manager()
+    from af.graph.drivers.orientdb import OrientDBDriver
+
+    assert isinstance(mgr.get("orientdb"), OrientDBDriver)
+
+
+def test_bind_graph_manager_neo4j_capability_verification() -> None:
+    """Neo4j Community driver reports correct capabilities via manager."""
+    mgr = bind_graph_manager()
+    result = mgr.verify_capabilities({"neo4j-community"}, {GraphFeature.QUERY})
+    assert GraphFeature.QUERY in result["neo4j-community"]
+
+
+def test_bind_graph_manager_orientdb_has_indexing() -> None:
+    """OrientDB driver reports indexing capability via manager."""
+    mgr = bind_graph_manager()
+    result = mgr.verify_capabilities({"orientdb"}, {GraphFeature.INDEXING})
+    assert GraphFeature.INDEXING in result["orientdb"]
