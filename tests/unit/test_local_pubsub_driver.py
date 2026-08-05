@@ -1,4 +1,4 @@
-"""Tests for LocalPubSubDriver – in-process pub-sub with durable replay."""
+"""Tests for LocalPubSubDriver - in-process pub-sub with durable replay."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from af.framework.errors import PlatformReason
 from af.messaging.envelopes import EnvelopeKind, MessageEnvelope, MessageMetadata
 from af.messaging.pubsub import (
     BroadcastChannelKind,
@@ -110,7 +111,7 @@ class TestLocalPubSubFanOut:
 
 
 # ---------------------------------------------------------------------------
-# Test: consumer group – at-most-one delivery
+# Test: consumer group - at-most-one delivery
 # ---------------------------------------------------------------------------
 
 
@@ -232,7 +233,7 @@ class TestPubSubSchema:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalBroadcastManager – public channel
+# Test: LocalBroadcastManager - public channel
 # ---------------------------------------------------------------------------
 
 
@@ -273,7 +274,7 @@ class TestLocalBroadcastManagerPublic:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalBroadcastManager – private channel auth
+# Test: LocalBroadcastManager - private channel auth
 # ---------------------------------------------------------------------------
 
 
@@ -300,6 +301,42 @@ class TestLocalBroadcastManagerPrivate:
                 auth_token="wrong-token",
             )
 
+    def test_rejects_unauthorized_registration_before_mutation(self) -> None:
+        mgr = LocalBroadcastManager()
+        subscription = BroadcastSubscription(
+            channel="secret",
+            client_id="client-secret",
+            kind=BroadcastChannelKind.PRIVATE,
+            auth_token="forged-token",
+        )
+
+        with pytest.raises(PubSubOperationError) as captured:
+            mgr.register_client(subscription)
+
+        assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
+        mgr.register_auth_token("secret", "real-token")
+        report = mgr.publish(
+            channel="secret",
+            envelope=_envelope(),
+            kind=BroadcastChannelKind.PRIVATE,
+            auth_token="real-token",
+        )
+        assert report.clients_reached == 0
+
+    def test_private_publish_excludes_public_subscription_with_same_channel(self) -> None:
+        mgr = LocalBroadcastManager()
+        mgr.register_client(BroadcastSubscription(channel="secret", client_id="public-client"))
+        mgr.register_auth_token("secret", "real-token")
+
+        report = mgr.publish(
+            channel="secret",
+            envelope=_envelope(),
+            kind=BroadcastChannelKind.PRIVATE,
+            auth_token="real-token",
+        )
+
+        assert report.clients_reached == 0
+
     def test_accepts_valid_auth_token(self) -> None:
         mgr = LocalBroadcastManager()
         mgr.register_auth_token("secret", "real-token")
@@ -323,7 +360,7 @@ class TestLocalBroadcastManagerPrivate:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalBroadcastManager – presence channel
+# Test: LocalBroadcastManager - presence channel
 # ---------------------------------------------------------------------------
 
 
@@ -350,9 +387,38 @@ class TestLocalBroadcastManagerPresence:
                 auth_token="bad-token",
             )
 
+    def test_rejects_unauthorized_registration_without_disclosure(self) -> None:
+        mgr = LocalBroadcastManager()
+        subscription = BroadcastSubscription(
+            channel="presence-secret",
+            client_id="client-secret",
+            kind=BroadcastChannelKind.PRESENCE,
+            auth_token="token-secret",
+        )
+
+        with pytest.raises(PubSubOperationError) as captured:
+            mgr.register_client(subscription)
+
+        assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
+        public_error = str(captured.value)
+        assert "presence-secret" not in public_error
+        assert "client-secret" not in public_error
+        assert "token-secret" not in public_error
+
+
+def test_broadcast_subscription_repr_redacts_auth_token() -> None:
+    subscription = BroadcastSubscription(
+        channel="secret",
+        client_id="client",
+        kind=BroadcastChannelKind.PRIVATE,
+        auth_token="token-secret",
+    )
+
+    assert "token-secret" not in repr(subscription)
+
 
 # ---------------------------------------------------------------------------
-# Test: LocalBroadcastManager – subscription lifecycle
+# Test: LocalBroadcastManager - subscription lifecycle
 # ---------------------------------------------------------------------------
 
 
@@ -381,7 +447,7 @@ class TestLocalBroadcastManagerLifecycle:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalBroadcastManager – dispatch report
+# Test: LocalBroadcastManager - dispatch report
 # ---------------------------------------------------------------------------
 
 
@@ -401,7 +467,7 @@ class TestLocalBroadcastDispatchReport:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalStreamDriver – key ordering
+# Test: LocalStreamDriver - key ordering
 # ---------------------------------------------------------------------------
 
 
@@ -430,7 +496,7 @@ class TestLocalStreamDriverKeyOrdering:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalStreamDriver – global ordering
+# Test: LocalStreamDriver - global ordering
 # ---------------------------------------------------------------------------
 
 
@@ -478,7 +544,7 @@ class TestLocalStreamDriverGlobalOrdering:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalStreamDriver – none scope
+# Test: LocalStreamDriver - none scope
 # ---------------------------------------------------------------------------
 
 
@@ -500,7 +566,7 @@ class TestLocalStreamDriverNoneScope:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalStreamDriver – fan-out with ordering
+# Test: LocalStreamDriver - fan-out with ordering
 # ---------------------------------------------------------------------------
 
 
@@ -522,7 +588,7 @@ class TestLocalStreamDriverFanOut:
 
 
 # ---------------------------------------------------------------------------
-# Test: LocalStreamDriver – extends LocalPubSubDriver
+# Test: LocalStreamDriver - extends LocalPubSubDriver
 # ---------------------------------------------------------------------------
 
 

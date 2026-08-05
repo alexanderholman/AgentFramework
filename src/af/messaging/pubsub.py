@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import threading
+import uuid as _uuid
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum, StrEnum
 from typing import Protocol
@@ -266,16 +269,18 @@ class BroadcastSubscription:
     channel: str
     client_id: str
     kind: BroadcastChannelKind = BroadcastChannelKind.PUBLIC
-    auth_token: str | None = None
+    auth_token: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _identifier(self.channel, "channel")
         _identifier(self.client_id, "client id")
         if not isinstance(self.kind, BroadcastChannelKind):
             raise InvalidPubSubSchema("broadcast channel kind is invalid")
-        if self.kind in (BroadcastChannelKind.PRIVATE, BroadcastChannelKind.PRESENCE):
-            if not self.auth_token:
-                raise InvalidPubSubSchema("private and presence channels require an auth token")
+        if (
+            self.kind in (BroadcastChannelKind.PRIVATE, BroadcastChannelKind.PRESENCE)
+            and not self.auth_token
+        ):
+            raise InvalidPubSubSchema("private and presence channels require an auth token")
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,10 +351,6 @@ def _identifier(value: object, field: str) -> str:
 # ---------------------------------------------------------------------------
 # Local in-process implementation
 # ---------------------------------------------------------------------------
-
-import threading
-import uuid as _uuid
-from collections import defaultdict
 
 
 class _TopicState:
@@ -562,6 +563,15 @@ class LocalBroadcastManager:
 
     def register_client(self, subscription: BroadcastSubscription) -> None:
         """Register a client subscription on a channel."""
+        if subscription.kind in (
+            BroadcastChannelKind.PRIVATE,
+            BroadcastChannelKind.PRESENCE,
+        ):
+            self._require_authorized(
+                subscription.channel,
+                subscription.auth_token,
+                stage="broadcast_register",
+            )
         self._subscriptions.setdefault(subscription.channel, []).append(subscription)
 
     def register_auth_token(self, channel: str, token: str) -> None:
@@ -579,6 +589,14 @@ class LocalBroadcastManager:
         except ValueError:
             return False
 
+    def _require_authorized(self, channel: str, token: str | None, *, stage: str) -> None:
+        valid_tokens = self._auth_tokens.get(channel)
+        if not token or valid_tokens is None or token not in valid_tokens:
+            raise PubSubOperationError(
+                reason=PlatformReason.AUTHORIZATION_DENIED,
+                stage=stage,
+            )
+
     # -- publish --
 
     def publish(
@@ -594,17 +612,13 @@ class LocalBroadcastManager:
         and must match a registered token.
         """
         if kind in (BroadcastChannelKind.PRIVATE, BroadcastChannelKind.PRESENCE):
-            if not auth_token:
-                raise PubSubOperationError(
-                    stage="broadcast_publish",
-                )
-            valid_tokens = self._auth_tokens.get(channel)
-            if valid_tokens is None or auth_token not in valid_tokens:
-                raise PubSubOperationError(
-                    stage="broadcast_publish",
-                )
+            self._require_authorized(channel, auth_token, stage="broadcast_publish")
 
-        subs = self._subscriptions.get(channel, [])
+        subs = [
+            subscription
+            for subscription in self._subscriptions.get(channel, [])
+            if subscription.kind is kind
+        ]
         from af.messaging.envelopes import JsonEnvelopeCodec
 
         codec = JsonEnvelopeCodec()
@@ -645,9 +659,9 @@ class LocalStreamDriver(LocalPubSubDriver, StreamDriver):
     ) -> None:
         """Publish with ordering guarantees.
 
-        * ``GLOBAL`` – single global counter across all topics.
-        * ``KEY`` – per-key counter (``ordering_key`` used).
-        * ``NONE`` – delegates to ``publish`` (no ordering guarantee).
+        * ``GLOBAL`` - single global counter across all topics.
+        * ``KEY`` - per-key counter (``ordering_key`` used).
+        * ``NONE`` - delegates to ``publish`` (no ordering guarantee).
         """
         if scope == OrderingScope.NONE:
             self.publish(topic, envelope)
