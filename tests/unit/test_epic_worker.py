@@ -80,7 +80,11 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
                     "lovelace-general": {
                         "npm": "@ai-sdk/openai-compatible",
                         "name": "Lovelace General",
-                        "options": {"baseURL": "http://127.0.0.1:8080/v1", "timeout": 900000},
+                        "options": {
+                            "baseURL": "http://127.0.0.1:8080/v1",
+                            "timeout": 900000,
+                            "apiKey": "local",
+                        },
                         "models": {"qwen": {"name": "Qwen", "tool_call": True}},
                     }
                 }
