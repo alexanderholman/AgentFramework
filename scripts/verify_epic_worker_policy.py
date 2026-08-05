@@ -177,7 +177,7 @@ def verify_agent(agent: dict[str, Any], policy_root: Path) -> None:
         _runtime_fail("resolved tools are missing")
     tools = cast(dict[str, Any], tools)
     for name in ("bash", "task", "webfetch", "websearch", "skill", "question"):
-        if tools.get(name) is not False:
+        if tools.get(name, False) is not False:
             _runtime_fail(f"dangerous tool remains enabled: {name}")
 
     raw_rules = agent.get("permission")

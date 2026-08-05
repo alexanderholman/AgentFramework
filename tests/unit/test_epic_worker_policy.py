@@ -160,6 +160,16 @@ def test_runtime_agent_policy_allows_only_private_tool_output(tmp_path: Path) ->
     module.verify_agent(_valid_agent(module, tmp_path), tmp_path)
 
 
+def test_runtime_agent_policy_accepts_omitted_denied_tool(tmp_path: Path) -> None:
+    module = _load_verifier()
+    agent = _valid_agent(module, tmp_path)
+    tools = agent["tools"]
+    assert isinstance(tools, dict)
+    del tools["websearch"]
+
+    module.verify_agent(agent, tmp_path)
+
+
 def test_runtime_agent_policy_rejects_external_allow(tmp_path: Path) -> None:
     module = _load_verifier()
     agent = _valid_agent(module, tmp_path)
