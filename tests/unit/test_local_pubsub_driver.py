@@ -461,6 +461,36 @@ class TestLocalBroadcastManagerLifecycle:
         result = mgr.unregister_client(sub)
         assert result is False
 
+    def test_restricted_unregister_requires_kind_scoped_authorization(self) -> None:
+        mgr = LocalBroadcastManager()
+        mgr.register_auth_token("secret", "real-token", kind=BroadcastChannelKind.PRIVATE)
+        authorized = BroadcastSubscription(
+            channel="secret",
+            client_id="client",
+            kind=BroadcastChannelKind.PRIVATE,
+            auth_token="real-token",
+        )
+        mgr.register_client(authorized)
+        forged = BroadcastSubscription(
+            channel="secret",
+            client_id="client",
+            kind=BroadcastChannelKind.PRIVATE,
+            auth_token="forged-token",
+        )
+
+        with pytest.raises(PubSubOperationError) as captured:
+            mgr.unregister_client(forged)
+
+        assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
+        report = mgr.publish(
+            channel="secret",
+            envelope=_envelope(),
+            kind=BroadcastChannelKind.PRIVATE,
+            auth_token="real-token",
+        )
+        assert report.clients_reached == 1
+        assert mgr.unregister_client(authorized) is True
+
 
 # ---------------------------------------------------------------------------
 # Test: LocalBroadcastManager - dispatch report

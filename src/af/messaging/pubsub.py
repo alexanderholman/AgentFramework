@@ -607,6 +607,16 @@ class LocalBroadcastManager:
 
     def unregister_client(self, subscription: BroadcastSubscription) -> bool:
         """Remove a subscription. Returns True if found and removed."""
+        if subscription.kind in (
+            BroadcastChannelKind.PRIVATE,
+            BroadcastChannelKind.PRESENCE,
+        ):
+            self._require_authorized(
+                subscription.channel,
+                subscription.kind,
+                subscription.auth_token,
+                stage="broadcast_unregister",
+            )
         subs = self._subscriptions.get(subscription.channel)
         if subs is None:
             return False
