@@ -62,6 +62,8 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
     directive.write_text("Follow the epic.\n", encoding="utf-8")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    worker_link = tmp_path / "epic-worker"
+    worker_link.symlink_to(EPIC_WORKER)
     capture = tmp_path / "memlog-args.txt"
     opencode_capture = tmp_path / "opencode-args.txt"
     prompt_capture = tmp_path / "opencode-prompt.txt"
@@ -184,7 +186,7 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
         environment["AF_EPIC_MEMLOG_SESSION_ID"] = configured_session_id
 
     completed = subprocess.run(
-        ["bash", str(EPIC_WORKER)],
+        ["bash", str(worker_link)],
         capture_output=True,
         check=False,
         env=environment,

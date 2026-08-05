@@ -19,7 +19,17 @@ MEMLOG_AGENT_ID="${AF_EPIC_MEMLOG_AGENT_ID:-pr.command.alpha}"
 MEMLOG_AGENT_NAME="${AF_EPIC_MEMLOG_AGENT_NAME:-Alpha}"
 MEMLOG_SESSION_ID="${AF_EPIC_MEMLOG_SESSION_ID:-agentframework-epic-$EPIC_NUMBER-worker}"
 EXECUTION_MODE="checkpoint-only"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_SOURCE" ]]; do
+  source_dir="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
+  source_target="$(readlink "$SCRIPT_SOURCE")"
+  if [[ "$source_target" = /* ]]; then
+    SCRIPT_SOURCE="$source_target"
+  else
+    SCRIPT_SOURCE="$source_dir/$source_target"
+  fi
+done
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
 POLICY_VERIFIER="${AF_EPIC_POLICY_VERIFIER:-$SCRIPT_DIR/verify_epic_worker_policy.py}"
 POLICY_PYTHON="${AF_EPIC_POLICY_PYTHON:-python3}"
 OPENCODE_POLICY_DIR="$STATE_DIR/opencode-policy"
