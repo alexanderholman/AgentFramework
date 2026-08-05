@@ -292,6 +292,23 @@ class BroadcastDispatchReport:
     payload_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class _BroadcastRecipient:
+    """Credential-free recipient retained after subscription authorization."""
+
+    channel: str
+    client_id: str
+    kind: BroadcastChannelKind
+
+    @classmethod
+    def from_subscription(cls, subscription: BroadcastSubscription) -> _BroadcastRecipient:
+        return cls(
+            channel=subscription.channel,
+            client_id=subscription.client_id,
+            kind=subscription.kind,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Driver protocols
 # ---------------------------------------------------------------------------
@@ -556,8 +573,8 @@ class LocalBroadcastManager:
     """
 
     def __init__(self) -> None:
-        self._subscriptions: dict[str, list[BroadcastSubscription]] = {}
-        self._auth_tokens: dict[str, set[str]] = {}
+        self._subscriptions: dict[str, list[_BroadcastRecipient]] = {}
+        self._auth_tokens: dict[tuple[str, BroadcastChannelKind], set[str]] = {}
 
     # -- registration helpers --
 
@@ -569,28 +586,46 @@ class LocalBroadcastManager:
         ):
             self._require_authorized(
                 subscription.channel,
+                subscription.kind,
                 subscription.auth_token,
                 stage="broadcast_register",
             )
-        self._subscriptions.setdefault(subscription.channel, []).append(subscription)
+        recipient = _BroadcastRecipient.from_subscription(subscription)
+        self._subscriptions.setdefault(subscription.channel, []).append(recipient)
 
-    def register_auth_token(self, channel: str, token: str) -> None:
+    def register_auth_token(
+        self,
+        channel: str,
+        token: str,
+        *,
+        kind: BroadcastChannelKind,
+    ) -> None:
         """Register an auth token for a PRIVATE or PRESENCE channel."""
-        self._auth_tokens.setdefault(channel, set()).add(token)
+        if kind not in (BroadcastChannelKind.PRIVATE, BroadcastChannelKind.PRESENCE):
+            raise InvalidPubSubSchema("auth tokens require a private or presence channel kind")
+        self._auth_tokens.setdefault((channel, kind), set()).add(token)
 
     def unregister_client(self, subscription: BroadcastSubscription) -> bool:
         """Remove a subscription. Returns True if found and removed."""
         subs = self._subscriptions.get(subscription.channel)
         if subs is None:
             return False
+        recipient = _BroadcastRecipient.from_subscription(subscription)
         try:
-            subs.remove(subscription)
+            subs.remove(recipient)
             return True
         except ValueError:
             return False
 
-    def _require_authorized(self, channel: str, token: str | None, *, stage: str) -> None:
-        valid_tokens = self._auth_tokens.get(channel)
+    def _require_authorized(
+        self,
+        channel: str,
+        kind: BroadcastChannelKind,
+        token: str | None,
+        *,
+        stage: str,
+    ) -> None:
+        valid_tokens = self._auth_tokens.get((channel, kind))
         if not token or valid_tokens is None or token not in valid_tokens:
             raise PubSubOperationError(
                 reason=PlatformReason.AUTHORIZATION_DENIED,
@@ -612,7 +647,7 @@ class LocalBroadcastManager:
         and must match a registered token.
         """
         if kind in (BroadcastChannelKind.PRIVATE, BroadcastChannelKind.PRESENCE):
-            self._require_authorized(channel, auth_token, stage="broadcast_publish")
+            self._require_authorized(channel, kind, auth_token, stage="broadcast_publish")
 
         subs = [
             subscription

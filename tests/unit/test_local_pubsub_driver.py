@@ -292,7 +292,7 @@ class TestLocalBroadcastManagerPrivate:
 
     def test_rejects_invalid_auth_token(self) -> None:
         mgr = LocalBroadcastManager()
-        mgr.register_auth_token("secret", "real-token")
+        mgr.register_auth_token("secret", "real-token", kind=BroadcastChannelKind.PRIVATE)
         with pytest.raises(PubSubOperationError):
             mgr.publish(
                 channel="secret",
@@ -314,7 +314,7 @@ class TestLocalBroadcastManagerPrivate:
             mgr.register_client(subscription)
 
         assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
-        mgr.register_auth_token("secret", "real-token")
+        mgr.register_auth_token("secret", "real-token", kind=BroadcastChannelKind.PRIVATE)
         report = mgr.publish(
             channel="secret",
             envelope=_envelope(),
@@ -326,7 +326,7 @@ class TestLocalBroadcastManagerPrivate:
     def test_private_publish_excludes_public_subscription_with_same_channel(self) -> None:
         mgr = LocalBroadcastManager()
         mgr.register_client(BroadcastSubscription(channel="secret", client_id="public-client"))
-        mgr.register_auth_token("secret", "real-token")
+        mgr.register_auth_token("secret", "real-token", kind=BroadcastChannelKind.PRIVATE)
 
         report = mgr.publish(
             channel="secret",
@@ -339,7 +339,7 @@ class TestLocalBroadcastManagerPrivate:
 
     def test_accepts_valid_auth_token(self) -> None:
         mgr = LocalBroadcastManager()
-        mgr.register_auth_token("secret", "real-token")
+        mgr.register_auth_token("secret", "real-token", kind=BroadcastChannelKind.PRIVATE)
         mgr.register_client(
             BroadcastSubscription(
                 channel="secret",
@@ -378,7 +378,7 @@ class TestLocalBroadcastManagerPresence:
 
     def test_rejects_invalid_auth_token(self) -> None:
         mgr = LocalBroadcastManager()
-        mgr.register_auth_token("presence-room", "token-a")
+        mgr.register_auth_token("presence-room", "token-a", kind=BroadcastChannelKind.PRESENCE)
         with pytest.raises(PubSubOperationError):
             mgr.publish(
                 channel="presence-room",
@@ -386,6 +386,22 @@ class TestLocalBroadcastManagerPresence:
                 kind=BroadcastChannelKind.PRESENCE,
                 auth_token="bad-token",
             )
+
+    def test_private_token_cannot_authorize_presence_registration(self) -> None:
+        mgr = LocalBroadcastManager()
+        mgr.register_auth_token("shared-room", "private-token", kind=BroadcastChannelKind.PRIVATE)
+
+        with pytest.raises(PubSubOperationError) as captured:
+            mgr.register_client(
+                BroadcastSubscription(
+                    channel="shared-room",
+                    client_id="presence-client",
+                    kind=BroadcastChannelKind.PRESENCE,
+                    auth_token="private-token",
+                )
+            )
+
+        assert captured.value.reason is PlatformReason.AUTHORIZATION_DENIED
 
     def test_rejects_unauthorized_registration_without_disclosure(self) -> None:
         mgr = LocalBroadcastManager()
