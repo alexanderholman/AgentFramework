@@ -55,7 +55,7 @@ def test_isolated_opencode_installer_creates_sans_mmpr_layout(tmp_path: Path) ->
         "tester",
         "general",
     }
-    serialized = json.dumps(config).casefold()
+    serialized = json.dumps(config).casefold().replace(str(root).casefold(), "[isolated-root]")
     assert "mmpr" not in serialized
     assert "zordon" not in serialized
     launcher = (root / "bin/opencode-af").read_text(encoding="utf-8")

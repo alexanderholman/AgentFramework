@@ -88,8 +88,10 @@ def _run(launcher: Path, *arguments: str) -> str:
     return completed.stdout
 
 
-def _assert_clean(content: str) -> None:
+def _assert_clean(content: str, *, allowed_values: tuple[str, ...] = ()) -> None:
     lowered = content.casefold()
+    for value in allowed_values:
+        lowered = lowered.replace(value.casefold(), "[isolated-root]")
     found = [marker for marker in FORBIDDEN_MARKERS if marker in lowered]
     if found:
         raise RuntimeError(f"forbidden contamination markers found: {', '.join(found)}")
@@ -110,7 +112,6 @@ def verify(root: Path, launcher: Path) -> None:
             raise RuntimeError(f"path escapes isolated root: {candidate}")
 
     config_text = _run(launcher, "debug", "config")
-    _assert_clean(config_text)
     config = json.loads(config_text)
     if config.get("default_agent") != "dispatcher":
         raise RuntimeError("dispatcher is not the default agent")
@@ -129,6 +130,7 @@ def verify(root: Path, launcher: Path) -> None:
     expected_plugin = (root / "xdg/config/opencode/plugins/af-route.js").as_uri()
     if len(origins) != 1 or origins[0].get("spec") != expected_plugin:
         raise RuntimeError("exactly one AF route plugin must be loaded")
+    _assert_clean(config_text, allowed_values=(str(root), root.as_uri()))
 
     agent_text = _run(launcher, "agent", "list")
     _assert_clean(agent_text)
