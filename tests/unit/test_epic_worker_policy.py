@@ -77,14 +77,16 @@ def _valid_agent(module: ModuleType, policy_root: Path) -> dict[str, object]:
 
 
 def _local_provider_source(
-    base_url: str = "http://127.0.0.1:8080/v1", timeout: object = 900000
+    base_url: str = "http://127.0.0.1:8080/v1",
+    timeout: object = 900000,
+    api_key: str = "local",
 ) -> dict[str, object]:
     return {
         "provider": {
             "lovelace-general": {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Lovelace General",
-                "options": {"baseURL": base_url, "timeout": timeout},
+                "options": {"baseURL": base_url, "timeout": timeout, "apiKey": api_key},
                 "models": {
                     "qwen": {
                         "name": "Qwen",
@@ -125,6 +127,7 @@ def test_rendered_checkpoint_policy_selects_one_loopback_provider() -> None:
     assert set(config["provider"]) == {"lovelace-general"}
     assert set(config["provider"]["lovelace-general"]["models"]) == {"qwen"}
     assert config["model"] == "lovelace-general/qwen"
+    assert config["provider"]["lovelace-general"]["options"]["apiKey"] == "local"
 
 
 def test_checkpoint_policy_rejects_non_loopback_provider() -> None:
@@ -141,6 +144,7 @@ def test_checkpoint_policy_rejects_non_loopback_provider() -> None:
     [
         _local_provider_source("http://localhost:not-a-port/v1"),
         _local_provider_source(timeout=True),
+        _local_provider_source(api_key="secret"),
     ],
 )
 def test_checkpoint_policy_rejects_malformed_loopback_provider(source) -> None:

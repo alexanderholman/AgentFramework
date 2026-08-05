@@ -67,8 +67,10 @@ def _select_loopback_provider(model: str, source: dict[str, Any]) -> dict[str, A
         raise RuntimeError("checkpoint provider must use the OpenAI-compatible adapter")
     if not set(provider) <= {"npm", "name", "options", "models"}:
         raise RuntimeError("checkpoint provider contains unsupported fields")
-    if not set(options) <= {"baseURL", "timeout"}:
+    if not set(options) <= {"baseURL", "timeout", "apiKey"}:
         raise RuntimeError("checkpoint provider options contain unsupported fields")
+    if options.get("apiKey") != "local":
+        raise RuntimeError("checkpoint provider must use the credentialless local sentinel")
     endpoint = urlparse(options.get("baseURL", ""))
     try:
         endpoint_port = endpoint.port
