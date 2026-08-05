@@ -3023,3 +3023,30 @@ network, subagent, configuration, and credential authority.
 - Updated: `scripts/af_epic_worker`, `scripts/registry.yaml`, `README.md`
 - Added: `scripts/verify_epic_worker_policy.py`
 - Tested by: `tests/unit/test_epic_worker.py`, `tests/unit/test_epic_worker_policy.py`
+
+---
+
+## [DEC-053] Admit Only Credentialless Loopback Models to Epic Checkpoints
+**Date**: 2026-08-05
+**Status**: Accepted
+**Decision Maker**: Zordon deployment review
+
+### Context
+Isolating the unattended worker removed the custom Lovelace model declaration, while copying the
+normal OpenCode authentication store would unnecessarily expose unrelated provider credentials.
+
+### Decision
+1. Require an explicit `AF_EPIC_MODEL`; do not fall back to a remote model.
+2. Extract only that model's OpenAI-compatible provider declaration from operator configuration.
+3. Admit only credentialless HTTP loopback endpoints with strict fields, a valid port, and a
+   bounded timeout; reject every unrelated model and provider entry.
+4. Remove any authentication file from the worker-private OpenCode data root before dispatch.
+5. Compare resolved model/provider state and reject unexpected effective configuration fields.
+
+### Consequences
+- The checkpoint worker can use the local Lovelace model without inheriting global credentials.
+- Remote or credentialed model providers require a separate reviewed execution design.
+
+### Output References
+- Updated: `scripts/af_epic_worker`, `scripts/verify_epic_worker_policy.py`, `README.md`
+- Tested by: `tests/unit/test_epic_worker.py`, `tests/unit/test_epic_worker_policy.py`

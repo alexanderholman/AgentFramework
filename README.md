@@ -184,10 +184,13 @@ iteration records a checkpoint under a stable session ID so service restarts pre
 continuity stream. The unattended worker is checkpoint-only: it runs a fixed primary agent in
 private OpenCode configuration and data roots, verifies the resolved configuration and runtime
 permissions before dispatch, denies shell/network/subagent authority, and cannot publish or claim
-acceptance. Reviewed publication and closure remain separate operator actions.
+acceptance. A configured local model is reduced to one strictly validated loopback
+OpenAI-compatible provider entry; unrelated global OpenCode policy is not inherited. Reviewed
+publication and closure remain separate operator actions.
 
 ```bash
 AF_EPIC_NUMBER=177 \
+AF_EPIC_MODEL=lovelace-general/qwen3.6-27b \
 AF_EPIC_MEMLOG_SESSION_ID=agentframework-epic-177-worker \
 scripts/af_epic_worker
 ```
