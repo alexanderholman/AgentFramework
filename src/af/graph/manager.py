@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from af.framework.managers import CapabilitySet
@@ -34,10 +35,24 @@ class GraphDriver(Protocol):
     def delete_edge(self, edge_id: str) -> None: ...
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class GraphDriverRegistration:
+    """Explicit graph-driver registration for operator-owned composition."""
+
+    driver: GraphDriver
+    capabilities: Set[GraphFeature]
+
+    def __post_init__(self) -> None:
+        capabilities = frozenset(self.capabilities)
+        if not all(isinstance(feature, GraphFeature) for feature in capabilities):
+            raise ValueError("graph driver capabilities must contain GraphFeature values")
+        object.__setattr__(self, "capabilities", capabilities)
+
+
 class _DriverEntry:
     """Internal holder for a registered driver and its capabilities."""
 
-    def __init__(self, driver: GraphDriver, capabilities: set[GraphFeature]) -> None:
+    def __init__(self, driver: GraphDriver, capabilities: Set[GraphFeature]) -> None:
         self.driver = driver
         self.capabilities = capabilities
 
@@ -47,7 +62,7 @@ class GraphManager:
 
     def __init__(
         self,
-        registry: dict[str, Any],
+        registry: Mapping[str, GraphDriverRegistration],
         default_name: str | None = None,
     ) -> None:
         if not registry:
@@ -124,10 +139,8 @@ class GraphManager:
 
 
 def bind_graph_manager(
-    registry: dict[str, Any] | None = None,
+    registry: Mapping[str, GraphDriverRegistration],
     default_name: str | None = None,
 ) -> GraphManager:
     """Create a manager from an explicit, operator-owned driver registry."""
-    if registry is None:
-        raise ValueError("bind_graph_manager requires an explicit driver registry")
     return GraphManager(registry, default_name=default_name)
