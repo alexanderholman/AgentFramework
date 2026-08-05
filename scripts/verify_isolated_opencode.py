@@ -153,7 +153,7 @@ def verify(root: Path, launcher: Path) -> None:
     if mcp_command != expected_mcp_command:
         raise RuntimeError("AF MCP command does not match the isolated root")
     config_for_scan = json.loads(config_text)
-    config_for_scan["plugin_origins"] = [{"spec": "[isolated-root]/af-route.js"}]
+    config_for_scan["plugin_origins"][0]["spec"] = "[isolated-root]/af-route.js"
     config_for_scan["mcp"]["af"]["command"] = ["[isolated-root]/af-mcp"]
     _assert_clean(json.dumps(config_for_scan))
 

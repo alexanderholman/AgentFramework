@@ -112,6 +112,27 @@ def test_verifier_rejects_unexpected_mcp_command(tmp_path: Path, monkeypatch) ->
         module.verify(root, tmp_path / "launcher")
 
 
+def test_verifier_rejects_contaminated_plugin_origin_metadata(tmp_path: Path, monkeypatch) -> None:
+    module = _load_verifier()
+    root = tmp_path / "opencode-af"
+    config = _valid_config(root)
+    config["plugin_origins"][0]["source"] = "/opt/pr/contaminated.js"
+    paths = "\n".join(
+        (
+            f"home {root}/home",
+            f"data {root}/xdg/data/opencode",
+            f"cache {root}/xdg/cache/opencode",
+            f"config {root}/xdg/config/opencode",
+            f"state {root}/xdg/state/opencode",
+            f"tmp {root}/tmp/opencode",
+        )
+    )
+    monkeypatch.setattr(module, "_run", _run_responses(root, config, paths))
+
+    with pytest.raises(RuntimeError, match="forbidden contamination"):
+        module.verify(root, tmp_path / "launcher")
+
+
 def test_isolated_opencode_verifier_accepts_clean_routed_instance(tmp_path: Path) -> None:
     root = tmp_path / "opencode-af"
     plugin = root / "xdg/config/opencode/plugins/af-route.js"
