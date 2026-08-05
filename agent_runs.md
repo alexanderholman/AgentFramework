@@ -2025,3 +2025,13 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - DEC-051
 - Issue #178
 - Script: `[SCRIPT:af-dev]`
+
+## 2026-08-05 Iteration 322 - Merge PR #188, Close Issue #22
+
+- Merged PR #188 `feat(messaging): pub-sub, stream, and broadcast managers (#22)` into master (squash commit b61e208).
+- Implementation: LocalPubSubDriver, LocalStreamDriver, LocalBroadcastManager in `src/af/messaging/pubsub.py` (679 lines).
+- Tests: 27 new tests in `tests/unit/test_local_pubsub_driver.py` (561 lines), all passing.
+- Dependencies #16 and #21 were closed prior.
+- All acceptance criteria for issue #22 satisfied.
+- Closed issue #22.
+- 3 pre-existing test failures unrelated to this change (test_dev_scripts, test_graphql_interface, test_release_gates).

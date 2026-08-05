@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import Enum, StrEnum
 from typing import Protocol
 
 from af.framework.errors import PlatformError, PlatformReason
-from af.messaging.envelopes import EnvelopeKind, MessageEnvelope
+from af.messaging.envelopes import MessageEnvelope
 
 __all__ = (
     "BackpressurePolicy",
@@ -45,6 +45,7 @@ _IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
 # Errors
 # ---------------------------------------------------------------------------
 
+
 class PubSubOperationError(PlatformError):
     """Sanitized pub-sub operation failure."""
 
@@ -74,6 +75,7 @@ class InvalidPubSubSchema(ValueError):
 # Topic
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class PubSubTopic:
     """Canonical topic identifier for pub-sub drivers."""
@@ -87,6 +89,7 @@ class PubSubTopic:
 # ---------------------------------------------------------------------------
 # Policies
 # ---------------------------------------------------------------------------
+
 
 class BackpressurePolicy(StrEnum):
     """What to do when a subscriber cannot keep up."""
@@ -117,6 +120,7 @@ class OrderingScope(StrEnum):
 # ---------------------------------------------------------------------------
 # Subscription & Handle
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class PubSubSubscription:
@@ -157,6 +161,7 @@ class PubSubSubscriptionHandle:
 # ---------------------------------------------------------------------------
 # Replay & Checkpoint
 # ---------------------------------------------------------------------------
+
 
 class ReplayCursor(StrEnum):
     """Where a durable subscription should begin replay."""
@@ -201,6 +206,7 @@ class ReplayReport:
 # Consumer Group
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class ConsumerGroupAssignment:
     """Partition or shard assignment within a consumer group."""
@@ -234,13 +240,16 @@ class ConsumerGroup:
             raise InvalidPubSubSchema("consumer group topic is invalid")
         if type(self.partitions) is not int or self.partitions < 1:
             raise InvalidPubSubSchema("consumer group partitions must be positive")
-        if not isinstance(self.rebalance_timeout, timedelta) or self.rebalance_timeout <= timedelta(0):
+        if not isinstance(self.rebalance_timeout, timedelta) or self.rebalance_timeout <= timedelta(
+            0
+        ):
             raise InvalidPubSubSchema("consumer group rebalance timeout must be positive")
 
 
 # ---------------------------------------------------------------------------
 # Broadcast
 # ---------------------------------------------------------------------------
+
 
 class BroadcastChannelKind(Enum):
     """Channel visibility and authorization scope."""
@@ -266,9 +275,7 @@ class BroadcastSubscription:
             raise InvalidPubSubSchema("broadcast channel kind is invalid")
         if self.kind in (BroadcastChannelKind.PRIVATE, BroadcastChannelKind.PRESENCE):
             if not self.auth_token:
-                raise InvalidPubSubSchema(
-                    "private and presence channels require an auth token"
-                )
+                raise InvalidPubSubSchema("private and presence channels require an auth token")
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +291,7 @@ class BroadcastDispatchReport:
 # Driver protocols
 # ---------------------------------------------------------------------------
 
+
 class StreamSubscription(Protocol):
     """Protocol for a stream subscription that yields events."""
 
@@ -297,7 +305,9 @@ class PubSubDriver(Protocol):
     def publish(self, topic: PubSubTopic, envelope: MessageEnvelope) -> None: ...
     def subscribe(self, subscription: PubSubSubscription) -> PubSubSubscriptionHandle: ...
     def unsubscribe(self, handle: PubSubSubscriptionHandle) -> None: ...
-    def next_event(self, handle: PubSubSubscriptionHandle, *, timeout: timedelta | None = None) -> MessageEnvelope | None: ...
+    def next_event(
+        self, handle: PubSubSubscriptionHandle, *, timeout: timedelta | None = None
+    ) -> MessageEnvelope | None: ...
 
 
 class DurableStreamDriver(PubSubDriver):
@@ -326,6 +336,7 @@ class StreamDriver(DurableStreamDriver):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _identifier(value: object, field: str) -> str:
     if type(value) is not str or _IDENTIFIER.fullmatch(value) is None:
         raise InvalidPubSubSchema(f"pub-sub {field} must be a canonical identifier")
@@ -339,7 +350,6 @@ def _identifier(value: object, field: str) -> str:
 import threading
 import uuid as _uuid
 from collections import defaultdict
-from typing import Any
 
 
 class _TopicState:
@@ -356,12 +366,12 @@ class _SubscriptionState:
     """Mutable state for a single subscription."""
 
     __slots__ = (
-        "handle",
-        "subscription",
-        "pending",
-        "checkpointed_seq",
         "active",
+        "checkpointed_seq",
+        "handle",
         "lock",
+        "pending",
+        "subscription",
     )
 
     def __init__(
@@ -409,8 +419,7 @@ class LocalPubSubDriver:
                     cg_name = sub_state.subscription.consumer_group
                     assignments = self._consumer_assignments.get(cg_name, [])
                     if not any(
-                        a.subscriber_id == sub_state.handle.subscriber_id
-                        for a in assignments
+                        a.subscriber_id == sub_state.handle.subscriber_id for a in assignments
                     ):
                         continue
                 with sub_state.lock:
@@ -504,7 +513,7 @@ class LocalPubSubDriver:
     def checkpoint(self, cursor: CheckpointCursor) -> None:
         with self._lock:
             # Find subscription for this subscriber/topic combo
-            for sid, sub_state in self._subscriptions.items():
+            for _sid, sub_state in self._subscriptions.items():
                 if (
                     sub_state.subscription.subscriber_id == cursor.subscriber_id
                     and sub_state.subscription.topic.name == cursor.topic.name
@@ -671,8 +680,7 @@ class LocalStreamDriver(LocalPubSubDriver, StreamDriver):
                     cg_name = sub_state.subscription.consumer_group
                     assignments = self._consumer_assignments.get(cg_name, [])
                     if not any(
-                        a.subscriber_id == sub_state.handle.subscriber_id
-                        for a in assignments
+                        a.subscriber_id == sub_state.handle.subscriber_id for a in assignments
                     ):
                         continue
                 with sub_state.lock:

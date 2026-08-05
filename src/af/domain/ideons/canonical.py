@@ -20,7 +20,7 @@ from .models import (
 )
 from .numeric import integer_to_decimal, natural_to_hex
 
-type JsonScalar = None | bool | int | str
+type JsonScalar = bool | int | str | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 type CanonicalIdeon = IdeonIdentity | IdeonGraph
 

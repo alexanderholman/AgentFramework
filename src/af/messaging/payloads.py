@@ -58,7 +58,7 @@ class FrozenJsonObject:
     items: tuple[tuple[str, FrozenJsonValue], ...]
 
 
-type JsonScalar = None | bool | int | float | str
+type JsonScalar = bool | int | float | str | None
 type FrozenJsonValue = JsonScalar | FrozenJsonArray | FrozenJsonObject
 
 

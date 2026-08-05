@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import cast
 
 import pytest
 
 from af.messaging.envelopes import EnvelopeKind, MessageEnvelope, MessageMetadata
 from af.messaging.pubsub import (
-    BackpressurePolicy,
     BroadcastChannelKind,
     BroadcastDispatchReport,
     BroadcastSubscription,
@@ -24,17 +22,14 @@ from af.messaging.pubsub import (
     OrderingScope,
     PubSubOperationError,
     PubSubSubscription,
-    PubSubSubscriptionHandle,
     PubSubTopic,
     ReplayCursor,
-    ReplayReport,
-    SlowConsumerPolicy,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _topic(name: str = "events.user.created") -> PubSubTopic:
     return PubSubTopic(name)
@@ -78,6 +73,7 @@ def _subscription(
 # Test: independent subscribers fan-out
 # ---------------------------------------------------------------------------
 
+
 class TestLocalPubSubFanOut:
     """A single published event is delivered to every independent subscriber."""
 
@@ -117,6 +113,7 @@ class TestLocalPubSubFanOut:
 # Test: consumer group – at-most-one delivery
 # ---------------------------------------------------------------------------
 
+
 class TestLocalPubSubConsumerGroup:
     """A consumer group partitions delivery so each event reaches one member."""
 
@@ -129,9 +126,7 @@ class TestLocalPubSubConsumerGroup:
 
         driver.assign_consumer(ConsumerGroupAssignment("cg-1", "member-a", 0, 1))
 
-        handle = driver.subscribe(
-            _subscription(subscriber_id="member-a", consumer_group="cg-1")
-        )
+        handle = driver.subscribe(_subscription(subscriber_id="member-a", consumer_group="cg-1"))
 
         envelope = _envelope(message_type=topic.name)
         driver.publish(topic, envelope)
@@ -144,6 +139,7 @@ class TestLocalPubSubConsumerGroup:
 # ---------------------------------------------------------------------------
 # Test: replay from beginning
 # ---------------------------------------------------------------------------
+
 
 class TestLocalPubSubReplay:
     """A subscription with replay_from=beginning receives past events."""
@@ -173,6 +169,7 @@ class TestLocalPubSubReplay:
 # ---------------------------------------------------------------------------
 # Test: checkpoint and recovery
 # ---------------------------------------------------------------------------
+
 
 class TestLocalPubSubCheckpoint:
     """Checkpointing allows a subscriber to resume from a saved position."""
@@ -211,6 +208,7 @@ class TestLocalPubSubCheckpoint:
 # Test: schema validation
 # ---------------------------------------------------------------------------
 
+
 class TestPubSubSchema:
     """Pub-sub schema rejects invalid identifiers and policy values."""
 
@@ -236,6 +234,7 @@ class TestPubSubSchema:
 # ---------------------------------------------------------------------------
 # Test: LocalBroadcastManager – public channel
 # ---------------------------------------------------------------------------
+
 
 class TestLocalBroadcastManagerPublic:
     """Public channels deliver to all registered clients without auth."""
@@ -263,12 +262,8 @@ class TestLocalBroadcastManagerPublic:
 
     def test_multiple_channels_are_isolated(self) -> None:
         mgr = LocalBroadcastManager()
-        mgr.register_client(
-            BroadcastSubscription(channel="room-a", client_id="c1")
-        )
-        mgr.register_client(
-            BroadcastSubscription(channel="room-b", client_id="c2")
-        )
+        mgr.register_client(BroadcastSubscription(channel="room-a", client_id="c1"))
+        mgr.register_client(BroadcastSubscription(channel="room-b", client_id="c2"))
 
         report_a = mgr.publish(channel="room-a", envelope=_envelope())
         report_b = mgr.publish(channel="room-b", envelope=_envelope())
@@ -280,6 +275,7 @@ class TestLocalBroadcastManagerPublic:
 # ---------------------------------------------------------------------------
 # Test: LocalBroadcastManager – private channel auth
 # ---------------------------------------------------------------------------
+
 
 class TestLocalBroadcastManagerPrivate:
     """Private channels require a valid auth token."""
@@ -330,6 +326,7 @@ class TestLocalBroadcastManagerPrivate:
 # Test: LocalBroadcastManager – presence channel
 # ---------------------------------------------------------------------------
 
+
 class TestLocalBroadcastManagerPresence:
     """Presence channels also require a valid auth token."""
 
@@ -357,6 +354,7 @@ class TestLocalBroadcastManagerPresence:
 # ---------------------------------------------------------------------------
 # Test: LocalBroadcastManager – subscription lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestLocalBroadcastManagerLifecycle:
     """Clients can be registered and unregistered."""
@@ -386,14 +384,13 @@ class TestLocalBroadcastManagerLifecycle:
 # Test: LocalBroadcastManager – dispatch report
 # ---------------------------------------------------------------------------
 
+
 class TestLocalBroadcastDispatchReport:
     """BroadcastDispatchReport carries correct fields."""
 
     def test_report_fields(self) -> None:
         mgr = LocalBroadcastManager()
-        mgr.register_client(
-            BroadcastSubscription(channel="ch", client_id="c1")
-        )
+        mgr.register_client(BroadcastSubscription(channel="ch", client_id="c1"))
         envelope = _envelope()
         report = mgr.publish(channel="ch", envelope=envelope)
 
@@ -407,6 +404,7 @@ class TestLocalBroadcastDispatchReport:
 # Test: LocalStreamDriver – key ordering
 # ---------------------------------------------------------------------------
 
+
 class TestLocalStreamDriverKeyOrdering:
     """Messages with the same ordering key are sequenced deterministically."""
 
@@ -414,12 +412,8 @@ class TestLocalStreamDriverKeyOrdering:
         driver = LocalStreamDriver()
         topic = _topic()
 
-        driver.publish_ordered(
-            topic, _envelope(message_type=topic.name), ordering_key="user-1"
-        )
-        driver.publish_ordered(
-            topic, _envelope(message_type=topic.name), ordering_key="user-1"
-        )
+        driver.publish_ordered(topic, _envelope(message_type=topic.name), ordering_key="user-1")
+        driver.publish_ordered(topic, _envelope(message_type=topic.name), ordering_key="user-1")
 
         state = driver._topics[topic.name]
         assert state.sequence == 2
@@ -428,12 +422,8 @@ class TestLocalStreamDriverKeyOrdering:
         driver = LocalStreamDriver()
         topic = _topic()
 
-        driver.publish_ordered(
-            topic, _envelope(message_type=topic.name), ordering_key="user-1"
-        )
-        driver.publish_ordered(
-            topic, _envelope(message_type=topic.name), ordering_key="user-2"
-        )
+        driver.publish_ordered(topic, _envelope(message_type=topic.name), ordering_key="user-1")
+        driver.publish_ordered(topic, _envelope(message_type=topic.name), ordering_key="user-2")
 
         state = driver._topics[topic.name]
         assert state.sequence == 2
@@ -443,6 +433,7 @@ class TestLocalStreamDriverKeyOrdering:
 # Test: LocalStreamDriver – global ordering
 # ---------------------------------------------------------------------------
 
+
 class TestLocalStreamDriverGlobalOrdering:
     """GLOBAL scope maintains a single cross-topic sequence counter."""
 
@@ -451,12 +442,16 @@ class TestLocalStreamDriverGlobalOrdering:
         topic = _topic()
 
         driver.publish_ordered(
-            topic, _envelope(message_type=topic.name),
-            ordering_key="k", scope=OrderingScope.GLOBAL,
+            topic,
+            _envelope(message_type=topic.name),
+            ordering_key="k",
+            scope=OrderingScope.GLOBAL,
         )
         driver.publish_ordered(
-            topic, _envelope(message_type=topic.name),
-            ordering_key="k", scope=OrderingScope.GLOBAL,
+            topic,
+            _envelope(message_type=topic.name),
+            ordering_key="k",
+            scope=OrderingScope.GLOBAL,
         )
 
         assert driver._global_sequence == 2
@@ -467,12 +462,16 @@ class TestLocalStreamDriverGlobalOrdering:
         t2 = _topic("events.b")
 
         driver.publish_ordered(
-            t1, _envelope(message_type=t1.name),
-            ordering_key="k", scope=OrderingScope.GLOBAL,
+            t1,
+            _envelope(message_type=t1.name),
+            ordering_key="k",
+            scope=OrderingScope.GLOBAL,
         )
         driver.publish_ordered(
-            t2, _envelope(message_type=t2.name),
-            ordering_key="k", scope=OrderingScope.GLOBAL,
+            t2,
+            _envelope(message_type=t2.name),
+            ordering_key="k",
+            scope=OrderingScope.GLOBAL,
         )
 
         assert driver._global_sequence == 2
@@ -481,6 +480,7 @@ class TestLocalStreamDriverGlobalOrdering:
 # ---------------------------------------------------------------------------
 # Test: LocalStreamDriver – none scope
 # ---------------------------------------------------------------------------
+
 
 class TestLocalStreamDriverNoneScope:
     """NONE scope delegates to regular publish without ordering guarantees."""
@@ -492,9 +492,7 @@ class TestLocalStreamDriverNoneScope:
         handle = driver.subscribe(_subscription(subscriber_id="sub-1"))
 
         envelope = _envelope(message_type=topic.name)
-        driver.publish_ordered(
-            topic, envelope, ordering_key="k", scope=OrderingScope.NONE
-        )
+        driver.publish_ordered(topic, envelope, ordering_key="k", scope=OrderingScope.NONE)
 
         event = driver.next_event(handle, timeout=timedelta(seconds=1))
         assert event is not None
@@ -504,6 +502,7 @@ class TestLocalStreamDriverNoneScope:
 # ---------------------------------------------------------------------------
 # Test: LocalStreamDriver – fan-out with ordering
 # ---------------------------------------------------------------------------
+
 
 class TestLocalStreamDriverFanOut:
     """Ordered publish still fans out to subscribers."""
@@ -525,6 +524,7 @@ class TestLocalStreamDriverFanOut:
 # ---------------------------------------------------------------------------
 # Test: LocalStreamDriver – extends LocalPubSubDriver
 # ---------------------------------------------------------------------------
+
 
 class TestLocalStreamDriverExtendsPubSub:
     """LocalStreamDriver inherits all LocalPubSubDriver functionality."""
@@ -549,9 +549,7 @@ class TestLocalStreamDriverExtendsPubSub:
         driver.create_consumer_group(group)
         driver.assign_consumer(ConsumerGroupAssignment("cg-1", "member-a", 0, 1))
 
-        handle = driver.subscribe(
-            _subscription(subscriber_id="member-a", consumer_group="cg-1")
-        )
+        handle = driver.subscribe(_subscription(subscriber_id="member-a", consumer_group="cg-1"))
 
         envelope = _envelope(message_type=topic.name)
         driver.publish(topic, envelope)
