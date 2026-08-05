@@ -351,7 +351,8 @@ def test_nested_package_uses_inherited_executables(tmp_path: Path, monkeypatch: 
         "argv = sys.argv[2:]\n"
         "if argv and argv[0] == 'run':\n"
         "    python_index = argv.index('python')\n"
-        "    raise SystemExit(subprocess.run(argv[python_index:], check=False).returncode)\n"
+        "    command = [sys.executable, *argv[python_index + 1:]]\n"
+        "    raise SystemExit(subprocess.run(command, check=False).returncode)\n"
         "raise SystemExit(0)\n",
         encoding="utf-8",
     )

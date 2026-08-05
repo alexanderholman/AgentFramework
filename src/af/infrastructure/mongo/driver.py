@@ -4,10 +4,21 @@ from __future__ import annotations
 
 from threading import RLock
 from types import TracebackType
-from typing import Any
+from typing import Any, Literal
 
-from pymongo import MongoClient, ReadPreference, errors
+from pymongo import (
+    DeleteOne,
+    InsertOne,
+    MongoClient,
+    ReadPreference,
+    ReplaceOne,
+    UpdateOne,
+    errors,
+)
 from pymongo.client_session import ClientSession
+from pymongo.collection import Collection
+from pymongo.database import Database
+from pymongo.read_preferences import _ServerMode
 from pymongo.results import (
     BulkWriteResult as PyMongoBulkWriteResult,
 )
@@ -17,6 +28,7 @@ from pymongo.results import (
     InsertOneResult,
     UpdateResult,
 )
+from pymongo.write_concern import WriteConcern as PyMongoWriteConcern
 
 from af.domain.document.contracts import (
     AggregationPipeline,
@@ -48,6 +60,10 @@ from af.domain.document.contracts import (
 
 __all__ = ("MongoDBDriver",)
 
+type _MongoWriteOperation = (
+    InsertOne[dict[str, Any]] | DeleteOne | ReplaceOne[dict[str, Any]] | UpdateOne
+)
+
 _CORE_FEATURES: frozenset[DocumentFeature] = frozenset(
     {
         DocumentFeature.CRUD,
@@ -59,7 +75,7 @@ _CORE_FEATURES: frozenset[DocumentFeature] = frozenset(
     }
 )
 
-_READ_PREF_MAP: dict[DocReadPreference, int] = {
+_READ_PREF_MAP: dict[DocReadPreference, _ServerMode] = {
     DocReadPreference.PRIMARY: ReadPreference.PRIMARY,
     DocReadPreference.PRIMARY_PREFERRED: ReadPreference.PRIMARY_PREFERRED,
     DocReadPreference.SECONDARY: ReadPreference.SECONDARY,
@@ -128,12 +144,12 @@ def _sanitize_error(
     )
 
 
-def _to_read_preference(pref: DocReadPreference) -> int:
+def _to_read_preference(pref: DocReadPreference) -> _ServerMode:
     return _READ_PREF_MAP.get(pref, ReadPreference.PRIMARY)
 
 
-def _to_write_concern(concern: WriteConcern) -> dict[str, Any]:
-    return _WRITE_CONCERN_MAP.get(concern, {"w": 1})
+def _to_write_concern(concern: WriteConcern) -> PyMongoWriteConcern:
+    return PyMongoWriteConcern(**_WRITE_CONCERN_MAP.get(concern, {"w": 1}))
 
 
 def _filter_to_dict(f: DocumentFilter | None) -> dict[str, Any]:
@@ -182,8 +198,8 @@ class MongoDBDriver:
         self._session: ClientSession | None = None
 
         try:
-            self._client = MongoClient(url, replicaSet=replica_set)
-            self._database = self._client[database]
+            self._client: MongoClient[dict[str, Any]] = MongoClient(url, replicaSet=replica_set)
+            self._database: Database[dict[str, Any]] = self._client[database]
         except errors.PyMongoError as e:
             raise DocumentOperationError(
                 f"Failed to connect to MongoDB: {e}",
@@ -234,6 +250,20 @@ class MongoDBDriver:
                 operation="connection_check",
             )
 
+    def _read_collection(
+        self, collection: str, read_preference: DocReadPreference
+    ) -> Collection[dict[str, Any]]:
+        return self._database[collection].with_options(
+            read_preference=_to_read_preference(read_preference)
+        )
+
+    def _write_collection(
+        self, collection: str, write_concern: WriteConcern
+    ) -> Collection[dict[str, Any]]:
+        return self._database[collection].with_options(
+            write_concern=_to_write_concern(write_concern)
+        )
+
     async def insert_one(
         self,
         collection: str,
@@ -242,12 +272,8 @@ class MongoDBDriver:
     ) -> WriteResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
-            wc = _to_write_concern(write_concern)
-            result: InsertOneResult = coll.insert_one(
-                document,
-                write_concern=wc,
-            )
+            coll = self._write_collection(collection, write_concern)
+            result: InsertOneResult = coll.insert_one(document)
             return WriteResult(
                 acknowledged=True,
                 inserted_id=str(result.inserted_id),
@@ -264,12 +290,10 @@ class MongoDBDriver:
     ) -> WriteResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
-            wc = _to_write_concern(write_concern)
+            coll = self._write_collection(collection, write_concern)
             result: InsertManyResult = coll.insert_many(
                 documents,
                 ordered=ordered,
-                write_concern=wc,
             )
             return WriteResult(
                 acknowledged=True,
@@ -287,11 +311,10 @@ class MongoDBDriver:
     ) -> dict[str, Any] | None:
         self._assert_open()
         try:
-            coll = self._database[collection]
+            coll = self._read_collection(collection, read_preference)
             doc = coll.find_one(
                 _filter_to_dict(filter),
                 projection=_projection_to_dict(projection),
-                read_preference=_to_read_preference(read_preference),
             )
             if doc and "_id" in doc:
                 doc["_id"] = str(doc["_id"])
@@ -311,14 +334,13 @@ class MongoDBDriver:
     ) -> QueryResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
+            coll = self._read_collection(collection, read_preference)
             cursor = coll.find(
                 _filter_to_dict(filter),
                 projection=_projection_to_dict(projection),
                 sort=sort,
                 limit=limit,
                 skip=skip,
-                read_preference=_to_read_preference(read_preference),
             )
             documents = []
             for doc in cursor:
@@ -340,7 +362,7 @@ class MongoDBDriver:
         self._assert_open()
         try:
             coll = self._database[collection]
-            return coll.count_documents(_filter_to_dict(filter))
+            return int(coll.count_documents(_filter_to_dict(filter)))
         except Exception as e:
             raise _sanitize_error(e, operation="count_documents", collection=collection) from e
 
@@ -354,13 +376,11 @@ class MongoDBDriver:
     ) -> WriteResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
-            wc = _to_write_concern(write_concern)
+            coll = self._write_collection(collection, write_concern)
             result: UpdateResult = coll.update_one(
                 _filter_to_dict(filter),
                 update,
                 upsert=upsert,
-                write_concern=wc,
             )
             return WriteResult(
                 acknowledged=True,
@@ -381,13 +401,11 @@ class MongoDBDriver:
     ) -> WriteResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
-            wc = _to_write_concern(write_concern)
+            coll = self._write_collection(collection, write_concern)
             result: UpdateResult = coll.update_many(
                 _filter_to_dict(filter),
                 update,
                 upsert=upsert,
-                write_concern=wc,
             )
             return WriteResult(
                 acknowledged=True,
@@ -407,13 +425,11 @@ class MongoDBDriver:
     ) -> WriteResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
-            wc = _to_write_concern(write_concern)
+            coll = self._write_collection(collection, write_concern)
             result: UpdateResult = coll.replace_one(
                 _filter_to_dict(filter),
                 replacement,
                 upsert=upsert,
-                write_concern=wc,
             )
             return WriteResult(
                 acknowledged=True,
@@ -432,12 +448,8 @@ class MongoDBDriver:
     ) -> WriteResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
-            wc = _to_write_concern(write_concern)
-            result: DeleteResult = coll.delete_one(
-                _filter_to_dict(filter),
-                write_concern=wc,
-            )
+            coll = self._write_collection(collection, write_concern)
+            result: DeleteResult = coll.delete_one(_filter_to_dict(filter))
             return WriteResult(
                 acknowledged=True,
                 deleted_count=result.deleted_count,
@@ -453,12 +465,8 @@ class MongoDBDriver:
     ) -> WriteResult:
         self._assert_open()
         try:
-            coll = self._database[collection]
-            wc = _to_write_concern(write_concern)
-            result: DeleteResult = coll.delete_many(
-                _filter_to_dict(filter),
-                write_concern=wc,
-            )
+            coll = self._write_collection(collection, write_concern)
+            result: DeleteResult = coll.delete_many(_filter_to_dict(filter))
             return WriteResult(
                 acknowledged=True,
                 deleted_count=result.deleted_count,
@@ -504,7 +512,7 @@ class MongoDBDriver:
                 kwargs["name"] = definition.name
 
             index_name = coll.create_index(spec, **kwargs)
-            return index_name
+            return str(index_name)
         except Exception as e:
             raise _sanitize_error(e, operation="create_index", collection=collection) from e
 
@@ -558,15 +566,11 @@ class MongoDBDriver:
         self._assert_open()
         try:
             coll = self._database[collection]
-            pymongo_ops = []
+            pymongo_ops: list[_MongoWriteOperation] = []
             for op in operations:
                 if op.operation == "insert":
-                    from pymongo import InsertOne
-
                     pymongo_ops.append(InsertOne(op.document or {}))
                 elif op.operation == "update":
-                    from pymongo import UpdateOne
-
                     pymongo_ops.append(
                         UpdateOne(
                             _filter_to_dict(op.filter),
@@ -575,12 +579,8 @@ class MongoDBDriver:
                         )
                     )
                 elif op.operation == "delete":
-                    from pymongo import DeleteOne
-
                     pymongo_ops.append(DeleteOne(_filter_to_dict(op.filter)))
                 elif op.operation == "replace":
-                    from pymongo import ReplaceOne
-
                     pymongo_ops.append(
                         ReplaceOne(
                             _filter_to_dict(op.filter),
@@ -644,10 +644,8 @@ class MongoDBDriver:
     ) -> TimeSeriesOptions | None:
         self._assert_open()
         try:
-            info = self._database.command(
-                "listCollections", filters={"name": collection}, cursor={}
-            )
-            for coll_info in info.get("cursor", {}).get("next", []):
+            info = self._database.command("listCollections", filter={"name": collection}, cursor={})
+            for coll_info in info.get("cursor", {}).get("firstBatch", []):
                 opts = coll_info.get("options", {})
                 if "timeseries" in opts:
                     ts = opts["timeseries"]
@@ -686,6 +684,6 @@ class MongoDBDriver:
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         self.close()
         return False

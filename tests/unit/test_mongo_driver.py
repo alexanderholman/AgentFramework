@@ -4,15 +4,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from bson import ObjectId
+from pymongo import ReadPreference as PyMongoReadPreference
+from pymongo.write_concern import WriteConcern as PyMongoWriteConcern
 
 from af.domain.document.contracts import (
     AggregationPipeline,
     BulkOperation,
     DocumentFeature,
     DocumentFilter,
+    DocumentOperationError,
+    DocumentProjection,
+    DocumentSessionError,
+    DocumentTimeSeriesError,
     DocumentWriteError,
     IndexDefinition,
     IndexType,
+    ReadPreference,
     TimeSeriesOptions,
     TransactionNotSupportedError,
     UnsupportedDocumentFeature,
@@ -21,7 +28,7 @@ from af.domain.document.contracts import (
 from af.infrastructure.mongo.driver import MongoDBDriver
 
 # ---------------------------------------------------------------------------
-# Fixtures – patch MongoClient so the driver never touches a real database
+# Fixtures - patch MongoClient so the driver never touches a real database
 # ---------------------------------------------------------------------------
 
 
@@ -44,6 +51,7 @@ def mock_client():
     mock_collection.list_indexes.return_value = []
     mock_collection.index_information.return_value = {}
     mock_collection.create_index.return_value = "idx_name"
+    mock_collection.with_options.return_value = mock_collection
 
     return mock_client, mock_db, mock_collection
 
@@ -58,7 +66,7 @@ def driver(mock_client):
 
 
 # ---------------------------------------------------------------------------
-# Capability tests (no DB interaction – __new__ is fine)
+# Capability tests (no DB interaction - __new__ is fine)
 # ---------------------------------------------------------------------------
 
 
@@ -101,6 +109,51 @@ def test_require_no_raise_for_supported_feature() -> None:
     driver.require(DocumentFeature.CRUD)
 
 
+def test_supports_rejects_invalid_feature() -> None:
+    driver = MongoDBDriver.__new__(MongoDBDriver)
+    driver._features = frozenset({DocumentFeature.CRUD})
+
+    with pytest.raises(TypeError, match="feature"):
+        driver.supports("crud")  # type: ignore[arg-type]
+
+
+def test_require_rejects_unsupported_feature() -> None:
+    driver = MongoDBDriver.__new__(MongoDBDriver)
+    driver._features = frozenset()
+
+    with pytest.raises(UnsupportedDocumentFeature):
+        driver.require(DocumentFeature.TIME_SERIES)
+
+
+@pytest.mark.parametrize(
+    ("url", "database"),
+    (("", "database"), ("mongodb://localhost", "")),
+)
+def test_constructor_rejects_empty_connection_identity(url: str, database: str) -> None:
+    with pytest.raises(ValueError):
+        MongoDBDriver(url=url, database=database)
+
+
+def test_constructor_sanitizes_client_creation_failure() -> None:
+    from pymongo.errors import ConnectionFailure
+
+    with (
+        patch("af.infrastructure.mongo.driver.MongoClient", side_effect=ConnectionFailure("down")),
+        pytest.raises(DocumentOperationError),
+    ):
+        MongoDBDriver(url="mongodb://localhost")
+
+
+def test_constructor_discovers_replica_set_transactions() -> None:
+    client = MagicMock()
+    client.return_value.admin.command.return_value = {"hosts": ["mongo-1", "mongo-2"]}
+
+    with patch("af.infrastructure.mongo.driver.MongoClient", client):
+        driver = MongoDBDriver(url="mongodb://localhost")
+
+    assert DocumentFeature.TRANSACTION in driver.features
+
+
 # ---------------------------------------------------------------------------
 # Read tests
 # ---------------------------------------------------------------------------
@@ -125,6 +178,21 @@ async def test_find_with_filter_applies_criteria(driver, mock_client) -> None:
     filter_obj = DocumentFilter(criteria={"status": "active"})
     await driver.find("test_collection", filter_obj)
     collection.find.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_find_applies_read_preference_to_collection(driver, mock_client) -> None:
+    _, _, collection = mock_client
+    collection.find.return_value = iter([])
+
+    await driver.find(
+        "test_collection",
+        DocumentFilter(),
+        read_preference=ReadPreference.SECONDARY,
+    )
+
+    collection.with_options.assert_called_once_with(read_preference=PyMongoReadPreference.SECONDARY)
+    assert "read_preference" not in collection.find.call_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -163,6 +231,23 @@ async def test_find_one_not_found_returns_none(driver, mock_client) -> None:
 
     result = await driver.find_one("test_collection", DocumentFilter())
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "projection",
+    (DocumentProjection(include={"name": 1}), DocumentProjection(exclude={"secret": 0})),
+)
+async def test_find_one_applies_projection(driver, mock_client, projection) -> None:
+    _, _, collection = mock_client
+    collection.find_one.return_value = None
+
+    await driver.find_one("test_collection", projection=projection)
+
+    assert collection.find_one.call_args.kwargs["projection"] in (
+        {"name": 1},
+        {"secret": 0},
+    )
 
 
 @pytest.mark.asyncio
@@ -214,7 +299,8 @@ async def test_insert_with_write_concern(driver, mock_client) -> None:
     await driver.insert_one(
         "test_collection", {"name": "test"}, write_concern=WriteConcern.MAJORITY
     )
-    collection.insert_one.assert_called_once()
+    collection.with_options.assert_called_once_with(write_concern=PyMongoWriteConcern(w="majority"))
+    assert "write_concern" not in collection.insert_one.call_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -336,6 +422,17 @@ async def test_create_index_with_ttl(driver, mock_client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_index_translates_ttl_key(driver, mock_client) -> None:
+    _, _, collection = mock_client
+    collection.create_index.return_value = "ttl_idx"
+    definition = IndexDefinition(fields=[("expires_at", IndexType.TTL)])
+
+    await driver.create_index("test_collection", definition)
+
+    assert collection.create_index.call_args.args[0] == [("expires_at", 1)]
+
+
+@pytest.mark.asyncio
 async def test_create_index_with_text(driver, mock_client) -> None:
     _, _, collection = mock_client
     collection.create_index.return_value = "text_idx"
@@ -418,6 +515,44 @@ async def test_bulk_write(driver, mock_client) -> None:
     assert result.inserted_count == 2
 
 
+@pytest.mark.asyncio
+async def test_bulk_write_translates_every_operation_kind(driver, mock_client) -> None:
+    _, _, collection = mock_client
+    mock_result = MagicMock(
+        inserted_count=1,
+        matched_count=2,
+        modified_count=1,
+        deleted_count=1,
+        upserted_count=0,
+    )
+    collection.bulk_write.return_value = mock_result
+    operations = [
+        BulkOperation(operation="insert", document={"name": "new"}),
+        BulkOperation(
+            operation="update",
+            filter=DocumentFilter(criteria={"name": "old"}),
+            document={"$set": {"name": "updated"}},
+        ),
+        BulkOperation(operation="delete", filter=DocumentFilter(criteria={"expired": True})),
+        BulkOperation(
+            operation="replace",
+            filter=DocumentFilter(criteria={"name": "updated"}),
+            document={"name": "replacement"},
+        ),
+    ]
+
+    result = await driver.bulk_write("test_collection", operations)
+
+    requests = collection.bulk_write.call_args.args[0]
+    assert [type(request).__name__ for request in requests] == [
+        "InsertOne",
+        "UpdateOne",
+        "DeleteOne",
+        "ReplaceOne",
+    ]
+    assert result.modified_count == 1
+
+
 # ---------------------------------------------------------------------------
 # Time series tests
 # ---------------------------------------------------------------------------
@@ -487,6 +622,49 @@ async def test_timeseries_granularity_mapping_hour(driver, mock_client) -> None:
     assert call_kwargs["timeseries"]["granularity"] == "hour"
 
 
+@pytest.mark.asyncio
+async def test_create_timeseries_rejects_invalid_options(driver) -> None:
+    options = TimeSeriesOptions(time_field="", granularity="day")
+
+    with pytest.raises(DocumentTimeSeriesError):
+        await driver.create_time_series_collection("invalid", options)
+
+
+@pytest.mark.asyncio
+async def test_get_timeseries_options_reads_first_batch(driver, mock_client) -> None:
+    _, mock_db, _ = mock_client
+    mock_db.command.return_value = {
+        "cursor": {
+            "firstBatch": [
+                {
+                    "options": {
+                        "timeseries": {
+                            "timeField": "recorded_at",
+                            "metaField": "sensor",
+                            "granularity": "minute",
+                            "bucketMaxSpanSeconds": 300,
+                            "bucketRoundingSeconds": 60,
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+    options = await driver.get_time_series_options("measurements")
+
+    mock_db.command.assert_called_once_with(
+        "listCollections", filter={"name": "measurements"}, cursor={}
+    )
+    assert options == TimeSeriesOptions(
+        time_field="recorded_at",
+        meta_field="sensor",
+        granularity="minute",
+        bucket_max_span_seconds=300,
+        bucket_rounding_seconds=60,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Error handling tests
 # ---------------------------------------------------------------------------
@@ -516,6 +694,89 @@ async def test_write_error_raises_document_write_error(driver, mock_client) -> N
         await driver.insert_one("test_collection", {"name": "test"})
 
 
+@pytest.mark.asyncio
+async def test_session_operation_failure_is_sanitized(driver, mock_client) -> None:
+    _, _, collection = mock_client
+    from pymongo.errors import OperationFailure
+
+    collection.insert_one.side_effect = OperationFailure("not primary", code=10107)
+
+    with pytest.raises(DocumentSessionError):
+        await driver.insert_one("test_collection", {"name": "test"})
+
+
+@pytest.mark.asyncio
+async def test_generic_operation_failure_is_sanitized(driver, mock_client) -> None:
+    _, _, collection = mock_client
+    from pymongo.errors import OperationFailure
+
+    collection.insert_one.side_effect = OperationFailure("write rejected", code=999)
+
+    with pytest.raises(DocumentWriteError):
+        await driver.insert_one("test_collection", {"name": "test"})
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_is_sanitized(driver, mock_client) -> None:
+    _, _, collection = mock_client
+    from pymongo.errors import ConnectionFailure
+
+    collection.find.side_effect = ConnectionFailure("private topology details")
+
+    with pytest.raises(DocumentOperationError):
+        await driver.find("test_collection")
+
+
+@pytest.mark.asyncio
+async def test_unknown_operation_failure_is_sanitized(driver, mock_client) -> None:
+    _, _, collection = mock_client
+    collection.count_documents.side_effect = RuntimeError("private backend details")
+
+    with pytest.raises(DocumentOperationError):
+        await driver.count_documents("test_collection")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backend_method", "driver_method"),
+    (
+        ("update_many", "update_many"),
+        ("replace_one", "replace_one"),
+        ("delete_one", "delete_one"),
+        ("delete_many", "delete_many"),
+        ("aggregate", "aggregate"),
+        ("create_index", "create_index"),
+        ("list_indexes", "list_indexes"),
+    ),
+)
+async def test_backend_operation_failures_are_sanitized(
+    driver, mock_client, backend_method: str, driver_method: str
+) -> None:
+    _, _, collection = mock_client
+    getattr(collection, backend_method).side_effect = RuntimeError("private backend details")
+    filter_obj = DocumentFilter(criteria={"id": "document"})
+    calls = {
+        "update_many": lambda: driver.update_many(
+            "test_collection", filter_obj, {"$set": {"name": "updated"}}
+        ),
+        "replace_one": lambda: driver.replace_one(
+            "test_collection", filter_obj, {"name": "replacement"}
+        ),
+        "delete_one": lambda: driver.delete_one("test_collection", filter_obj),
+        "delete_many": lambda: driver.delete_many("test_collection", filter_obj),
+        "aggregate": lambda: driver.aggregate(
+            "test_collection", AggregationPipeline(stages=[{"$match": {}}])
+        ),
+        "create_index": lambda: driver.create_index(
+            "test_collection", IndexDefinition(fields=[("name", IndexType.KEY)])
+        ),
+        "list_indexes": lambda: driver.list_indexes("test_collection"),
+    }
+
+    with pytest.raises(DocumentOperationError):
+        await calls[driver_method]()
+
+
 # ---------------------------------------------------------------------------
 # Driver lifecycle tests
 # ---------------------------------------------------------------------------
@@ -529,3 +790,16 @@ async def test_closed_driver_raises_error(driver, mock_client) -> None:
 
     with pytest.raises(DocumentOperationError):
         await driver.insert_one("test_collection", {"name": "test"})
+
+
+def test_context_manager_closes_session_and_client(driver, mock_client) -> None:
+    client, _, _ = mock_client
+    session = MagicMock()
+    driver._session = session
+
+    with driver as entered:
+        assert entered is driver
+
+    session.end_session.assert_called_once_with()
+    client.return_value.close.assert_called_once_with()
+    driver.close()

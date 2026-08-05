@@ -1,12 +1,136 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
+
+import pytest
 
 REPO_ROOT = Path(__file__).parents[2]
 VERIFIER = REPO_ROOT / "scripts" / "verify_isolated_opencode.py"
+
+
+def _load_verifier() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("verify_isolated_opencode", VERIFIER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _valid_config(root: Path) -> dict[str, object]:
+    template = (REPO_ROOT / "integrations/opencode-isolated/opencode.json.template").read_text(
+        encoding="utf-8"
+    )
+    config = json.loads(template.replace("__AF_MCP__", str(root / "af-venv/bin/af-mcp")))
+    config["plugin_origins"] = [
+        {"spec": (root / "xdg/config/opencode/plugins/af-route.js").as_uri()}
+    ]
+    return config
+
+
+def _agent_list() -> str:
+    names = (
+        "dispatcher (primary)",
+        "architect (subagent)",
+        "builder (subagent)",
+        "reviewer (subagent)",
+        "tester (subagent)",
+        "general (subagent)",
+        "title (primary)",
+        "summary (primary)",
+        "compaction (primary)",
+    )
+    return "\n".join(names) + "\n"
+
+
+def _run_responses(root: Path, config: dict[str, object], paths: str):
+    def run(_launcher: Path, *arguments: str) -> str:
+        responses = {
+            ("--version",): "1.18.4\n",
+            ("debug", "paths"): paths,
+            ("debug", "config"): json.dumps(config),
+            ("agent", "list"): _agent_list(),
+        }
+        return responses[arguments]
+
+    return run
+
+
+def test_verifier_rejects_incomplete_debug_paths(tmp_path: Path, monkeypatch) -> None:
+    module = _load_verifier()
+    root = tmp_path / "opencode-af"
+    config = _valid_config(root)
+    paths = f"home       {root}/home\n"
+    monkeypatch.setattr(module, "_run", _run_responses(root, config, paths))
+
+    with pytest.raises(RuntimeError, match="paths"):
+        module.verify(root, tmp_path / "launcher")
+
+
+def test_verifier_rejects_filesystem_root(monkeypatch) -> None:
+    module = _load_verifier()
+    root = Path("/")
+    config = _valid_config(root)
+    paths = "\n".join(
+        (
+            "home /home",
+            "data /xdg/data/opencode",
+            "cache /xdg/cache/opencode",
+            "config /xdg/config/opencode",
+            "state /xdg/state/opencode",
+            "tmp /tmp/opencode",
+        )
+    )
+    monkeypatch.setattr(module, "_run", _run_responses(root, config, paths))
+
+    with pytest.raises(RuntimeError, match="filesystem root"):
+        module.verify(root, Path("/launcher"))
+
+
+def test_verifier_rejects_unexpected_mcp_command(tmp_path: Path, monkeypatch) -> None:
+    module = _load_verifier()
+    root = tmp_path / "opencode-af"
+    config = _valid_config(root)
+    config["mcp"]["af"]["command"] = [str(tmp_path / "external/af-mcp")]
+    paths = "\n".join(
+        (
+            f"home {root}/home",
+            f"data {root}/xdg/data/opencode",
+            f"cache {root}/xdg/cache/opencode",
+            f"config {root}/xdg/config/opencode",
+            f"state {root}/xdg/state/opencode",
+            f"tmp {root}/tmp/opencode",
+        )
+    )
+    monkeypatch.setattr(module, "_run", _run_responses(root, config, paths))
+
+    with pytest.raises(RuntimeError, match="MCP command"):
+        module.verify(root, tmp_path / "launcher")
+
+
+def test_verifier_rejects_contaminated_plugin_origin_metadata(tmp_path: Path, monkeypatch) -> None:
+    module = _load_verifier()
+    root = tmp_path / "opencode-af"
+    config = _valid_config(root)
+    config["plugin_origins"][0]["source"] = "/opt/pr/contaminated.js"
+    paths = "\n".join(
+        (
+            f"home {root}/home",
+            f"data {root}/xdg/data/opencode",
+            f"cache {root}/xdg/cache/opencode",
+            f"config {root}/xdg/config/opencode",
+            f"state {root}/xdg/state/opencode",
+            f"tmp {root}/tmp/opencode",
+        )
+    )
+    monkeypatch.setattr(module, "_run", _run_responses(root, config, paths))
+
+    with pytest.raises(RuntimeError, match="forbidden contamination"):
+        module.verify(root, tmp_path / "launcher")
 
 
 def test_isolated_opencode_verifier_accepts_clean_routed_instance(tmp_path: Path) -> None:

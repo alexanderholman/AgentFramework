@@ -332,7 +332,7 @@ class PubSubDriver(Protocol):
     ) -> MessageEnvelope | None: ...
 
 
-class DurableStreamDriver(PubSubDriver):
+class DurableStreamDriver(PubSubDriver, Protocol):
     """Extends pub-sub with replay, checkpoint, and consumer-group support."""
 
     def create_consumer_group(self, group: ConsumerGroup) -> None: ...
@@ -341,7 +341,7 @@ class DurableStreamDriver(PubSubDriver):
     def replay(self, subscription: PubSubSubscription) -> ReplayReport: ...
 
 
-class StreamDriver(DurableStreamDriver):
+class StreamDriver(DurableStreamDriver, Protocol):
     """Extends durable stream with ordering and backpressure guarantees."""
 
     def publish_ordered(

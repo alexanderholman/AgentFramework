@@ -97,20 +97,36 @@ def _assert_clean(content: str) -> None:
 
 def verify(root: Path, launcher: Path) -> None:
     root = root.resolve()
+    if root == Path(root.anchor):
+        raise RuntimeError("isolated root must not be the filesystem root")
     if _run(launcher, "--version").strip() != EXPECTED_VERSION:
         raise RuntimeError(f"OpenCode version must be {EXPECTED_VERSION}")
 
     paths = _run(launcher, "debug", "paths")
+    expected_paths = {
+        "home": root / "home",
+        "data": root / "xdg/data/opencode",
+        "cache": root / "xdg/cache/opencode",
+        "config": root / "xdg/config/opencode",
+        "state": root / "xdg/state/opencode",
+        "tmp": root / "tmp/opencode",
+    }
+    observed_paths: dict[str, Path] = {}
     for line in paths.splitlines():
         parts = line.split(maxsplit=1)
         if len(parts) != 2:
-            continue
-        candidate = Path(parts[1]).resolve()
+            raise RuntimeError("debug paths output is malformed")
+        label, value = parts
+        if label not in expected_paths or label in observed_paths:
+            raise RuntimeError(f"unexpected debug paths label: {label}")
+        candidate = Path(value).resolve()
         if not candidate.is_relative_to(root):
             raise RuntimeError(f"path escapes isolated root: {candidate}")
+        observed_paths[label] = candidate
+    if observed_paths != {name: path.resolve() for name, path in expected_paths.items()}:
+        raise RuntimeError("debug paths do not match the isolated layout")
 
     config_text = _run(launcher, "debug", "config")
-    _assert_clean(config_text)
     config = json.loads(config_text)
     if config.get("default_agent") != "dispatcher":
         raise RuntimeError("dispatcher is not the default agent")
@@ -129,6 +145,17 @@ def verify(root: Path, launcher: Path) -> None:
     expected_plugin = (root / "xdg/config/opencode/plugins/af-route.js").as_uri()
     if len(origins) != 1 or origins[0].get("spec") != expected_plugin:
         raise RuntimeError("exactly one AF route plugin must be loaded")
+    expected_mcp_command = [str(root / "af-venv/bin/af-mcp")]
+    try:
+        mcp_command = config["mcp"]["af"]["command"]
+    except (KeyError, TypeError):
+        mcp_command = None
+    if mcp_command != expected_mcp_command:
+        raise RuntimeError("AF MCP command does not match the isolated root")
+    config_for_scan = json.loads(config_text)
+    config_for_scan["plugin_origins"][0]["spec"] = "[isolated-root]/af-route.js"
+    config_for_scan["mcp"]["af"]["command"] = ["[isolated-root]/af-mcp"]
+    _assert_clean(json.dumps(config_for_scan))
 
     agent_text = _run(launcher, "agent", "list")
     _assert_clean(agent_text)
