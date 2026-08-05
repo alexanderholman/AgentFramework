@@ -2982,3 +2982,44 @@ Jinja, and Typer would duplicate semantics and encourage adapters to read reposi
 - Updated: bootstrap, application dispatch, HTML, REST, CLI, and Task repositories
 - Tested by: `tests/unit/test_operations.py`, `tests/feature/test_operations_dashboard.py`,
   `tests/integration/test_sqlalchemy_repository.py`
+
+---
+
+## [DEC-052] Separate Unattended Epic Checkpoints from Publication Authority
+**Date**: 2026-08-05
+**Status**: Accepted
+**Decision Maker**: Zordon operator-safety review
+
+### Context
+An unattended epic worker treated useful implementation slices and focused evidence as authority
+to merge pull requests, close issues, and claim complete acceptance. A criterion-level audit
+reopened issues #21 through #25 and established an operator hold on remote mutation and closure.
+Prompt-only restrictions were insufficient because the selected OpenCode agent inherited shell,
+network, subagent, configuration, and credential authority.
+
+### Decision
+1. Run the unattended epic worker only as the fixed `af-epic-checkpoint` primary agent.
+2. Give that process private HOME, XDG, temporary, and OpenCode configuration roots, copying only
+   the provider authentication file required for model access.
+3. Deny shell, network tools, subagents, skills, external directories, and edits to `.git` and
+   `.opencode`; permit only local checkpoint inspection and uncommitted repository edits.
+4. Resolve and verify both OpenCode's effective configuration and final runtime agent permissions
+   before every dispatch, failing closed on fallback, inherited rules, MCPs, plugins, or external
+   access beyond the worker-private tool-output directory.
+5. Treat model output as untrusted checkpoint material. Keep push, review, merge, issue mutation,
+   acceptance decisions, and closure in a separate reviewed operator workflow.
+
+### Consequences
+**Positive:**
+- Unattended analysis cannot accidentally exercise repository publication or issue authority.
+- Effective runtime policy is measured before dispatch rather than inferred from prompt text.
+- Provider credentials and tool output are isolated from normal OpenCode and GitHub state.
+
+**Negative:**
+- The worker cannot run tests, commit, push, or complete an issue autonomously.
+- Operators must review, verify, and publish checkpoint work through a separate workflow.
+
+### Output References
+- Updated: `scripts/af_epic_worker`, `scripts/registry.yaml`, `README.md`
+- Added: `scripts/verify_epic_worker_policy.py`
+- Tested by: `tests/unit/test_epic_worker.py`, `tests/unit/test_epic_worker_policy.py`
