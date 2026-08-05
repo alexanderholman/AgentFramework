@@ -7,7 +7,7 @@ EPIC_NUMBER="${AF_EPIC_NUMBER:-177}"
 STATE_DIR="${AF_EPIC_STATE_DIR:-$HOME/run/agentframework-epic-$EPIC_NUMBER}"
 LANE_DIR="${AF_EPIC_LANE_DIR:-/opt/pr/mmpr/opencode/pr-universe/workspaces/alpha/wip/epic-$EPIC_NUMBER}"
 DIRECTIVE_FILE="${AF_EPIC_DIRECTIVE_FILE:-$LANE_DIR/directive.md}"
-MODEL="${AF_EPIC_MODEL:-github-copilot/gpt-5.4}"
+MODEL="${AF_EPIC_MODEL:-}"
 AGENT="${AF_EPIC_AGENT:-af-epic-checkpoint}"
 ITERATION_TIMEOUT="${AF_EPIC_ITERATION_TIMEOUT:-21600}"
 POLL_SECONDS="${AF_EPIC_POLL_SECONDS:-60}"
@@ -40,14 +40,25 @@ OPENCODE_XDG_CACHE="$OPENCODE_POLICY_DIR/xdg-cache"
 OPENCODE_XDG_STATE="$OPENCODE_POLICY_DIR/xdg-state"
 OPENCODE_TMP="$OPENCODE_POLICY_DIR/tmp"
 OPENCODE_CONFIG_DIR="$OPENCODE_POLICY_DIR/opencode-config"
-OPENCODE_AUTH_SOURCE="${AF_EPIC_OPENCODE_AUTH_FILE:-$HOME/.local/share/opencode/auth.json}"
+OPENCODE_PROVIDER_SOURCE="${AF_EPIC_OPENCODE_CONFIG_FILE:-$HOME/.config/opencode/opencode.json}"
 
 if [[ "$AGENT" != "af-epic-checkpoint" ]]; then
   printf 'AF_EPIC_AGENT must be af-epic-checkpoint\n' >&2
   exit 2
 fi
+if [[ -z "$MODEL" ]]; then
+  printf 'AF_EPIC_MODEL must select a configured loopback model\n' >&2
+  exit 2
+fi
 
-checkpoint_config="$("$POLICY_PYTHON" "$POLICY_VERIFIER" --render-config)"
+if [[ ! -r "$OPENCODE_PROVIDER_SOURCE" ]]; then
+  printf 'OpenCode provider config is not readable: %s\n' "$OPENCODE_PROVIDER_SOURCE" >&2
+  exit 2
+fi
+checkpoint_config="$(
+  "$POLICY_PYTHON" "$POLICY_VERIFIER" --render-config \
+    --model "$MODEL" --provider-config "$OPENCODE_PROVIDER_SOURCE"
+)"
 opencode_environment=(
   env
   -u OPENCODE_CONFIG
@@ -70,10 +81,6 @@ opencode_environment=(
   OPENCODE_DISABLE_DEFAULT_PLUGINS=true
 )
 
-if [[ ! -r "$OPENCODE_AUTH_SOURCE" ]]; then
-  printf 'OpenCode provider auth file is not readable: %s\n' "$OPENCODE_AUTH_SOURCE" >&2
-  exit 2
-fi
 mkdir -p \
   "$STATE_DIR/logs" "$LANE_DIR" "$OPENCODE_HOME" "$OPENCODE_XDG_CONFIG" \
   "$OPENCODE_XDG_DATA/opencode" "$OPENCODE_XDG_CACHE" "$OPENCODE_XDG_STATE" \
@@ -82,7 +89,7 @@ chmod 0700 \
   "$OPENCODE_POLICY_DIR" "$OPENCODE_HOME" "$OPENCODE_XDG_CONFIG" \
   "$OPENCODE_XDG_DATA" "$OPENCODE_XDG_CACHE" "$OPENCODE_XDG_STATE" \
   "$OPENCODE_TMP" "$OPENCODE_CONFIG_DIR"
-install -m 0600 "$OPENCODE_AUTH_SOURCE" "$OPENCODE_XDG_DATA/opencode/auth.json"
+rm -f "$OPENCODE_XDG_DATA/opencode/auth.json"
 exec 9>"$STATE_DIR/worker.lock"
 flock -n 9 || {
   printf '%s epic #%s worker already running\n' "$(date -Is)" "$EPIC_NUMBER"
@@ -180,6 +187,7 @@ EOF
     exit 1
   fi
   if ! "$POLICY_PYTHON" "$POLICY_VERIFIER" --config "$effective_policy" \
+    --model "$MODEL" --provider-config "$OPENCODE_PROVIDER_SOURCE" \
     >>"$STATE_DIR/worker.log" 2>&1; then
     log "iteration $iteration effective policy is unsafe; stopping before dispatch"
     exit 1

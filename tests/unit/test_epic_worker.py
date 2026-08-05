@@ -72,8 +72,22 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
     debug_capture = tmp_path / "opencode-debug-args.txt"
     agent_debug_capture = tmp_path / "opencode-agent-debug-args.txt"
     config_environment_capture = tmp_path / "opencode-config-environment.txt"
-    auth_file = tmp_path / "auth.json"
-    auth_file.write_text('{"github-copilot":{"token":"test-only"}}', encoding="utf-8")
+    provider_file = tmp_path / "opencode.json"
+    provider_file.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "lovelace-general": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "Lovelace General",
+                        "options": {"baseURL": "http://127.0.0.1:8080/v1", "timeout": 900000},
+                        "models": {"qwen": {"name": "Qwen", "tool_call": True}},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     private_tool_output = state_dir / "opencode-policy/xdg-data/opencode/tool-output/*"
     agent_debug_response = json.dumps(
         {
@@ -179,7 +193,8 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
             "OPENCODE_CONFIG": str(tmp_path / "unsafe.json"),
             "OPENCODE_CONFIG_DIR": str(tmp_path / "unsafe-config"),
             "AF_EPIC_POLICY_PYTHON": sys.executable,
-            "AF_EPIC_OPENCODE_AUTH_FILE": str(auth_file),
+            "AF_EPIC_OPENCODE_CONFIG_FILE": str(provider_file),
+            "AF_EPIC_MODEL": "lovelace-general/qwen",
         }
     )
     if configured_session_id is not None:
@@ -229,9 +244,7 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
         str(state_dir / "opencode-policy/opencode-config"),
         "unset",
     ]
-    isolated_auth = state_dir / "opencode-policy/xdg-data/opencode/auth.json"
-    assert isolated_auth.read_text(encoding="utf-8") == auth_file.read_text(encoding="utf-8")
-    assert isolated_auth.stat().st_mode & 0o777 == 0o600
+    assert not (state_dir / "opencode-policy/xdg-data/opencode/auth.json").exists()
     prompt = prompt_capture.read_text(encoding="utf-8")
     assert prompt.index("Follow the epic.") < prompt.index("## Unattended safety boundary")
     normalized_prompt = " ".join(prompt.split())
@@ -240,6 +253,8 @@ def test_epic_worker_logs_checkpoint_with_stable_session_id(
 
     config = json.loads(config_capture.read_text(encoding="utf-8"))
     assert config["default_agent"] == "af-epic-checkpoint"
+    assert config["model"] == "lovelace-general/qwen"
+    assert set(config["provider"]) == {"lovelace-general"}
     permissions = config["agent"]["af-epic-checkpoint"]["permission"]
     assert permissions["*"] == "deny"
     assert permissions["read"]["*.env"] == "deny"

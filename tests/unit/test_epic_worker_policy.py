@@ -76,6 +76,30 @@ def _valid_agent(module: ModuleType, policy_root: Path) -> dict[str, object]:
     }
 
 
+def _local_provider_source(
+    base_url: str = "http://127.0.0.1:8080/v1", timeout: object = 900000
+) -> dict[str, object]:
+    return {
+        "provider": {
+            "lovelace-general": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Lovelace General",
+                "options": {"baseURL": base_url, "timeout": timeout},
+                "models": {
+                    "qwen": {
+                        "name": "Qwen",
+                        "reasoning": False,
+                        "temperature": True,
+                        "tool_call": True,
+                        "limit": {"context": 32768, "output": 8192},
+                    },
+                    "unused": {"name": "Unused"},
+                },
+            }
+        }
+    }
+
+
 def test_checkpoint_policy_accepts_exact_effective_config() -> None:
     module = _load_verifier()
 
@@ -89,6 +113,41 @@ def test_rendered_checkpoint_policy_verifies_exactly() -> None:
 
     module.verify(config)
     assert config["agent"][module.CHECKPOINT_AGENT]["mode"] == "primary"
+
+
+def test_rendered_checkpoint_policy_selects_one_loopback_provider() -> None:
+    module = _load_verifier()
+    source = _local_provider_source()
+
+    config = module.render_config("lovelace-general/qwen", source)
+
+    module.verify(config, "lovelace-general/qwen", source)
+    assert set(config["provider"]) == {"lovelace-general"}
+    assert set(config["provider"]["lovelace-general"]["models"]) == {"qwen"}
+    assert config["model"] == "lovelace-general/qwen"
+
+
+def test_checkpoint_policy_rejects_non_loopback_provider() -> None:
+    module = _load_verifier()
+
+    with pytest.raises(RuntimeError, match="loopback"):
+        module.render_config(
+            "lovelace-general/qwen", _local_provider_source("https://example.com/v1")
+        )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        _local_provider_source("http://localhost:not-a-port/v1"),
+        _local_provider_source(timeout=True),
+    ],
+)
+def test_checkpoint_policy_rejects_malformed_loopback_provider(source) -> None:
+    module = _load_verifier()
+
+    with pytest.raises(RuntimeError, match="provider"):
+        module.render_config("lovelace-general/qwen", source)
 
 
 def test_runtime_agent_policy_allows_only_private_tool_output(tmp_path: Path) -> None:
@@ -124,6 +183,7 @@ def test_runtime_agent_policy_rejects_external_allow(tmp_path: Path) -> None:
         ),
         lambda config, module: config.update(mcp={"unsafe": {"enabled": True}}),
         lambda config, module: config.update(plugin=["file:///tmp/unsafe.js"]),
+        lambda config, module: config.update(share="auto"),
     ],
 )
 def test_checkpoint_policy_rejects_effective_escape(mutation) -> None:

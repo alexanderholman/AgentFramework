@@ -271,8 +271,9 @@ scripts:
     parameters:
       - "AF_EPIC_REPO"
       - "AF_EPIC_NUMBER"
+      - "AF_EPIC_MODEL"
       - "AF_EPIC_MEMLOG_SESSION_ID"
-      - "AF_EPIC_OPENCODE_AUTH_FILE"
+      - "AF_EPIC_OPENCODE_CONFIG_FILE"
     outputs:
       - "iteration-state"
       - "iteration-logs"
