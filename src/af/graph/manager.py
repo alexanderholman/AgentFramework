@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from af.framework.managers import CapabilitySet
@@ -34,10 +35,24 @@ class GraphDriver(Protocol):
     def delete_edge(self, edge_id: str) -> None: ...
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class GraphDriverRegistration:
+    """Explicit graph-driver registration for operator-owned composition."""
+
+    driver: GraphDriver
+    capabilities: Set[GraphFeature]
+
+    def __post_init__(self) -> None:
+        capabilities = frozenset(self.capabilities)
+        if not all(isinstance(feature, GraphFeature) for feature in capabilities):
+            raise ValueError("graph driver capabilities must contain GraphFeature values")
+        object.__setattr__(self, "capabilities", capabilities)
+
+
 class _DriverEntry:
     """Internal holder for a registered driver and its capabilities."""
 
-    def __init__(self, driver: GraphDriver, capabilities: set[GraphFeature]) -> None:
+    def __init__(self, driver: GraphDriver, capabilities: Set[GraphFeature]) -> None:
         self.driver = driver
         self.capabilities = capabilities
 
@@ -47,7 +62,7 @@ class GraphManager:
 
     def __init__(
         self,
-        registry: dict[str, Any],
+        registry: Mapping[str, GraphDriverRegistration],
         default_name: str | None = None,
     ) -> None:
         if not registry:
@@ -123,39 +138,9 @@ class GraphManager:
         self.get(driver_name).delete_edge(edge_id)
 
 
-def _default_registry() -> dict[str, Any]:
-    """Build the default driver registry with Neo4j Community and OrientDB."""
-    from types import SimpleNamespace
-
-    from af.graph.drivers.neo4j import Neo4jCommunityDriver
-    from af.graph.drivers.orientdb import OrientDBDriver
-
-    neo4j = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-    orientdb = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-
-    return {
-        "neo4j-community": SimpleNamespace(
-            driver=neo4j,
-            capabilities={GraphFeature.QUERY, GraphFeature.PERSISTENCE},
-        ),
-        "orientdb": SimpleNamespace(
-            driver=orientdb,
-            capabilities={GraphFeature.QUERY, GraphFeature.INDEXING, GraphFeature.PERSISTENCE},
-        ),
-    }
-
-
 def bind_graph_manager(
-    registry: dict[str, Any] | None = None,
+    registry: Mapping[str, GraphDriverRegistration],
     default_name: str | None = None,
 ) -> GraphManager:
-    """Create and return a GraphManager instance.
-
-    When *registry* is ``None``, the default Neo4j Community and OrientDB
-    drivers are registered automatically.
-    """
-    if registry is None:
-        registry = _default_registry()
-        if default_name is None:
-            default_name = "neo4j-community"
+    """Create a manager from an explicit, operator-owned driver registry."""
     return GraphManager(registry, default_name=default_name)
