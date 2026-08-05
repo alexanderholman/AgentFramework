@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from af.graph.contracts import (
@@ -172,7 +174,7 @@ def test_graph_contracts_are_immutable() -> None:
         properties={"name": "test"},
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         node.node_id = "entity-002"  # type: ignore[misc]
 
     edge = GraphEdge(
@@ -183,5 +185,5 @@ def test_graph_contracts_are_immutable() -> None:
         properties={},
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         edge.edge_id = "rel-002"  # type: ignore[misc]

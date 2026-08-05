@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import datetime
 
 import pytest
@@ -128,7 +129,7 @@ def test_document_filter_merge_overwrites() -> None:
 
 def test_document_filter_is_frozen() -> None:
     f = DocumentFilter()
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         f.criteria = {"x": 1}  # type: ignore
 
 
