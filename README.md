@@ -179,9 +179,12 @@ legacy AgentFactory governance suite. It also validates the production-MVP manif
 builds, inspects, temporarily installs, and smokes a wheel produced from the sdist. The
 framework tests are deliberately network-free.
 
-Long-running epic execution uses the registered `[SCRIPT:af-epic-worker]` harness. Each
+Long-running epic analysis uses the registered `[SCRIPT:af-epic-worker]` harness. Each
 iteration records a checkpoint under a stable session ID so service restarts preserve one
-continuity stream:
+continuity stream. The unattended worker is checkpoint-only: it runs a fixed primary agent in
+private OpenCode configuration and data roots, verifies the resolved configuration and runtime
+permissions before dispatch, denies shell/network/subagent authority, and cannot publish or claim
+acceptance. Reviewed publication and closure remain separate operator actions.
 
 ```bash
 AF_EPIC_NUMBER=177 \

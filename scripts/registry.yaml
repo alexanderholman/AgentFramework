@@ -264,19 +264,24 @@ scripts:
       - "epic-iteration"
       - "memlog-checkpoint"
       - "bounded-runtime"
-    description: "Run bounded unattended epic iterations with stable memlog continuity"
+      - "checkpoint-only-analysis"
+      - "remote-mutation-denial"
+    description: "Run bounded checkpoint-only epic analysis with verified OpenCode containment"
     command: "scripts/af_epic_worker"
     parameters:
       - "AF_EPIC_REPO"
       - "AF_EPIC_NUMBER"
       - "AF_EPIC_MEMLOG_SESSION_ID"
+      - "AF_EPIC_OPENCODE_AUTH_FILE"
     outputs:
       - "iteration-state"
       - "iteration-logs"
       - "memlog-checkpoints"
+      - "effective-policy-snapshots"
     validation:
       - "exit_code == 0"
       - "memlog checkpoints include --session-id"
+      - "resolved config and agent permissions pass verify_epic_worker_policy.py"
     status: "active"
 
 policy:
