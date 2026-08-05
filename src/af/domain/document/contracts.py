@@ -405,7 +405,8 @@ class UnsupportedDocumentFeature(DocumentOperationError):
 class DuplicateKeyError(DocumentOperationError):
     """Raised on unique index violation."""
 
-    code = 11000
+    def __init__(self, message: str):
+        super().__init__(message, code=11000)
 
 
 class WriteConcernError(DocumentOperationError):
