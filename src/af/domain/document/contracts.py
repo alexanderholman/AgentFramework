@@ -8,25 +8,14 @@ plug in without changing domain logic.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import (
     Any,
-    AsyncIterator,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
+    Protocol,
 )
-
-import asyncio
-from dataclasses import dataclass, field
-from typing import Protocol
-
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -83,9 +72,9 @@ class IndexType(Enum):
 class DocumentFilter:
     """Query filter expressed as a mapping of field paths to conditions."""
 
-    criteria: Dict[str, Any] = field(default_factory=dict)
+    criteria: dict[str, Any] = field(default_factory=dict)
 
-    def merge(self, other: Optional["DocumentFilter"] = None) -> "DocumentFilter":
+    def merge(self, other: DocumentFilter | None = None) -> DocumentFilter:
         """Return a new filter that is the union of both criterion sets."""
         if other is None:
             return self
@@ -98,17 +87,17 @@ class DocumentFilter:
 class DocumentProjection:
     """Fields to include or exclude from query results."""
 
-    include: Optional[Dict[str, int]] = None
-    exclude: Optional[Dict[str, int]] = None
+    include: dict[str, int] | None = None
+    exclude: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
 class AggregationPipeline:
     """Ordered sequence of aggregation stages."""
 
-    stages: List[Dict[str, Any]] = field(default_factory=list)
+    stages: list[dict[str, Any]] = field(default_factory=list)
 
-    def append(self, stage: Dict[str, Any]) -> "AggregationPipeline":
+    def append(self, stage: dict[str, Any]) -> AggregationPipeline:
         """Return a new pipeline with an additional stage."""
         new_stages = list(self.stages)
         new_stages.append(stage)
@@ -119,11 +108,11 @@ class AggregationPipeline:
 class IndexDefinition:
     """Specification for a document index."""
 
-    fields: List[Tuple[str, IndexType]]
-    name: Optional[str] = None
+    fields: list[tuple[str, IndexType]]
+    name: str | None = None
     unique: bool = False
     sparse: bool = False
-    expire_after_seconds: Optional[int] = None
+    expire_after_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -131,14 +120,14 @@ class TimeSeriesOptions:
     """Configuration for a time-series collection."""
 
     time_field: str
-    meta_field: Optional[str] = None
+    meta_field: str | None = None
     granularity: str = "hour"
-    bucket_max_span_seconds: Optional[int] = None
-    bucket_rounding_seconds: Optional[int] = None
+    bucket_max_span_seconds: int | None = None
+    bucket_rounding_seconds: int | None = None
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """Return validation errors (empty list if valid)."""
-        errors: List[str] = []
+        errors: list[str] = []
         if not self.time_field:
             errors.append("time_field is required")
         allowed = {"second", "minute", "hour"}
@@ -155,7 +144,7 @@ class DocumentChange:
     operation: str  # "insert", "update", "delete", "replace"
     document_id: Any
     timestamp: datetime = field(default_factory=datetime.utcnow)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -163,9 +152,9 @@ class BulkOperation:
     """A single operation within a bulk write batch."""
 
     operation: str  # "insert", "update", "delete", "replace"
-    filter: Optional[DocumentFilter] = None
-    document: Optional[Dict[str, Any]] = None
-    options: Dict[str, Any] = field(default_factory=dict)
+    filter: DocumentFilter | None = None
+    document: dict[str, Any] | None = None
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -177,21 +166,21 @@ class BulkWriteResult:
     modified_count: int = 0
     deleted_count: int = 0
     upserted_count: int = 0
-    write_errors: List[Dict[str, Any]] = field(default_factory=list)
-    write_concern_errors: List[Dict[str, Any]] = field(default_factory=list)
+    write_errors: list[dict[str, Any]] = field(default_factory=list)
+    write_concern_errors: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CursorResult:
     """Lazy cursor wrapper for query results."""
 
-    def __init__(self, items: Optional[List[Dict[str, Any]]] = None):
-        self._items: List[Dict[str, Any]] = items or []
+    def __init__(self, items: list[dict[str, Any]] | None = None):
+        self._items: list[dict[str, Any]] = items or []
         self._index: int = 0
 
-    def __aiter__(self) -> AsyncIterator[Dict[str, Any]]:
+    def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
         return self
 
-    async def __anext__(self) -> Dict[str, Any]:
+    async def __anext__(self) -> dict[str, Any]:
         if self._index >= len(self._items):
             raise StopAsyncIteration
         item = self._items[self._index]
@@ -199,7 +188,7 @@ class CursorResult:
         return item
 
     @classmethod
-    def from_items(cls, items: List[Dict[str, Any]]) -> "CursorResult":
+    def from_items(cls, items: list[dict[str, Any]]) -> CursorResult:
         return cls(items=items)
 
 
@@ -207,8 +196,8 @@ class CursorResult:
 class QueryResult:
     """Result of a find/query operation."""
 
-    documents: List[Dict[str, Any]] = field(default_factory=list)
-    cursor: Optional[CursorResult] = None
+    documents: list[dict[str, Any]] = field(default_factory=list)
+    cursor: CursorResult | None = None
     count: int = 0
 
 
@@ -217,12 +206,12 @@ class WriteResult:
     """Result of a write operation."""
 
     acknowledged: bool = False
-    inserted_id: Optional[Any] = None
-    inserted_ids: List[Any] = field(default_factory=list)
+    inserted_id: Any | None = None
+    inserted_ids: list[Any] = field(default_factory=list)
     matched_count: int = 0
     modified_count: int = 0
     deleted_count: int = 0
-    upserted_id: Optional[Any] = None
+    upserted_id: Any | None = None
 
 
 class SessionContext:
@@ -247,14 +236,14 @@ class DocumentDriver(Protocol):
     async def insert_one(
         self,
         collection: str,
-        document: Dict[str, Any],
+        document: dict[str, Any],
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult: ...
 
     async def insert_many(
         self,
         collection: str,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         ordered: bool = True,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult: ...
@@ -262,17 +251,17 @@ class DocumentDriver(Protocol):
     async def find_one(
         self,
         collection: str,
-        filter: Optional[DocumentFilter] = None,
-        projection: Optional[DocumentProjection] = None,
+        filter: DocumentFilter | None = None,
+        projection: DocumentProjection | None = None,
         read_preference: ReadPreference = ReadPreference.PRIMARY,
-    ) -> Optional[Dict[str, Any]]: ...
+    ) -> dict[str, Any] | None: ...
 
     async def find(
         self,
         collection: str,
-        filter: Optional[DocumentFilter] = None,
-        projection: Optional[DocumentProjection] = None,
-        sort: Optional[Dict[str, int]] = None,
+        filter: DocumentFilter | None = None,
+        projection: DocumentProjection | None = None,
+        sort: dict[str, int] | None = None,
         limit: int = 0,
         skip: int = 0,
         read_preference: ReadPreference = ReadPreference.PRIMARY,
@@ -281,14 +270,14 @@ class DocumentDriver(Protocol):
     async def count_documents(
         self,
         collection: str,
-        filter: Optional[DocumentFilter] = None,
+        filter: DocumentFilter | None = None,
     ) -> int: ...
 
     async def update_one(
         self,
         collection: str,
         filter: DocumentFilter,
-        update: Dict[str, Any],
+        update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult: ...
@@ -297,7 +286,7 @@ class DocumentDriver(Protocol):
         self,
         collection: str,
         filter: DocumentFilter,
-        update: Dict[str, Any],
+        update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult: ...
@@ -306,7 +295,7 @@ class DocumentDriver(Protocol):
         self,
         collection: str,
         filter: DocumentFilter,
-        replacement: Dict[str, Any],
+        replacement: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult: ...
@@ -329,7 +318,7 @@ class DocumentDriver(Protocol):
         self,
         collection: str,
         pipeline: AggregationPipeline,
-    ) -> List[Dict[str, Any]]: ...
+    ) -> list[dict[str, Any]]: ...
 
     async def create_index(
         self,
@@ -340,7 +329,7 @@ class DocumentDriver(Protocol):
     async def list_indexes(
         self,
         collection: str,
-    ) -> List[Dict[str, Any]]: ...
+    ) -> list[dict[str, Any]]: ...
 
     async def drop_index(
         self,
@@ -353,7 +342,7 @@ class DocumentDriver(Protocol):
     async def bulk_write(
         self,
         collection: str,
-        operations: List[BulkOperation],
+        operations: list[BulkOperation],
         ordered: bool = True,
     ) -> BulkWriteResult: ...
 
@@ -366,7 +355,7 @@ class DocumentDriver(Protocol):
     async def get_time_series_options(
         self,
         collection: str,
-    ) -> Optional[TimeSeriesOptions]: ...
+    ) -> TimeSeriesOptions | None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -381,9 +370,9 @@ class DocumentOperationError(Exception):
         self,
         message: str,
         *,
-        collection: Optional[str] = None,
-        operation: Optional[str] = None,
-        code: Optional[int] = None,
+        collection: str | None = None,
+        operation: str | None = None,
+        code: int | None = None,
     ):
         super().__init__(message)
         self.collection = collection
@@ -416,7 +405,10 @@ class WriteConcernError(DocumentOperationError):
 class TransactionNotSupportedError(DocumentOperationError):
     """Raised when transaction topology is unsupported."""
 
-    def __init__(self, reason: str = "Single-node MongoDB Community does not support multi-document transactions"):
+    def __init__(
+        self,
+        reason: str = "Single-node MongoDB Community does not support multi-document transactions",
+    ):
         super().__init__(reason, operation="transaction")
 
 

@@ -1,44 +1,43 @@
 from __future__ import annotations
 
-import pytest
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+
+import pytest
 
 from af.domain.document.contracts import (
-    DocumentFeature,
-    WriteConcern,
-    ReadPreference,
-    IndexType,
-    DocumentFilter,
-    DocumentProjection,
     AggregationPipeline,
-    IndexDefinition,
-    TimeSeriesOptions,
-    DocumentChange,
     BulkOperation,
     BulkWriteResult,
     CursorResult,
-    QueryResult,
-    WriteResult,
-    SessionContext,
-    DocumentDriver,
-    DocumentOperationError,
-    UnsupportedDocumentFeature,
-    DuplicateKeyError,
-    WriteConcernError,
-    TransactionNotSupportedError,
-    DocumentWriteError,
+    DocumentChange,
+    DocumentFeature,
+    DocumentFilter,
     DocumentIndexError,
     DocumentNotFoundError,
+    DocumentOperationError,
+    DocumentProjection,
     DocumentSessionError,
     DocumentTimeSeriesError,
+    DocumentWriteError,
+    DuplicateKeyError,
+    IndexDefinition,
+    IndexType,
+    QueryResult,
+    ReadPreference,
+    SessionContext,
+    TimeSeriesOptions,
+    TransactionNotSupportedError,
+    UnsupportedDocumentFeature,
     ValidationWarning,
+    WriteConcern,
+    WriteConcernError,
+    WriteResult,
 )
-
 
 # ---------------------------------------------------------------------------
 # Enum membership
 # ---------------------------------------------------------------------------
+
 
 def test_document_feature_values() -> None:
     assert DocumentFeature.CRUD in DocumentFeature
@@ -93,6 +92,7 @@ def test_index_type_values() -> None:
 # DocumentFilter
 # ---------------------------------------------------------------------------
 
+
 def test_document_filter_defaults() -> None:
     f = DocumentFilter()
     assert f.criteria == {}
@@ -136,6 +136,7 @@ def test_document_filter_is_frozen() -> None:
 # DocumentProjection
 # ---------------------------------------------------------------------------
 
+
 def test_document_projection_defaults() -> None:
     p = DocumentProjection()
     assert p.include is None
@@ -157,6 +158,7 @@ def test_document_projection_exclude() -> None:
 # ---------------------------------------------------------------------------
 # AggregationPipeline
 # ---------------------------------------------------------------------------
+
 
 def test_aggregation_pipeline_defaults() -> None:
     pipe = AggregationPipeline()
@@ -180,6 +182,7 @@ def test_aggregation_pipeline_append() -> None:
 # ---------------------------------------------------------------------------
 # IndexDefinition
 # ---------------------------------------------------------------------------
+
 
 def test_index_definition_minimal() -> None:
     idx = IndexDefinition(fields=[("name", IndexType.KEY)])
@@ -208,6 +211,7 @@ def test_index_definition_full() -> None:
 # ---------------------------------------------------------------------------
 # TimeSeriesOptions
 # ---------------------------------------------------------------------------
+
 
 def test_timeseries_options_defaults() -> None:
     ts = TimeSeriesOptions(time_field="timestamp")
@@ -260,6 +264,7 @@ def test_timeseries_validate_all_granularities() -> None:
 # DocumentChange
 # ---------------------------------------------------------------------------
 
+
 def test_document_change() -> None:
     change = DocumentChange(
         collection="users",
@@ -277,6 +282,7 @@ def test_document_change() -> None:
 # ---------------------------------------------------------------------------
 # BulkOperation
 # ---------------------------------------------------------------------------
+
 
 def test_bulk_operation_insert() -> None:
     op = BulkOperation(operation="insert", document={"name": "test"})
@@ -297,6 +303,7 @@ def test_bulk_operation_update() -> None:
 # ---------------------------------------------------------------------------
 # BulkWriteResult
 # ---------------------------------------------------------------------------
+
 
 def test_bulk_write_result_defaults() -> None:
     result = BulkWriteResult()
@@ -329,6 +336,7 @@ def test_bulk_write_result_explicit() -> None:
 # ---------------------------------------------------------------------------
 # CursorResult
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_cursor_result_empty() -> None:
@@ -363,6 +371,7 @@ async def test_cursor_result_iteration_order() -> None:
 # QueryResult
 # ---------------------------------------------------------------------------
 
+
 def test_query_result_defaults() -> None:
     qr = QueryResult()
     assert qr.documents == []
@@ -379,6 +388,7 @@ def test_query_result_explicit() -> None:
 # ---------------------------------------------------------------------------
 # WriteResult
 # ---------------------------------------------------------------------------
+
 
 def test_write_result_defaults() -> None:
     wr = WriteResult()
@@ -402,6 +412,7 @@ def test_write_result_explicit() -> None:
 # SessionContext
 # ---------------------------------------------------------------------------
 
+
 def test_session_context_init() -> None:
     ctx = SessionContext("session-1")
     assert ctx.session_id == "session-1"
@@ -419,8 +430,11 @@ async def test_session_context_close() -> None:
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 def test_document_operation_error() -> None:
-    err = DocumentOperationError("something failed", collection="users", operation="insert", code=500)
+    err = DocumentOperationError(
+        "something failed", collection="users", operation="insert", code=500
+    )
     assert err.collection == "users"
     assert err.operation == "insert"
     assert err.code == 500
@@ -497,6 +511,7 @@ def test_validation_warning() -> None:
 # ---------------------------------------------------------------------------
 # Inheritance chain
 # ---------------------------------------------------------------------------
+
 
 def test_error_inheritance() -> None:
     assert issubclass(UnsupportedDocumentFeature, DocumentOperationError)

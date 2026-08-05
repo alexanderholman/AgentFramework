@@ -74,7 +74,7 @@ class IdeonRef:
             raise ValueError("revision must be a lowercase hexadecimal SHA-256 digest")
 
 
-type PropertyValue = str | int | bool | None | IdeonRef
+type PropertyValue = str | int | bool | IdeonRef | None
 
 
 @dataclass(frozen=True, slots=True)

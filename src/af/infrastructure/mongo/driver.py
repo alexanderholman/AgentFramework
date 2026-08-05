@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import re
 from threading import RLock
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any
 
 from pymongo import MongoClient, ReadPreference, errors
 from pymongo.client_session import ClientSession
 from pymongo.results import (
     BulkWriteResult as PyMongoBulkWriteResult,
+)
+from pymongo.results import (
     DeleteResult,
     InsertManyResult,
     InsertOneResult,
@@ -21,40 +22,43 @@ from af.domain.document.contracts import (
     AggregationPipeline,
     BulkOperation,
     BulkWriteResult,
-    CursorResult,
     DocumentChange,
     DocumentFeature,
     DocumentFilter,
-    DocumentIndexError,
-    DocumentNotFoundError,
     DocumentOperationError,
     DocumentProjection,
     DocumentSessionError,
     DocumentTimeSeriesError,
     DocumentWriteError,
-    DocumentWriteError as DuplicateKeyError,
     IndexDefinition,
     IndexType,
     QueryResult,
-    ReadPreference as DocReadPreference,
     SessionContext,
     TimeSeriesOptions,
+    TransactionNotSupportedError,
     UnsupportedDocumentFeature,
-    ValidationWarning,
     WriteConcern,
     WriteResult,
+)
+from af.domain.document.contracts import (
+    DocumentWriteError as DuplicateKeyError,
+)
+from af.domain.document.contracts import (
+    ReadPreference as DocReadPreference,
 )
 
 __all__ = ("MongoDBDriver",)
 
-_CORE_FEATURES: frozenset[DocumentFeature] = frozenset({
-    DocumentFeature.CRUD,
-    DocumentFeature.AGGREGATION,
-    DocumentFeature.INDEX,
-    DocumentFeature.SESSION,
-    DocumentFeature.BULK,
-    DocumentFeature.TIME_SERIES,
-})
+_CORE_FEATURES: frozenset[DocumentFeature] = frozenset(
+    {
+        DocumentFeature.CRUD,
+        DocumentFeature.AGGREGATION,
+        DocumentFeature.INDEX,
+        DocumentFeature.SESSION,
+        DocumentFeature.BULK,
+        DocumentFeature.TIME_SERIES,
+    }
+)
 
 _READ_PREF_MAP: dict[DocReadPreference, int] = {
     DocReadPreference.PRIMARY: ReadPreference.PRIMARY,
@@ -80,10 +84,12 @@ _INDEX_TYPE_MAP: dict[IndexType, str] = {
 }
 
 
-def _sanitize_error(error: BaseException, *, operation: str, collection: Optional[str] = None) -> DocumentOperationError:
+def _sanitize_error(
+    error: BaseException, *, operation: str, collection: str | None = None
+) -> DocumentOperationError:
     """Convert pymongo errors to domain errors."""
     if isinstance(error, errors.OperationFailure):
-        code = getattr(error, 'code', None)
+        code = getattr(error, "code", None)
         if code == 11000:
             return DuplicateKeyError(
                 str(error),
@@ -131,13 +137,13 @@ def _to_write_concern(concern: WriteConcern) -> dict[str, Any]:
     return _WRITE_CONCERN_MAP.get(concern, {"w": 1})
 
 
-def _filter_to_dict(f: Optional[DocumentFilter]) -> dict[str, Any]:
+def _filter_to_dict(f: DocumentFilter | None) -> dict[str, Any]:
     if f is None:
         return {}
     return dict(f.criteria)
 
 
-def _projection_to_dict(p: Optional[DocumentProjection]) -> Optional[dict[str, Any]]:
+def _projection_to_dict(p: DocumentProjection | None) -> dict[str, Any] | None:
     if p is None:
         return None
     if p.include:
@@ -161,19 +167,21 @@ def _index_spec(definition: IndexDefinition) -> list[tuple[str, Any]]:
 class MongoDBDriver:
     """MongoDB Community document driver with capability discovery."""
 
-    def __init__(self, url: str, database: str = "af_default", *, replica_set: Optional[str] = None) -> None:
+    def __init__(
+        self, url: str, database: str = "af_default", *, replica_set: str | None = None
+    ) -> None:
         if not url or not isinstance(url, str):
             raise ValueError("MongoDB URL must be a non-empty string")
         if not database or not isinstance(database, str):
             raise ValueError("MongoDB database name must be a non-empty string")
-        
+
         self._url = url
         self._database_name = database
         self._replica_set = replica_set
         self._lock = RLock()
         self._closed = False
-        self._session: Optional[ClientSession] = None
-        
+        self._session: ClientSession | None = None
+
         try:
             self._client = MongoClient(url, replicaSet=replica_set)
             self._database = self._client[database]
@@ -182,19 +190,19 @@ class MongoDBDriver:
                 f"Failed to connect to MongoDB: {e}",
                 operation="connect",
             ) from e
-        
+
         self._features = self._discover_features()
 
     def _discover_features(self) -> frozenset[DocumentFeature]:
         """Discover supported features at runtime."""
         features = set(_CORE_FEATURES)
-        
+
         try:
             if self._is_replica_set():
                 features.add(DocumentFeature.TRANSACTION)
         except Exception:
             pass
-        
+
         return frozenset(features)
 
     def _is_replica_set(self) -> bool:
@@ -216,6 +224,10 @@ class MongoDBDriver:
 
     def require(self, feature: DocumentFeature) -> None:
         if not self.supports(feature):
+            if feature is DocumentFeature.TRANSACTION:
+                raise TransactionNotSupportedError(
+                    "transactions require a replica set topology"
+                )
             raise UnsupportedDocumentFeature(feature)
 
     def _assert_open(self) -> None:
@@ -228,7 +240,7 @@ class MongoDBDriver:
     async def insert_one(
         self,
         collection: str,
-        document: Dict[str, Any],
+        document: dict[str, Any],
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult:
         self._assert_open()
@@ -249,7 +261,7 @@ class MongoDBDriver:
     async def insert_many(
         self,
         collection: str,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         ordered: bool = True,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult:
@@ -272,10 +284,10 @@ class MongoDBDriver:
     async def find_one(
         self,
         collection: str,
-        filter: Optional[DocumentFilter] = None,
-        projection: Optional[DocumentProjection] = None,
+        filter: DocumentFilter | None = None,
+        projection: DocumentProjection | None = None,
         read_preference: DocReadPreference = DocReadPreference.PRIMARY,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         self._assert_open()
         try:
             coll = self._database[collection]
@@ -293,9 +305,9 @@ class MongoDBDriver:
     async def find(
         self,
         collection: str,
-        filter: Optional[DocumentFilter] = None,
-        projection: Optional[DocumentProjection] = None,
-        sort: Optional[Dict[str, int]] = None,
+        filter: DocumentFilter | None = None,
+        projection: DocumentProjection | None = None,
+        sort: dict[str, int] | None = None,
         limit: int = 0,
         skip: int = 0,
         read_preference: DocReadPreference = DocReadPreference.PRIMARY,
@@ -326,7 +338,7 @@ class MongoDBDriver:
     async def count_documents(
         self,
         collection: str,
-        filter: Optional[DocumentFilter] = None,
+        filter: DocumentFilter | None = None,
     ) -> int:
         self._assert_open()
         try:
@@ -339,7 +351,7 @@ class MongoDBDriver:
         self,
         collection: str,
         filter: DocumentFilter,
-        update: Dict[str, Any],
+        update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult:
@@ -366,7 +378,7 @@ class MongoDBDriver:
         self,
         collection: str,
         filter: DocumentFilter,
-        update: Dict[str, Any],
+        update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult:
@@ -392,7 +404,7 @@ class MongoDBDriver:
         self,
         collection: str,
         filter: DocumentFilter,
-        replacement: Dict[str, Any],
+        replacement: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
     ) -> WriteResult:
@@ -461,7 +473,7 @@ class MongoDBDriver:
         self,
         collection: str,
         pipeline: AggregationPipeline,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         self._assert_open()
         try:
             coll = self._database[collection]
@@ -493,7 +505,7 @@ class MongoDBDriver:
                 kwargs["expireAfterSeconds"] = definition.expire_after_seconds
             if definition.name:
                 kwargs["name"] = definition.name
-            
+
             index_name = coll.create_index(spec, **kwargs)
             return index_name
         except Exception as e:
@@ -502,7 +514,7 @@ class MongoDBDriver:
     async def list_indexes(
         self,
         collection: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         self._assert_open()
         try:
             coll = self._database[collection]
@@ -543,7 +555,7 @@ class MongoDBDriver:
     async def bulk_write(
         self,
         collection: str,
-        operations: List[BulkOperation],
+        operations: list[BulkOperation],
         ordered: bool = True,
     ) -> BulkWriteResult:
         self._assert_open()
@@ -553,25 +565,33 @@ class MongoDBDriver:
             for op in operations:
                 if op.operation == "insert":
                     from pymongo import InsertOne
+
                     pymongo_ops.append(InsertOne(op.document or {}))
                 elif op.operation == "update":
                     from pymongo import UpdateOne
-                    pymongo_ops.append(UpdateOne(
-                        _filter_to_dict(op.filter),
-                        op.document or {},
-                        **op.options,
-                    ))
+
+                    pymongo_ops.append(
+                        UpdateOne(
+                            _filter_to_dict(op.filter),
+                            op.document or {},
+                            **op.options,
+                        )
+                    )
                 elif op.operation == "delete":
                     from pymongo import DeleteOne
+
                     pymongo_ops.append(DeleteOne(_filter_to_dict(op.filter)))
                 elif op.operation == "replace":
                     from pymongo import ReplaceOne
-                    pymongo_ops.append(ReplaceOne(
-                        _filter_to_dict(op.filter),
-                        op.document or {},
-                        **op.options,
-                    ))
-            
+
+                    pymongo_ops.append(
+                        ReplaceOne(
+                            _filter_to_dict(op.filter),
+                            op.document or {},
+                            **op.options,
+                        )
+                    )
+
             result: PyMongoBulkWriteResult = coll.bulk_write(pymongo_ops, ordered=ordered)
             return BulkWriteResult(
                 inserted_count=result.inserted_count,
@@ -597,7 +617,7 @@ class MongoDBDriver:
                     f"Invalid time series options: {', '.join(validation_errors)}",
                     collection=name,
                 )
-            
+
             ts_options: dict[str, Any] = {
                 "timeField": options.time_field,
                 "granularity": options.granularity,
@@ -608,7 +628,7 @@ class MongoDBDriver:
                 ts_options["bucketMaxSpanSeconds"] = options.bucket_max_span_seconds
             if options.bucket_rounding_seconds is not None:
                 ts_options["bucketRoundingSeconds"] = options.bucket_rounding_seconds
-            
+
             self._database.create_collection(
                 name,
                 timeseries=ts_options,
@@ -617,15 +637,19 @@ class MongoDBDriver:
         except DocumentTimeSeriesError:
             raise
         except Exception as e:
-            raise _sanitize_error(e, operation="create_time_series_collection", collection=name) from e
+            raise _sanitize_error(
+                e, operation="create_time_series_collection", collection=name
+            ) from e
 
     async def get_time_series_options(
         self,
         collection: str,
-    ) -> Optional[TimeSeriesOptions]:
+    ) -> TimeSeriesOptions | None:
         self._assert_open()
         try:
-            info = self._database.command("listCollections", filters={"name": collection}, cursor={})
+            info = self._database.command(
+                "listCollections", filters={"name": collection}, cursor={}
+            )
             for coll_info in info.get("cursor", {}).get("next", []):
                 opts = coll_info.get("options", {})
                 if "timeseries" in opts:
@@ -639,7 +663,9 @@ class MongoDBDriver:
                     )
             return None
         except Exception as e:
-            raise _sanitize_error(e, operation="get_time_series_options", collection=collection) from e
+            raise _sanitize_error(
+                e, operation="get_time_series_options", collection=collection
+            ) from e
 
     def close(self) -> None:
         with self._lock:
@@ -660,9 +686,9 @@ class MongoDBDriver:
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> bool:
         self.close()
         return False

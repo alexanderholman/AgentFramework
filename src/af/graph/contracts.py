@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Mapping, Sequence, Tuple
-
+from enum import StrEnum
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
+
 
 def _identifier(value: str, name: str, max_len: int = 64) -> str:
     if not value:
@@ -42,7 +43,8 @@ def _properties(props: Mapping[str, Any]) -> dict[str, Any]:
 # Feature enum
 # ---------------------------------------------------------------------------
 
-class GraphFeature(str, Enum):
+
+class GraphFeature(StrEnum):
     QUERY = "query"
     INDEXING = "indexing"
     PERSISTENCE = "persistence"
@@ -53,12 +55,13 @@ class GraphFeature(str, Enum):
 # Portable graph data models
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class GraphNode:
     """Portable representation of a graph node."""
 
     node_id: str
-    labels: Tuple[str, ...]
+    labels: tuple[str, ...]
     properties: dict[str, Any]
 
     def __post_init__(self) -> None:
@@ -95,8 +98,8 @@ class GraphPattern:
     """Portable representation of a graph path pattern."""
 
     pattern_id: str
-    node_ids: Tuple[str, ...]
-    edge_ids: Tuple[str, ...]
+    node_ids: tuple[str, ...]
+    edge_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
         _identifier(self.pattern_id, "pattern_id")
@@ -125,7 +128,7 @@ class GraphResult:
     """Portable graph result row."""
 
     node_id: str
-    labels: Tuple[str, ...]
+    labels: tuple[str, ...]
     score: float
     rank: int
 

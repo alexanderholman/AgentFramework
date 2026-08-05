@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Protocol, Set
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 from af.framework.managers import CapabilitySet
 from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
@@ -11,14 +12,11 @@ from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
 class GraphDriver(Protocol):
     """Protocol for graph drivers."""
 
-    def verify_capabilities(self, required: Set[GraphFeature]) -> CapabilitySet[GraphFeature]:
-        ...
+    def verify_capabilities(self, required: set[GraphFeature]) -> CapabilitySet[GraphFeature]: ...
 
-    def query(self, query: GraphQuery, **kwargs: Any) -> list[GraphResult]:
-        ...
+    def query(self, query: GraphQuery, **kwargs: Any) -> list[GraphResult]: ...
 
-    def create_node(self, node_id: str, labels, properties: Mapping[str, Any]) -> None:
-        ...
+    def create_node(self, node_id: str, labels, properties: Mapping[str, Any]) -> None: ...
 
     def create_edge(
         self,
@@ -27,20 +25,17 @@ class GraphDriver(Protocol):
         target_id: str,
         relation_type: str,
         properties: Mapping[str, Any],
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def delete_node(self, node_id: str) -> None:
-        ...
+    def delete_node(self, node_id: str) -> None: ...
 
-    def delete_edge(self, edge_id: str) -> None:
-        ...
+    def delete_edge(self, edge_id: str) -> None: ...
 
 
 class _DriverEntry:
     """Internal holder for a registered driver and its capabilities."""
 
-    def __init__(self, driver: GraphDriver, capabilities: Set[GraphFeature]) -> None:
+    def __init__(self, driver: GraphDriver, capabilities: set[GraphFeature]) -> None:
         self.driver = driver
         self.capabilities = capabilities
 
@@ -50,13 +45,13 @@ class GraphManager:
 
     def __init__(
         self,
-        registry: Dict[str, Any],
-        default_name: Optional[str] = None,
+        registry: dict[str, Any],
+        default_name: str | None = None,
     ) -> None:
         if not registry:
             raise ValueError("Graph driver registry must not be empty")
 
-        self._drivers: Dict[str, _DriverEntry] = {}
+        self._drivers: dict[str, _DriverEntry] = {}
         for name, reg in registry.items():
             self._drivers[name] = _DriverEntry(
                 driver=reg.driver,
@@ -79,11 +74,11 @@ class GraphManager:
 
     def verify_capabilities(
         self,
-        driver_names: Set[str],
-        required: Set[GraphFeature],
-    ) -> Dict[str, CapabilitySet[GraphFeature]]:
+        driver_names: set[str],
+        required: set[GraphFeature],
+    ) -> dict[str, CapabilitySet[GraphFeature]]:
         """Verify capabilities for given drivers against required features."""
-        result: Dict[str, CapabilitySet[GraphFeature]] = {}
+        result: dict[str, CapabilitySet[GraphFeature]] = {}
         for name in driver_names:
             if name not in self._drivers:
                 raise KeyError(name)
@@ -115,9 +110,7 @@ class GraphManager:
         driver_name: str,
     ) -> None:
         """Create an edge using the named driver."""
-        self.get(driver_name).create_edge(
-            edge_id, source_id, target_id, relation_type, properties
-        )
+        self.get(driver_name).create_edge(edge_id, source_id, target_id, relation_type, properties)
 
     def delete_node(self, node_id: str, driver_name: str) -> None:
         """Delete a node using the named driver."""
@@ -129,8 +122,8 @@ class GraphManager:
 
 
 def bind_graph_manager(
-    registry: Dict[str, Any],
-    default_name: Optional[str] = None,
+    registry: dict[str, Any],
+    default_name: str | None = None,
 ) -> GraphManager:
     """Create and return a GraphManager instance."""
     return GraphManager(registry, default_name=default_name)

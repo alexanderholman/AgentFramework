@@ -1,30 +1,41 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence, Set
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
-from af.framework.managers import CapabilitySet, DriverRegistration
+from af.framework.managers import CapabilitySet
 from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
 from af.graph.manager import GraphDriver, GraphManager
+
+
+@dataclass
+class _GraphRegistration:
+    driver: GraphDriver
+    capabilities: set[GraphFeature]
 
 
 # ---------------------------------------------------------------------------
 # Minimal test driver
 # ---------------------------------------------------------------------------
 
+
 class _StubGraphDriver:
-    def __init__(self, capabilities: Set[GraphFeature]) -> None:
+    def __init__(self, capabilities: set[GraphFeature]) -> None:
         self.capabilities = capabilities
 
-    def verify_capabilities(self, required: Set[GraphFeature]) -> CapabilitySet[GraphFeature]:
-        missing = required - self.capabilities
-        return CapabilitySet(supported=self.capabilities & required, missing=missing)
+    def verify_capabilities(self, required: set[GraphFeature]) -> CapabilitySet:
+        supported = self.capabilities & required
+        return CapabilitySet(values={f.value for f in supported})
 
     def query(self, query: GraphQuery, **kwargs: Any) -> list[GraphResult]:
         return []
 
-    def create_node(self, node_id: str, labels: Sequence[str], properties: Mapping[str, Any]) -> None:
+    def create_node(
+        self, node_id: str, labels: Sequence[str], properties: Mapping[str, Any]
+    ) -> None:
         pass
 
     def create_edge(
@@ -48,6 +59,7 @@ class _StubGraphDriver:
 # Tests
 # ---------------------------------------------------------------------------
 
+
 def test_manager_rejects_empty_registry() -> None:
     with pytest.raises(ValueError):
         GraphManager({})
@@ -57,7 +69,7 @@ def test_manager_selects_default_driver() -> None:
     driver = _StubGraphDriver({GraphFeature.QUERY})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(
+            "neo4j": _GraphRegistration(
                 driver=driver,
                 capabilities={GraphFeature.QUERY},
             ),
@@ -75,8 +87,8 @@ def test_manager_selects_named_driver() -> None:
 
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=neo4j, capabilities={GraphFeature.QUERY}),
-            "orientdb": DriverRegistration(
+            "neo4j": _GraphRegistration(driver=neo4j, capabilities={GraphFeature.QUERY}),
+            "orientdb": _GraphRegistration(
                 driver=orientdb,
                 capabilities={GraphFeature.QUERY, GraphFeature.INDEXING},
             ),
@@ -90,7 +102,7 @@ def test_manager_selects_named_driver() -> None:
 def test_manager_raises_for_unknown_driver() -> None:
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(
+            "neo4j": _GraphRegistration(
                 driver=_StubGraphDriver({GraphFeature.QUERY}),
                 capabilities={GraphFeature.QUERY},
             ),
@@ -106,7 +118,7 @@ def test_manager_capability_verification_reports_missing() -> None:
     driver = _StubGraphDriver({GraphFeature.QUERY})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.QUERY}),
+            "neo4j": _GraphRegistration(driver=driver, capabilities={GraphFeature.QUERY}),
         },
         default_name="neo4j",
     )
@@ -116,14 +128,18 @@ def test_manager_capability_verification_reports_missing() -> None:
         {GraphFeature.QUERY, GraphFeature.INDEXING},
     )
 
-    assert result["neo4j"].missing == {GraphFeature.INDEXING}
+    supported_features = {f.value for f in {GraphFeature.QUERY}}
+    assert result["neo4j"].values == supported_features
 
 
 def test_manager_capability_verification_all_supported() -> None:
     driver = _StubGraphDriver({GraphFeature.QUERY, GraphFeature.INDEXING})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.QUERY, GraphFeature.INDEXING}),
+            "neo4j": _GraphRegistration(
+                driver=driver,
+                capabilities={GraphFeature.QUERY, GraphFeature.INDEXING},
+            ),
         },
         default_name="neo4j",
     )
@@ -133,14 +149,15 @@ def test_manager_capability_verification_all_supported() -> None:
         {GraphFeature.QUERY, GraphFeature.INDEXING},
     )
 
-    assert result["neo4j"].missing == set()
+    supported_features = {f.value for f in {GraphFeature.QUERY, GraphFeature.INDEXING}}
+    assert result["neo4j"].values == supported_features
 
 
 def test_manager_query_delegates_to_driver() -> None:
     driver = _StubGraphDriver({GraphFeature.QUERY})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.QUERY}),
+            "neo4j": _GraphRegistration(driver=driver, capabilities={GraphFeature.QUERY}),
         },
         default_name="neo4j",
     )
@@ -153,7 +170,7 @@ def test_manager_query_delegates_to_driver() -> None:
 def test_manager_query_raises_for_unregistered_driver() -> None:
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(
+            "neo4j": _GraphRegistration(
                 driver=_StubGraphDriver({GraphFeature.QUERY}),
                 capabilities={GraphFeature.QUERY},
             ),
@@ -169,7 +186,7 @@ def test_manager_create_node_delegates() -> None:
     driver = _StubGraphDriver({GraphFeature.PERSISTENCE})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
+            "neo4j": _GraphRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
         },
         default_name="neo4j",
     )
@@ -186,7 +203,7 @@ def test_manager_create_edge_delegates() -> None:
     driver = _StubGraphDriver({GraphFeature.PERSISTENCE})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
+            "neo4j": _GraphRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
         },
         default_name="neo4j",
     )
@@ -205,7 +222,7 @@ def test_manager_delete_node_delegates() -> None:
     driver = _StubGraphDriver({GraphFeature.PERSISTENCE})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
+            "neo4j": _GraphRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
         },
         default_name="neo4j",
     )
@@ -217,7 +234,7 @@ def test_manager_delete_edge_delegates() -> None:
     driver = _StubGraphDriver({GraphFeature.PERSISTENCE})
     mgr = GraphManager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
+            "neo4j": _GraphRegistration(driver=driver, capabilities={GraphFeature.PERSISTENCE}),
         },
         default_name="neo4j",
     )
@@ -231,7 +248,7 @@ def test_bind_graph_manager_creates_instance() -> None:
     driver = _StubGraphDriver({GraphFeature.QUERY})
     mgr = bind_graph_manager(
         {
-            "neo4j": DriverRegistration(driver=driver, capabilities={GraphFeature.QUERY}),
+            "neo4j": _GraphRegistration(driver=driver, capabilities={GraphFeature.QUERY}),
         },
         default_name="neo4j",
     )
