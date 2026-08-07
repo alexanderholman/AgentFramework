@@ -51,13 +51,13 @@ class JobHandler(Protocol):
 
 
 class IdempotencyStore(Protocol):
-    """Deduplication boundary shared with a handler's authoritative state."""
+    """Post-success duplicate-suppression boundary for retry-safe handlers."""
 
     def claim(self, message_id: str, /) -> AbstractContextManager[IdempotencyClaim]: ...
 
 
 class IdempotencyClaim(Protocol):
-    """Atomic claim held across one handler transaction."""
+    """Claim held while one delivery checks and records post-scope success."""
 
     @property
     def already_processed(self) -> bool: ...
@@ -152,9 +152,11 @@ class WorkerKernel:
     admission lock. ``start_draining`` stops all new reservations; work already admitted
     is allowed to settle before ``close`` releases the driver.
 
-    Durable exactly-once business effects are deliberately not claimed. Deployments that
-    need deduplication must inject an ``IdempotencyStore`` whose ``record`` operation shares
-    the handler's authoritative transaction or durable intent boundary.
+    Durable exactly-once business effects are deliberately not claimed. An injected
+    ``IdempotencyStore`` records only after the job scope exits successfully and before the
+    queue acknowledgement. If recording fails, the delivery is retried and handler effects
+    may repeat. Handlers requiring stronger guarantees must provide their own transactional
+    inbox/outbox or idempotent business operation.
     """
 
     def __init__(
@@ -345,11 +347,14 @@ class WorkerKernel:
             try:
                 self._driver.ack(reservation)
             except BaseException as acknowledgement_error:
+                self._increment(
+                    "jobs_failed"
+                    if isinstance(acknowledgement_error, Exception)
+                    else "cancellations"
+                )
                 self._release_uncertain(reservation, acknowledgement_error)
                 if isinstance(acknowledgement_error, Exception):
-                    self._increment("jobs_failed")
                     raise _AcknowledgementFailure(acknowledgement_error) from acknowledgement_error
-                self._increment("cancellations")
                 raise
             self._increment("duplicates" if duplicate else "jobs_processed")
             return reservation

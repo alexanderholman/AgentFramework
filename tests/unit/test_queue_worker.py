@@ -577,6 +577,60 @@ def test_worker_kernel_scope_exit_failure_prevents_idempotency_record() -> None:
     assert driver.acked == []
 
 
+def test_worker_kernel_record_failure_after_scope_success_retries_at_least_once() -> None:
+    lifecycle: list[str] = []
+    record_attempts = 0
+
+    class Claim:
+        already_processed = False
+
+        def record(self) -> None:
+            nonlocal record_attempts
+            record_attempts += 1
+            lifecycle.append(f"record-{record_attempts}")
+            if record_attempts == 1:
+                raise RuntimeError("idempotency record failed")
+
+    class Store:
+        @contextmanager
+        def claim(self, message_id: str):  # type: ignore[no-untyped-def]
+            yield Claim()
+
+    @contextmanager
+    def scope(job: QueueJob):  # type: ignore[no-untyped-def]
+        lifecycle.append("scope-enter")
+        try:
+            yield
+        finally:
+            lifecycle.append("scope-exit")
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-record-failure", max_attempts=2))
+    kernel = WorkerKernel(
+        driver,
+        idempotency=Store(),
+        scope_factory=scope,
+        clock=lambda: _NOW,
+    )
+    effects: list[str] = []
+
+    with pytest.raises(RuntimeError, match="idempotency record failed"):
+        kernel.run_once(consumer=lambda job: effects.append("effect"))
+    kernel.run_once(consumer=lambda job: effects.append("effect"))
+
+    assert lifecycle == [
+        "scope-enter",
+        "scope-exit",
+        "record-1",
+        "scope-enter",
+        "scope-exit",
+        "record-2",
+    ]
+    assert effects == ["effect", "effect"]
+    assert driver.retried == ["job-record-failure"]
+    assert driver.acked == ["job-record-failure"]
+
+
 def test_in_memory_idempotency_store_evicts_oldest_record() -> None:
     driver = _make_driver()
     store = InMemoryIdempotencyStore(capacity=1)
@@ -1036,7 +1090,8 @@ def test_worker_kernel_preserves_ack_error_when_release_also_fails() -> None:
     errors must be preserved in a BaseExceptionGroup so the operator can observe
     the full failure chain."""
     driver = _make_driver()
-    driver.fail_next_ack = True
+    acknowledgement_error = RuntimeError("ack failed")
+    driver.next_ack_error = acknowledgement_error
     driver.fail_next_release = True
     driver.dispatch(_job("job-ack-release-fail"))
     kernel = WorkerKernel(driver, clock=lambda: _NOW)
@@ -1046,8 +1101,37 @@ def test_worker_kernel_preserves_ack_error_when_release_also_fails() -> None:
 
     errors = exc.value.exceptions
     assert len(errors) == 2
-    assert any(isinstance(e, RuntimeError) and "ack failed" in str(e) for e in errors)
-    assert any(isinstance(e, RuntimeError) and "release failed" in str(e) for e in errors)
+    assert errors[0] is acknowledgement_error
+    assert isinstance(errors[1], RuntimeError)
+    assert str(errors[1]) == "release failed"
+    stats = kernel.stats
+    assert stats.jobs_failed == 1
+    assert stats.cancellations == 0
+    assert stats.jobs_processed == 0
+    assert stats.duplicates == 0
+
+
+def test_worker_kernel_counts_ack_cancellation_when_release_also_fails() -> None:
+    driver = _make_driver()
+    cancellation = KeyboardInterrupt()
+    driver.next_ack_error = cancellation
+    driver.fail_next_release = True
+    driver.dispatch(_job("job-ack-cancel-release-fail"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    with pytest.raises(BaseExceptionGroup) as exc:
+        kernel.run_once(consumer=lambda job: None)
+
+    errors = exc.value.exceptions
+    assert len(errors) == 2
+    assert errors[0] is cancellation
+    assert isinstance(errors[1], RuntimeError)
+    assert str(errors[1]) == "release failed"
+    stats = kernel.stats
+    assert stats.cancellations == 1
+    assert stats.jobs_failed == 0
+    assert stats.jobs_processed == 0
+    assert stats.duplicates == 0
 
 
 def test_worker_kernel_lag_calculated_from_reservation() -> None:
