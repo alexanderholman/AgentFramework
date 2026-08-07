@@ -240,6 +240,107 @@ class ExecutionOutcome:
     trace_id: str
 
 
+# -- Classifier hierarchy types --
+
+
+@dataclass(frozen=True, slots=True)
+class RouteBudget:
+    """Limits on classifier hierarchy traversal."""
+    max_nodes: int = 100
+    max_rungs: int = 5
+
+
+@dataclass(frozen=True, slots=True)
+class RungEscalation:
+    """Record of a rung escalation during Jacob's ladder routing."""
+    from_rung: int
+    to_rung: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class VisitedNode:
+    """Reference to a classifier node visited during routing."""
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingTrace:
+    """Trace of nodes visited during hierarchy routing."""
+    nodes_visited: tuple[VisitedNode, ...] = ()
+    rung_escalations: tuple[RungEscalation, ...] = ()
+    reason_code: str = ""
+
+
+class RoutingResult:
+    """Base class for routing outcomes from hierarchy traversal."""
+    trace: RoutingTrace
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionRoute(RoutingResult):
+    """Successfully routed to a leaf procedure."""
+    procedure_id: str
+    classifier_id: str
+    arguments: dict[str, str] = field(default_factory=dict)
+    trace: RoutingTrace = field(default_factory=RoutingTrace)
+
+
+@dataclass(frozen=True, slots=True)
+class ChildRoute(RoutingResult):
+    """Routing should continue to a child node."""
+    child_id: str
+    trace: RoutingTrace = field(default_factory=RoutingTrace)
+
+
+@dataclass(frozen=True, slots=True)
+class NoRoute(RoutingResult):
+    """No matching route found in this subtree."""
+    classifier_id: str
+    reason: str = "no_match"
+    trace: RoutingTrace = field(default_factory=RoutingTrace)
+
+
+@dataclass(frozen=True, slots=True)
+class Denied(RoutingResult):
+    """Route was denied by policy."""
+    classifier_id: str
+    reason: str = "policy_denied"
+    trace: RoutingTrace = field(default_factory=RoutingTrace)
+
+
+@dataclass(frozen=True, slots=True)
+class NeedsClarification(RoutingResult):
+    """Request is ambiguous; needs user clarification."""
+    classifier_id: str
+    question: str = ""
+    trace: RoutingTrace = field(default_factory=RoutingTrace)
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifierFailure(RoutingResult):
+    """Routing failed due to budget exhaustion, cycle, or error."""
+    classifier_id: str
+    reason: str = "budget_exhausted"
+    trace: RoutingTrace = field(default_factory=RoutingTrace)
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifierNode:
+    """A node in the classifier hierarchy tree."""
+    id: str
+    version: str
+    procedure_id: str | None
+    children: tuple["ClassifierNode", ...]
+    metadata: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifierTree:
+    """Immutable classifier hierarchy."""
+    root: ClassifierNode
+
+
 def normalize_prompt(prompt: object) -> str:
     if type(prompt) is not str:
         raise InvalidPrompt("prompt must be a string")

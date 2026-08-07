@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from af.framework.contracts import Procedure
 from af.framework.errors import InvalidRoutingPolicy, UnsupportedWork
@@ -13,18 +14,34 @@ from af.framework.types import (
     PROMPT_MAX_LENGTH,
     ROUTE_METRIC_MAX,
     ArgumentValueType,
+    ChildRoute,
+    ClassifierFailure,
+    ClassifierNode,
+    ClassifierTree,
     Classification,
+    Denied,
+    FunctionRoute,
+    NeedsClarification,
+    NoRoute,
     ProcedureArgumentDescriptor,
     ProcedureDescriptor,
     ProcedureEffect,
     ProcedureRisk,
+    RouteBudget,
     RouteMetrics,
+    RoutingResult,
+    RoutingTrace,
+    RungEscalation,
+    VisitedNode,
     WorkTier,
     is_valid_argument_name,
     is_valid_procedure_id,
     is_valid_procedure_intent,
     is_valid_procedure_version,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class OptimisationGoal(StrEnum):
@@ -223,3 +240,233 @@ class LadderRouter:
             else:
                 raise InvalidRoutingPolicy("choose one or two distinct routing goals")
         return tuple(score)
+
+
+# -- Hierarchy routing --
+
+
+class _Match:
+    """Internal helper representing a single classifier match result."""
+
+    __slots__ = ("node", "match", "procedure_id", "child_index", "reason")
+
+    def __init__(
+        self,
+        *,
+        node: ClassifierNode,
+        match: bool,
+        procedure_id: str | None = None,
+        child_index: int | None = None,
+        reason: str = "",
+    ) -> None:
+        self.node = node
+        self.match = match
+        self.procedure_id = procedure_id
+        self.child_index = child_index
+        self.reason = reason
+
+
+class HierarchyRouter:
+    """Deterministic tree traversal with sibling search and rung escalation."""
+
+    def __init__(self, tree: ClassifierTree) -> None:
+        self._tree = tree
+
+    def route(self, prompt: str, *, budget: RouteBudget | None = None) -> RoutingResult:
+        budget = budget or RouteBudget()
+        visited: set[str] = set()
+        return self._traverse(
+            self._tree.root,
+            prompt,
+            rung=0,
+            visited=visited,
+            nodes_visited=[],
+            all_visited=[],
+            escalations=[],
+            budget=budget,
+        )
+
+    def _traverse(
+        self,
+        node: ClassifierNode,
+        prompt: str,
+        *,
+        rung: int,
+        visited: set[str],
+        nodes_visited: list[VisitedNode],
+        all_visited: list[VisitedNode],
+        escalations: list[RungEscalation],
+        budget: RouteBudget,
+    ) -> RoutingResult:
+        # Budget / cycle checks
+        if node.id in visited:
+            return ClassifierFailure(
+                classifier_id=node.id,
+                reason="cycle_detected",
+                trace=RoutingTrace(
+                    nodes_visited=tuple(nodes_visited),
+                    rung_escalations=tuple(escalations),
+                    reason_code="cycle_detected",
+                ),
+            )
+        if len(nodes_visited) >= budget.max_nodes:
+            return ClassifierFailure(
+                classifier_id=node.id,
+                reason="budget_exhausted",
+                trace=RoutingTrace(
+                    nodes_visited=tuple(nodes_visited),
+                    rung_escalations=tuple(escalations),
+                    reason_code="budget_exhausted",
+                ),
+            )
+        if rung > budget.max_rungs:
+            return ClassifierFailure(
+                classifier_id=node.id,
+                reason="rung_exhausted",
+                trace=RoutingTrace(
+                    nodes_visited=tuple(nodes_visited),
+                    rung_escalations=tuple(escalations),
+                    reason_code="rung_exhausted",
+                ),
+            )
+
+        visited_copy = visited | {node.id}
+        ref = VisitedNode(id=node.id)
+        nodes_visited.append(ref)
+        all_visited.append(ref)
+
+        match = self._match(node, prompt)
+
+        if not match.match:
+            # Wrong child - pop from current path, use all_visited for trace
+            nodes_visited.pop()
+            return NoRoute(
+                classifier_id=node.id,
+                reason=match.reason or "no_match",
+                trace=RoutingTrace(
+                    nodes_visited=tuple(all_visited),
+                    rung_escalations=tuple(escalations),
+                    reason_code="no_match",
+                ),
+            )
+
+        # Exact leaf match → procedure
+        if match.procedure_id is not None:
+            return FunctionRoute(
+                procedure_id=match.procedure_id,
+                classifier_id=node.id,
+                trace=RoutingTrace(
+                    nodes_visited=tuple(nodes_visited),
+                    rung_escalations=tuple(escalations),
+                    reason_code="function_route",
+                ),
+            )
+
+        # Has children – try them in order (sibling search)
+        if node.children:
+            for child in node.children:
+                child_result = self._traverse(
+                    child,
+                    prompt,
+                    rung=rung + 1,
+                    visited=visited_copy,
+                    nodes_visited=nodes_visited,
+                    all_visited=all_visited,
+                    escalations=escalations,
+                    budget=budget,
+                )
+                # If child returned a concrete route, bubble it up
+                if isinstance(child_result, (FunctionRoute, Denied, NeedsClarification)):
+                    return child_result
+                # If child returned NoRoute, try next sibling
+                if isinstance(child_result, NoRoute):
+                    continue
+                # ClassifierFailure from child – accumulate, keep trying siblings
+                if isinstance(child_result, ClassifierFailure):
+                    continue
+
+            # All children exhausted – escalate
+            new_escalation = RungEscalation(
+                from_rung=rung,
+                to_rung=rung + 1,
+                reason="all_children_exhausted",
+            )
+            escalations.append(new_escalation)
+            nodes_visited.pop()
+            return NoRoute(
+                classifier_id=node.id,
+                reason="all_children_exhausted",
+                trace=RoutingTrace(
+                    nodes_visited=tuple(all_visited),
+                    rung_escalations=tuple(escalations),
+                    reason_code="rung_exhaustion",
+                ),
+            )
+
+        # Leaf with no procedure and no children
+        nodes_visited.pop()
+        return NoRoute(
+            classifier_id=node.id,
+            reason="leaf_no_procedure",
+            trace=RoutingTrace(
+                nodes_visited=tuple(all_visited),
+                rung_escalations=tuple(escalations),
+                reason_code="leaf_no_procedure",
+            ),
+        )
+
+    @staticmethod
+    def _match(node: ClassifierNode, prompt: str) -> _Match:
+        """Determine whether a node matches the prompt."""
+        intent = node.metadata.get("intent", "")
+
+        # If node has a procedure_id, check intent match
+        if node.procedure_id:
+            if intent and _prompt_matches_intent(prompt, intent):
+                return _Match(
+                    node=node,
+                    match=True,
+                    procedure_id=node.procedure_id,
+                )
+            # No intent metadata – check if procedure_id keywords appear in prompt
+            if _prompt_matches_keyword(prompt, node.procedure_id):
+                return _Match(
+                    node=node,
+                    match=True,
+                    procedure_id=node.procedure_id,
+                )
+            return _Match(node=node, match=False, reason="intent_mismatch")
+
+        # Internal node – check if metadata intent matches
+        if intent and _prompt_matches_intent(prompt, intent):
+            return _Match(node=node, match=True)
+
+        # Default: match internal nodes that have children for further traversal
+        if node.children:
+            return _Match(node=node, match=True)
+
+        return _Match(node=node, match=False, reason="no_match")
+
+
+def _prompt_matches_intent(prompt: str, intent: str) -> bool:
+    """Check if prompt text contains or matches the intent string."""
+    normalized = prompt.strip().lower()
+    return intent.lower() in normalized or normalized in intent.lower()
+
+
+def _prompt_matches_keyword(prompt: str, keyword: str) -> bool:
+    """Check if prompt contains keyword tokens (underscore-separated)."""
+    normalized = prompt.strip().lower()
+    tokens = keyword.lower().split("_")
+    return any(token in normalized for token in tokens if len(token) > 2)
+
+
+class JacobLadderRouter:
+    """High-level router combining hierarchy tree with procedure registry."""
+
+    def __init__(self, tree: ClassifierTree) -> None:
+        self._tree = tree
+        self._hierarchy = HierarchyRouter(tree)
+
+    def route(self, prompt: str, *, budget: RouteBudget | None = None) -> RoutingResult:
+        return self._hierarchy.route(prompt, budget=budget)
