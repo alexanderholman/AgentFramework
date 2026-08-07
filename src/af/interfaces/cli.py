@@ -17,13 +17,16 @@ from typer._click.core import Command, Context
 from typer._click.exceptions import Exit as ClickExit
 from typer.core import TyperGroup
 
+from af.application.database_setup import DatabaseSetupController
 from af.application.ideons import InterpretRequest
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication, create_application
+from af.bootstrap_database_setup import create_database_setup_controller
 from af.bootstrap_version_control import create_version_control_controller
 from af.domain.ideons.records import ContextGraph
 from af.framework.container import Container, InvocationKind
 from af.framework.context import AcceptanceScope, ExecutionContext
+from af.framework.database_setup import DatabaseSetupMode, DatabaseSetupRequest
 from af.framework.errors import AFError, PlatformError, PlatformReason
 from af.framework.migrations import MigrationDirection, MigrationPlan, MigrationRunner
 from af.framework.routing import ProcedureRegistry
@@ -191,6 +194,7 @@ def create_cli(
     application_factory: Callable[[], AFApplication] | None = None,
     interaction_factory: Callable[[], CliInteraction] | None = None,
     version_control: VersionControlController | None = None,
+    database_setup: DatabaseSetupController | None = None,
 ) -> typer.Typer:
     task_commands = typer.Typer(name="tasks", no_args_is_help=True, help="Persisted Task CRUD")
     ideon_commands = typer.Typer(
@@ -223,11 +227,17 @@ def create_cli(
         no_args_is_help=True,
         help="Initialize version-control foundations",
     )
+    db_commands = typer.Typer(
+        name="db",
+        no_args_is_help=True,
+        help="Preview or apply explicit local database setup",
+    )
     if application is not None and application_factory is not None:
         raise ValueError("provide application or application_factory, not both")
     owns_application = application is None
     cached_application = application
     cached_version_control = version_control
+    cached_database_setup = database_setup
     configured_factory: Callable[[], object] = (
         create_application if application_factory is None else application_factory
     )
@@ -353,6 +363,12 @@ def create_cli(
         if cached_version_control is None:
             cached_version_control = create_version_control_controller()
         return cached_version_control
+
+    def current_database_setup() -> DatabaseSetupController:
+        nonlocal cached_database_setup
+        if cached_database_setup is None:
+            cached_database_setup = create_database_setup_controller()
+        return cached_database_setup
 
     def fail(error: Exception) -> None:
         typer.echo(str(error), err=True)
@@ -647,6 +663,78 @@ def create_cli(
         except (AFError, TypeError, ValueError) as error:
             fail(error)
 
+    @db_commands.command("setup")
+    def setup_database(
+        context: typer.Context,
+        mode: Annotated[DatabaseSetupMode, typer.Option("--mode")] = DatabaseSetupMode.LOCAL_DEBIAN,
+        execute: Annotated[
+            bool,
+            typer.Option(
+                "--execute",
+                help="Apply the supported local database provisioning workflow",
+            ),
+        ] = False,
+        yes: Annotated[
+            bool,
+            typer.Option(
+                "--yes",
+                help="Skip interactive confirmation for --execute",
+            ),
+        ] = False,
+        user: Annotated[str, typer.Option("--user")] = "af_test",
+        password: Annotated[str, typer.Option("--password")] = "af_test_pass",
+        database: Annotated[str, typer.Option("--database")] = "af_test",
+        host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+        port: Annotated[int, typer.Option("--port", min=1, max=65_535)] = 3306,
+        project_root: Annotated[
+            Path | None,
+            typer.Option(
+                "--project-root",
+                exists=True,
+                file_okay=False,
+                dir_okay=True,
+                resolve_path=True,
+            ),
+        ] = None,
+        env_file: Annotated[
+            Path | None,
+            typer.Option("--env-file", resolve_path=True),
+        ] = None,
+    ) -> None:
+        """Preview or apply supported local MariaDB provisioning for AF."""
+        try:
+            resolved_project_root = Path.cwd() if project_root is None else project_root
+            if execute and not yes:
+                confirmed = current_interaction_from_context(context).confirm(
+                    message="Apply local-debian MariaDB provisioning changes?",
+                    default=False,
+                )
+                if not confirmed:
+                    raise PlatformError(PlatformReason.CANCELLED, stage="cli.db.setup")
+            result = current_database_setup().setup(
+                DatabaseSetupRequest(
+                    project_root=resolved_project_root,
+                    env_file=env_file,
+                    mode=mode,
+                    execute=execute,
+                    user=user,
+                    password=password,
+                    database=database,
+                    host=host,
+                    port=port,
+                )
+            )
+            typer.echo(
+                json.dumps(
+                    result.to_dict(),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+        except (AFError, TypeError, ValueError) as error:
+            fail(error)
+
     @cli.command()
     def serve(
         host: Annotated[str | None, typer.Option()] = None,
@@ -715,6 +803,7 @@ def create_cli(
     cli.add_typer(search_commands, name="search")
     cli.add_typer(task_commands, name="tasks")
     cli.add_typer(migration_commands, name="migrations")
+    cli.add_typer(db_commands, name="db")
     cli.add_typer(ideon_commands, name="ideon")
     if isinstance(application, AFApplication):
         install_cli_command_contributors(cli, application)
