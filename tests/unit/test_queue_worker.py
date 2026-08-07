@@ -452,6 +452,8 @@ def test_worker_kernel_cancellation_during_ack_releases_reservation() -> None:
         kernel.run_once(consumer=lambda job: None)
 
     assert driver.released == ["job-ack-cancel"]
+    assert kernel.stats.cancellations == 1
+    assert kernel.stats.jobs_failed == 0
 
 
 def test_worker_kernel_idempotency_failure_releases_reservation() -> None:
@@ -471,7 +473,12 @@ def test_worker_kernel_idempotency_failure_releases_reservation() -> None:
     assert driver.retried == ["job-store-failure"]
 
 
-def test_worker_kernel_records_idempotency_inside_job_scope() -> None:
+def test_worker_kernel_records_idempotency_after_job_scope_exit() -> None:
+    """Idempotency must be recorded only after the job scope exits successfully.
+
+    If the scope's __exit__ raises, the idempotency record must not be committed
+    so the job remains safely retryable.
+    """
     lifecycle: list[str] = []
 
     class Claim:
@@ -512,10 +519,62 @@ def test_worker_kernel_records_idempotency_inside_job_scope() -> None:
         "claim-enter",
         "scope-enter",
         "consumer",
-        "record",
         "scope-exit",
+        "record",
         "claim-exit",
     ]
+
+
+def test_worker_kernel_scope_exit_failure_prevents_idempotency_record() -> None:
+    """When the job scope __exit__ raises, idempotency must not be durably recorded
+    and the job must remain retryable via the existing settlement contract."""
+    lifecycle: list[str] = []
+    record_called = False
+
+    class Claim:
+        already_processed = False
+
+        def record(self) -> None:
+            nonlocal record_called
+            record_called = True
+            lifecycle.append("record")
+
+    class Store:
+        @contextmanager
+        def claim(self, message_id: str):  # type: ignore[no-untyped-def]
+            lifecycle.append("claim-enter")
+            try:
+                yield Claim()
+            finally:
+                lifecycle.append("claim-exit")
+
+    @contextmanager
+    def scope(job: QueueJob):  # type: ignore[no-untyped-def]
+        lifecycle.append("scope-enter")
+        try:
+            yield
+        finally:
+            lifecycle.append("scope-exit")
+            raise RuntimeError("scope teardown failed")
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-scope-exit-fail", max_attempts=2))
+    kernel = WorkerKernel(
+        driver,
+        idempotency=Store(),
+        scope_factory=scope,
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(RuntimeError, match="scope teardown failed"):
+        kernel.run_once(consumer=lambda job: lifecycle.append("consumer"))
+
+    # Idempotency must NOT have been recorded
+    assert record_called is False
+    assert "record" not in lifecycle
+    # Job must remain retryable (settled via retry, not acked)
+    assert driver.retried == ["job-scope-exit-fail"]
+    assert driver.acked == []
 
 
 def test_in_memory_idempotency_store_evicts_oldest_record() -> None:
@@ -685,6 +744,27 @@ def test_worker_kernel_retries_transient_failure_before_terminal_reject() -> Non
     assert driver.rejected == ["job-retry"]
 
 
+def test_worker_kernel_settlement_failure_preserves_handler_error() -> None:
+    """When the handler fails and the subsequent settlement (retry/reject) also
+    fails, the settlement error must propagate with the handler error as its cause,
+    preserving both errors in the exception chain."""
+    driver = _make_driver()
+    driver.fail_next_retry = True
+    driver.dispatch(_job("job-settle-fail", max_attempts=2))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    def failing_consumer(job: QueueJob) -> None:
+        raise ValueError("handler error")
+
+    with pytest.raises(RuntimeError, match="retry failed") as exc:
+        kernel.run_once(consumer=failing_consumer)
+
+    # The settlement error chains back to the handler error
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, ValueError)
+    assert "handler error" in str(exc.value.__cause__)
+
+
 def test_worker_kernel_reports_stopped_state_after_close() -> None:
     driver = _make_driver()
     kernel = WorkerKernel(driver, clock=lambda: _NOW)
@@ -806,6 +886,92 @@ def test_worker_kernel_run_loop_continues_after_settled_job_failure() -> None:
     assert processed == ["job-after-failure"]
 
 
+def test_worker_kernel_run_once_ack_failure_increments_jobs_failed() -> None:
+    """An acknowledgement failure must increment jobs_failed exactly once before
+    propagating, so the cumulative failure metric truthfully represents this event."""
+    driver = _make_driver()
+    driver.fail_next_ack = True
+    driver.dispatch(_job("job-ack-fail-stats"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    with pytest.raises(RuntimeError, match="ack failed"):
+        kernel.run_once(consumer=lambda job: None)
+
+    stats = kernel.stats
+    assert stats.jobs_failed == 1
+    assert driver.released == ["job-ack-fail-stats"]
+
+
+def test_worker_kernel_run_loop_ack_failure_increments_jobs_failed() -> None:
+    """run_loop must also increment jobs_failed for acknowledgement failures before
+    propagating, matching the run_once behaviour."""
+    driver = _make_driver()
+    driver.fail_next_ack = True
+    driver.dispatch(_job("job-ack-fail-loop-stats"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    processed: list[str] = []
+
+    with pytest.raises(RuntimeError, match="ack failed"):
+        kernel.run_loop(
+            consumer=lambda job: processed.append(job.envelope.metadata.message_id),
+            poll_interval=timedelta(milliseconds=1),
+        )
+
+    stats = kernel.stats
+    assert stats.jobs_failed == 1
+    assert processed == ["job-ack-fail-loop-stats"]
+    assert driver.released == ["job-ack-fail-loop-stats"]
+
+
+def test_worker_kernel_run_loop_propagates_acknowledgement_failure() -> None:
+    """run_loop must not swallow infrastructure acknowledgement failures.
+
+    A handler failure that was successfully settled (retried/rejected) allows the
+    loop to continue, but an ack failure is an infrastructure problem that must
+    propagate out of run_loop so the operator can observe it.
+    """
+    driver = _make_driver()
+    driver.fail_next_ack = True
+    driver.dispatch(_job("job-ack-fail-loop"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    processed: list[str] = []
+
+    with pytest.raises(RuntimeError, match="ack failed"):
+        kernel.run_loop(
+            consumer=lambda job: processed.append(job.envelope.metadata.message_id),
+            poll_interval=timedelta(milliseconds=1),
+        )
+
+    assert processed == ["job-ack-fail-loop"]
+    assert driver.released == ["job-ack-fail-loop"]
+
+
+def test_worker_kernel_run_loop_continues_after_handler_failure_then_stops_on_ack_failure() -> None:
+    """Ordinary consumer failures that settled may still allow the loop to continue,
+    but the next acknowledgement failure must propagate."""
+    driver = _make_driver()
+    driver.dispatch(_job("job-handler-fail"))
+    driver.dispatch(_job("job-then-ack-fail"))
+    driver.fail_next_ack = True
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+    processed: list[str] = []
+
+    def consumer(job: QueueJob) -> None:
+        message_id = job.envelope.metadata.message_id
+        if message_id == "job-handler-fail":
+            raise ValueError("handler boom")
+        processed.append(message_id)
+
+    with pytest.raises(RuntimeError, match="ack failed"):
+        kernel.run_loop(consumer, poll_interval=timedelta(milliseconds=1))
+
+    assert driver.rejected == ["job-handler-fail"]
+    assert processed == ["job-then-ack-fail"]
+    assert driver.released == ["job-then-ack-fail"]
+
+
 def test_worker_kernel_idle_timeout_increments_counter() -> None:
     driver = _make_driver()
     t = _NOW
@@ -863,6 +1029,25 @@ def test_worker_kernel_preserves_cancellation_when_release_fails() -> None:
 
     assert any(isinstance(error, KeyboardInterrupt) for error in exc.value.exceptions)
     assert any(isinstance(error, RuntimeError) for error in exc.value.exceptions)
+
+
+def test_worker_kernel_preserves_ack_error_when_release_also_fails() -> None:
+    """When an acknowledgement fails and the subsequent release also fails, both
+    errors must be preserved in a BaseExceptionGroup so the operator can observe
+    the full failure chain."""
+    driver = _make_driver()
+    driver.fail_next_ack = True
+    driver.fail_next_release = True
+    driver.dispatch(_job("job-ack-release-fail"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    with pytest.raises(BaseExceptionGroup) as exc:
+        kernel.run_once(consumer=lambda job: None)
+
+    errors = exc.value.exceptions
+    assert len(errors) == 2
+    assert any(isinstance(e, RuntimeError) and "ack failed" in str(e) for e in errors)
+    assert any(isinstance(e, RuntimeError) and "release failed" in str(e) for e in errors)
 
 
 def test_worker_kernel_lag_calculated_from_reservation() -> None:
