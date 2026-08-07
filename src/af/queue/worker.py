@@ -51,13 +51,13 @@ class JobHandler(Protocol):
 
 
 class IdempotencyStore(Protocol):
-    """Deduplication boundary shared with a handler's authoritative state."""
+    """Post-success duplicate-suppression boundary for retry-safe handlers."""
 
     def claim(self, message_id: str, /) -> AbstractContextManager[IdempotencyClaim]: ...
 
 
 class IdempotencyClaim(Protocol):
-    """Atomic claim held across one handler transaction."""
+    """Claim held while one delivery checks and records post-scope success."""
 
     @property
     def already_processed(self) -> bool: ...
@@ -109,7 +109,17 @@ JobScopeFactory = Callable[[QueueJob], AbstractContextManager[None]]
 
 
 class _SettledJobFailure(Exception):
+    """Handler exception that was already settled (retried/rejected)."""
+
     def __init__(self, error: Exception) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
+class _AcknowledgementFailure(Exception):
+    """Infrastructure acknowledgement failure that must propagate."""
+
+    def __init__(self, error: BaseException) -> None:
         super().__init__(str(error))
         self.error = error
 
@@ -142,9 +152,11 @@ class WorkerKernel:
     admission lock. ``start_draining`` stops all new reservations; work already admitted
     is allowed to settle before ``close`` releases the driver.
 
-    Durable exactly-once business effects are deliberately not claimed. Deployments that
-    need deduplication must inject an ``IdempotencyStore`` whose ``record`` operation shares
-    the handler's authoritative transaction or durable intent boundary.
+    Durable exactly-once business effects are deliberately not claimed. An injected
+    ``IdempotencyStore`` records only after the job scope exits successfully and before the
+    queue acknowledgement. If recording fails, the delivery is retried and handler effects
+    may repeat. Handlers requiring stronger guarantees must provide their own transactional
+    inbox/outbox or idempotent business operation.
     """
 
     def __init__(
@@ -293,6 +305,8 @@ class WorkerKernel:
             return self._run_once(consumer, lane=lane)
         except _SettledJobFailure as failure:
             raise failure.error.with_traceback(failure.error.__traceback__) from None
+        except _AcknowledgementFailure as failure:
+            raise failure.error.with_traceback(failure.error.__traceback__) from None
 
     def _run_once(
         self,
@@ -320,7 +334,7 @@ class WorkerKernel:
                             sync_consumer = cast(Callable[[QueueJob], object], consumer)
                             result = sync_consumer(reservation.job)
                             _validate_sync_result(result)
-                            claim.record()
+                        claim.record()
             except Exception as error:
                 self._increment("jobs_failed")
                 self._settle_failure(reservation, error)
@@ -333,9 +347,14 @@ class WorkerKernel:
             try:
                 self._driver.ack(reservation)
             except BaseException as acknowledgement_error:
+                self._increment(
+                    "jobs_failed"
+                    if isinstance(acknowledgement_error, Exception)
+                    else "cancellations"
+                )
                 self._release_uncertain(reservation, acknowledgement_error)
                 if isinstance(acknowledgement_error, Exception):
-                    raise _SettledJobFailure(acknowledgement_error) from acknowledgement_error
+                    raise _AcknowledgementFailure(acknowledgement_error) from acknowledgement_error
                 raise
             self._increment("duplicates" if duplicate else "jobs_processed")
             return reservation
@@ -359,7 +378,11 @@ class WorkerKernel:
         lane: str | None = None,
         poll_interval: timedelta = timedelta(milliseconds=100),
     ) -> None:
-        """Poll serially until shutdown or drain begins."""
+        """Poll serially until shutdown or drain begins.
+
+        Ordinary consumer failures that were successfully settled allow the loop
+        to continue. Infrastructure acknowledgement failures propagate immediately.
+        """
         if poll_interval <= timedelta(0):
             raise ValueError("worker poll interval must be positive")
         _validate_handler(consumer)
@@ -369,6 +392,8 @@ class WorkerKernel:
                     return
             try:
                 reservation = self._run_once(consumer, lane=lane)
+            except _AcknowledgementFailure as failure:
+                raise failure.error.with_traceback(failure.error.__traceback__) from None
             except _SettledJobFailure:
                 continue
             if reservation is None:
