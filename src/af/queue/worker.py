@@ -6,7 +6,7 @@ import inspect
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -15,6 +15,7 @@ from types import TracebackType
 from typing import Protocol, cast
 
 from af.framework.errors import PlatformReason
+from af.observability.signals import TelemetryKind, TelemetryPublisher, TelemetrySignal
 from af.queue.contracts import QueueJob, QueueOperationError, QueueReservation
 from af.queue.manager import QueueDriver
 
@@ -124,6 +125,49 @@ class _AcknowledgementFailure(Exception):
         self.error = error
 
 
+@dataclass(slots=True)
+class _DeliveryObservation:
+    """Low-cardinality terminal state for one admitted delivery."""
+
+    outcome: str = "settlement_failed"
+    reason: str = "execution_failure"
+    settlement: str = "failed"
+    phase: str = "execution"
+    attempt_bucket: str = "first"
+
+
+def _duration_bucket(duration: timedelta) -> str:
+    if duration < timedelta(milliseconds=10):
+        return "lt_10ms"
+    if duration < timedelta(milliseconds=100):
+        return "lt_100ms"
+    if duration < timedelta(seconds=1):
+        return "lt_1s"
+    if duration < timedelta(seconds=10):
+        return "lt_10s"
+    if duration < timedelta(minutes=1):
+        return "lt_1m"
+    if duration < timedelta(minutes=5):
+        return "lt_5m"
+    return "gte_5m"
+
+
+def _attempt_bucket(reservation: QueueReservation) -> str:
+    if reservation.attempt == 1:
+        return "first"
+    return "retry"
+
+
+def _saturation_bucket(saturation: float) -> str:
+    if saturation < 0.5:
+        return "lt_50pct"
+    if saturation < 0.8:
+        return "lt_80pct"
+    if saturation < 1.0:
+        return "lt_100pct"
+    return "full"
+
+
 def _validate_handler(consumer: object) -> None:
     if not callable(consumer):
         raise TypeError("sync queue worker handler must be callable")
@@ -168,6 +212,8 @@ class WorkerKernel:
         max_idle_time: timedelta | None = None,
         idempotency: IdempotencyStore | None = None,
         scope_factory: JobScopeFactory | None = None,
+        telemetry: TelemetryPublisher | None = None,
+        queue_wait_alert_after: timedelta | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if type(max_concurrency) is not int or max_concurrency < 1:
@@ -183,6 +229,10 @@ class WorkerKernel:
             raise TypeError("worker idempotency store requires callable claim")
         if scope_factory is not None and not callable(scope_factory):
             raise TypeError("worker scope factory must be callable")
+        if telemetry is not None and not isinstance(telemetry, TelemetryPublisher):
+            raise TypeError("worker telemetry publisher is invalid")
+        if queue_wait_alert_after is not None and queue_wait_alert_after <= timedelta(0):
+            raise ValueError("worker queue wait alert threshold must be positive")
         if not callable(clock):
             raise TypeError("worker clock must be callable")
 
@@ -192,6 +242,8 @@ class WorkerKernel:
         self._max_idle_time = max_idle_time
         self._idempotency = idempotency
         self._scope_factory = scope_factory or (lambda job: nullcontext())
+        self._telemetry = telemetry
+        self._queue_wait_alert_after = queue_wait_alert_after
         self._clock = clock
 
         self._state = WorkerState.IDLE
@@ -320,6 +372,12 @@ class WorkerKernel:
 
         message_id = reservation.job.envelope.metadata.message_id
         started = self._clock()
+        lag = max(
+            timedelta(0),
+            reservation.reserved_at - reservation.job.envelope.metadata.occurred_at,
+        )
+        saturation = len(self._active_jobs) / self._max_concurrency
+        observation = _DeliveryObservation(attempt_bucket=_attempt_bucket(reservation))
         try:
             try:
                 claim_context = (
@@ -337,29 +395,49 @@ class WorkerKernel:
                         claim.record()
             except Exception as error:
                 self._increment("jobs_failed")
-                self._settle_failure(reservation, error)
+                if reservation.attempt >= reservation.job.max_attempts:
+                    observation.attempt_bucket = "exhausted"
+                settlement = self._settle_failure(reservation, error)
+                observation.outcome = "retried" if settlement == "retry" else "rejected"
+                observation.settlement = settlement
                 raise _SettledJobFailure(error) from error
             except BaseException as cancellation:
                 self._increment("cancellations")
+                observation.reason = "cancellation"
                 self._release_cancelled(reservation, cancellation)
+                observation.outcome = "released"
+                observation.settlement = "release"
                 raise
 
+            observation.phase = "ack"
+            observation.reason = "acknowledgement_failure"
             try:
                 self._driver.ack(reservation)
             except BaseException as acknowledgement_error:
+                observation.reason = (
+                    "acknowledgement_failure"
+                    if isinstance(acknowledgement_error, Exception)
+                    else "cancellation"
+                )
                 self._increment(
                     "jobs_failed"
                     if isinstance(acknowledgement_error, Exception)
                     else "cancellations"
                 )
                 self._release_uncertain(reservation, acknowledgement_error)
+                observation.outcome = "released"
+                observation.settlement = "release"
                 if isinstance(acknowledgement_error, Exception):
                     raise _AcknowledgementFailure(acknowledgement_error) from acknowledgement_error
                 raise
+            observation.outcome = "duplicate" if duplicate else "processed"
+            observation.reason = "duplicate" if duplicate else "success"
+            observation.settlement = "ack"
             self._increment("duplicates" if duplicate else "jobs_processed")
             return reservation
         finally:
-            elapsed = self._clock() - started
+            finished_at = self._clock()
+            elapsed = finished_at - started
             with self._condition:
                 self._stats = replace(
                     self._stats,
@@ -367,9 +445,19 @@ class WorkerKernel:
                 )
                 self._active_jobs.discard(message_id)
                 self._active_threads.discard(get_ident())
-                self._last_activity = self._clock()
+                self._last_activity = finished_at
                 self._state = WorkerState.PROCESSING if self._active_jobs else WorkerState.IDLE
                 self._condition.notify_all()
+            # Optional telemetry construction cannot change queue settlement semantics.
+            with suppress(Exception):
+                self._emit_delivery_telemetry(
+                    reservation,
+                    observation=observation,
+                    observed_at=finished_at,
+                    runtime=elapsed,
+                    lag=lag,
+                    saturation=saturation,
+                )
 
     def run_loop(
         self,
@@ -434,15 +522,73 @@ class WorkerKernel:
             )
             return reservation
 
-    def _settle_failure(self, reservation: QueueReservation, error: Exception) -> None:
+    def _settle_failure(self, reservation: QueueReservation, error: Exception) -> str:
         try:
             if reservation.attempt < reservation.job.max_attempts:
                 self._driver.retry(reservation)
                 self._increment("retries")
+                return "retry"
             else:
                 self._driver.reject(reservation)
+                return "reject"
         except Exception as settlement_error:
             raise settlement_error from error
+
+    def _emit_delivery_telemetry(
+        self,
+        reservation: QueueReservation,
+        *,
+        observation: _DeliveryObservation,
+        observed_at: datetime,
+        runtime: timedelta,
+        lag: timedelta,
+        saturation: float,
+    ) -> None:
+        publisher = self._telemetry
+        if publisher is None:
+            return
+        context = reservation.job.envelope.metadata.telemetry
+        self._publish_telemetry(
+            TelemetrySignal.create(
+                kind=TelemetryKind.METRIC,
+                name="queue.worker.delivery",
+                observed_at=observed_at,
+                context=context,
+                attributes={
+                    "attempt_bucket": observation.attempt_bucket,
+                    "lag_bucket": _duration_bucket(lag),
+                    "outcome": observation.outcome,
+                    "phase": observation.phase,
+                    "reason": observation.reason,
+                    "runtime_bucket": _duration_bucket(runtime),
+                    "saturation_bucket": _saturation_bucket(saturation),
+                    "settlement": observation.settlement,
+                },
+            )
+        )
+        threshold = self._queue_wait_alert_after
+        if threshold is not None and lag > threshold:
+            self._publish_telemetry(
+                TelemetrySignal.create(
+                    kind=TelemetryKind.LOG,
+                    name="queue.worker.wait_alert",
+                    observed_at=observed_at,
+                    context=context,
+                    attributes={
+                        "lag_bucket": _duration_bucket(lag),
+                        "status": "exceeded",
+                        "threshold_bucket": _duration_bucket(threshold),
+                    },
+                )
+            )
+
+    def _publish_telemetry(self, signal: TelemetrySignal) -> None:
+        try:
+            assert self._telemetry is not None
+            self._telemetry.publish(signal)
+        except Exception:
+            # Optional telemetry evidence cannot change queue settlement semantics.
+            return
 
     def _release_cancelled(
         self,

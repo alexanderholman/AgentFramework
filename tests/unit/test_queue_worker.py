@@ -10,6 +10,12 @@ import pytest
 
 from af.framework.errors import PlatformReason
 from af.messaging import EnvelopeKind, MessageEnvelope, MessageMetadata
+from af.observability import (
+    TelemetryContext,
+    TelemetryKind,
+    TelemetryPublisher,
+    TelemetrySignal,
+)
 from af.queue.contracts import (
     QueueDispatchDisposition,
     QueueDispatchReceipt,
@@ -703,6 +709,271 @@ def test_worker_kernel_creates_and_disposes_a_scope_per_job() -> None:
 # -- WorkerKernel observability -----------------------------------------------
 
 
+class _RecordingTelemetrySink:
+    def __init__(self) -> None:
+        self.signals: list[TelemetrySignal] = []
+
+    def emit(self, signal: TelemetrySignal, /) -> None:
+        self.signals.append(signal)
+
+
+def test_worker_kernel_emits_bounded_terminal_delivery_telemetry() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    context = TelemetryContext(operation="queue.example", correlation_id="correlation-1")
+    envelope = MessageEnvelope.create(
+        metadata=MessageMetadata(
+            message_id="job-telemetry",
+            message_type="jobs.example",
+            schema_version=1,
+            kind=EnvelopeKind.JOB,
+            occurred_at=_NOW,
+            correlation_id="correlation-1",
+            telemetry=context,
+        ),
+        payload={"secret": "must-not-leak"},
+    )
+    driver.dispatch(_job("job-telemetry", envelope=envelope))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    kernel.run_once(consumer=lambda job: None)
+
+    assert len(sink.signals) == 1
+    signal = sink.signals[0]
+    assert signal.name == "queue.worker.delivery"
+    assert signal.kind is TelemetryKind.METRIC
+    assert signal.context is context
+    assert dict(signal.attributes) == {
+        "attempt_bucket": "first",
+        "lag_bucket": "lt_10ms",
+        "outcome": "processed",
+        "phase": "ack",
+        "reason": "success",
+        "runtime_bucket": "lt_10ms",
+        "saturation_bucket": "lt_50pct",
+        "settlement": "ack",
+    }
+    rendered = repr(signal)
+    assert "job-telemetry" not in rendered
+    assert "must-not-leak" not in rendered
+
+
+def test_worker_kernel_emits_queue_wait_alert_above_configured_threshold() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    occurred_at = _NOW - timedelta(seconds=12)
+    envelope = MessageEnvelope.create(
+        metadata=MessageMetadata(
+            message_id="job-wait-alert",
+            message_type="jobs.example",
+            schema_version=1,
+            kind=EnvelopeKind.JOB,
+            occurred_at=occurred_at,
+        ),
+        payload={},
+    )
+    driver.dispatch(_job("job-wait-alert", envelope=envelope))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        queue_wait_alert_after=timedelta(seconds=5),
+        clock=lambda: _NOW,
+    )
+
+    kernel.run_once(consumer=lambda job: None)
+
+    assert [signal.name for signal in sink.signals] == [
+        "queue.worker.delivery",
+        "queue.worker.wait_alert",
+    ]
+    assert dict(sink.signals[0].attributes)["lag_bucket"] == "lt_1m"
+    assert dict(sink.signals[1].attributes) == {
+        "lag_bucket": "lt_1m",
+        "status": "exceeded",
+        "threshold_bucket": "lt_10s",
+    }
+
+
+@pytest.mark.parametrize(
+    ("max_attempts", "outcome", "settlement", "attempt_bucket"),
+    [
+        (2, "retried", "retry", "first"),
+        (1, "rejected", "reject", "exhausted"),
+    ],
+)
+def test_worker_kernel_emits_failure_settlement_telemetry(
+    max_attempts: int,
+    outcome: str,
+    settlement: str,
+    attempt_bucket: str,
+) -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    driver.dispatch(_job("job-failure-telemetry", max_attempts=max_attempts))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(ValueError, match="boom"):
+        kernel.run_once(consumer=lambda job: (_ for _ in ()).throw(ValueError("boom")))
+
+    assert len(sink.signals) == 1
+    attributes = dict(sink.signals[0].attributes)
+    assert attributes["outcome"] == outcome
+    assert attributes["reason"] == "execution_failure"
+    assert attributes["settlement"] == settlement
+    assert attributes["phase"] == "execution"
+    assert attributes["attempt_bucket"] == attempt_bucket
+
+
+def test_worker_kernel_emits_settlement_failure_without_hiding_primary_error() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    driver.fail_next_retry = True
+    driver.dispatch(_job("job-settlement-telemetry", max_attempts=2))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(RuntimeError, match="retry failed") as exc:
+        kernel.run_once(consumer=lambda job: (_ for _ in ()).throw(ValueError("handler")))
+
+    assert isinstance(exc.value.__cause__, ValueError)
+    attributes = dict(sink.signals[0].attributes)
+    assert attributes["outcome"] == "settlement_failed"
+    assert attributes["reason"] == "execution_failure"
+    assert attributes["settlement"] == "failed"
+
+
+def test_worker_kernel_emits_exhausted_bucket_when_terminal_rejection_fails() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    driver.fail_next_reject = True
+    driver.dispatch(_job("job-reject-telemetry", max_attempts=1))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(RuntimeError, match="reject failed") as exc:
+        kernel.run_once(consumer=lambda job: (_ for _ in ()).throw(ValueError("handler")))
+
+    assert isinstance(exc.value.__cause__, ValueError)
+    assert dict(sink.signals[0].attributes) == {
+        "attempt_bucket": "exhausted",
+        "lag_bucket": "lt_10ms",
+        "outcome": "settlement_failed",
+        "phase": "execution",
+        "reason": "execution_failure",
+        "runtime_bucket": "lt_10ms",
+        "saturation_bucket": "lt_50pct",
+        "settlement": "failed",
+    }
+
+
+def test_worker_kernel_telemetry_sink_failure_does_not_change_delivery() -> None:
+    class BrokenSink:
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            raise RuntimeError("telemetry unavailable")
+
+    driver = _make_driver()
+    publisher = TelemetryPublisher((BrokenSink(),))
+    driver.dispatch(_job("job-broken-telemetry"))
+    kernel = WorkerKernel(driver, telemetry=publisher, clock=lambda: _NOW)
+
+    reservation = kernel.run_once(consumer=lambda job: None)
+
+    assert reservation is not None
+    assert driver.acked == ["job-broken-telemetry"]
+    assert kernel.state is WorkerState.IDLE
+    assert publisher.evidence.failed_deliveries == 1
+
+
+@pytest.mark.parametrize(
+    ("acknowledgement_error", "expected_reason"),
+    [
+        (RuntimeError("ack failed"), "acknowledgement_failure"),
+        (KeyboardInterrupt(), "cancellation"),
+    ],
+)
+def test_worker_kernel_emits_release_telemetry_for_uncertain_acknowledgement(
+    acknowledgement_error: BaseException,
+    expected_reason: str,
+) -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    driver.next_ack_error = acknowledgement_error
+    driver.dispatch(_job("job-uncertain-ack"))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(type(acknowledgement_error)):
+        kernel.run_once(consumer=lambda job: None)
+
+    attributes = dict(sink.signals[0].attributes)
+    assert attributes["outcome"] == "released"
+    assert attributes["reason"] == expected_reason
+    assert attributes["settlement"] == "release"
+    assert attributes["phase"] == "ack"
+
+
+def test_worker_kernel_emits_cancellation_settlement_failure_telemetry() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    driver.fail_next_release = True
+    driver.dispatch(_job("job-cancel-telemetry"))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(BaseExceptionGroup):
+        kernel.run_once(consumer=lambda job: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    attributes = dict(sink.signals[0].attributes)
+    assert attributes["attempt_bucket"] == "first"
+    assert attributes["outcome"] == "settlement_failed"
+    assert attributes["reason"] == "cancellation"
+    assert attributes["settlement"] == "failed"
+    assert attributes["phase"] == "execution"
+
+
+def test_worker_kernel_emits_acknowledgement_settlement_failure_telemetry() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    driver.next_ack_error = RuntimeError("ack failed")
+    driver.fail_next_release = True
+    driver.dispatch(_job("job-ack-release-telemetry"))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(BaseExceptionGroup):
+        kernel.run_once(consumer=lambda job: None)
+
+    attributes = dict(sink.signals[0].attributes)
+    assert attributes["attempt_bucket"] == "first"
+    assert attributes["outcome"] == "settlement_failed"
+    assert attributes["reason"] == "acknowledgement_failure"
+    assert attributes["settlement"] == "failed"
+    assert attributes["phase"] == "ack"
+
+
 def test_worker_kernel_tracks_lag() -> None:
     driver = _make_driver()
     kernel = WorkerKernel(driver, clock=lambda: _NOW)
@@ -1179,6 +1450,7 @@ class _TestQueueDriver:
         self.fail_next_ack = False
         self.next_ack_error: BaseException | None = None
         self.fail_next_retry = False
+        self.fail_next_reject = False
         self.fail_next_release = False
         self.fail_next_close = False
         self._features = frozenset({QueueFeature.RESERVATION, QueueFeature.INLINE_EXECUTION})
@@ -1249,6 +1521,9 @@ class _TestQueueDriver:
         self.acked.append(reservation.job.envelope.metadata.message_id)
 
     def reject(self, reservation: QueueReservation, /) -> None:
+        if self.fail_next_reject:
+            self.fail_next_reject = False
+            raise RuntimeError("reject failed")
         self.rejected.append(reservation.job.envelope.metadata.message_id)
 
     def retry(
