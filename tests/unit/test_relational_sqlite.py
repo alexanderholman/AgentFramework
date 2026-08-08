@@ -234,6 +234,23 @@ def test_sqlite_rejects_nested_top_level_transactions_and_active_shutdown() -> N
     driver.close()
 
 
+def test_sqlite_write_lock_contention_is_a_sanitized_transient_failure(tmp_path: Path) -> None:
+    database = tmp_path / "sqlite-write-contention.sqlite3"
+    blocker = sqlite3.connect(database, isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    driver = SQLiteDriver(database)
+
+    try:
+        with pytest.raises(DatabaseOperationError) as captured, driver.transaction():
+            pass
+        assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+        assert captured.value.stage == "database.transaction"
+    finally:
+        blocker.rollback()
+        blocker.close()
+        driver.close()
+
+
 def test_statement_validation_and_database_failures_do_not_disclose_sql() -> None:
     with pytest.raises(ValueError):
         DatabaseStatement("")
