@@ -331,7 +331,12 @@ def test_queue_contracts_validate_and_redact_payload_content() -> None:
         disposition=QueueDispatchDisposition.ENQUEUED,
         dispatched_at=_NOW,
     )
-    reservation = QueueReservation(job=job, attempt=2, reserved_at=_NOW)
+    reservation = QueueReservation(
+        job=job,
+        attempt=2,
+        reserved_at=_NOW,
+        expires_at=_NOW + timedelta(minutes=5),
+    )
 
     assert job.delay == timedelta(seconds=1)
     assert job.priority == 10
@@ -344,6 +349,7 @@ def test_queue_contracts_validate_and_redact_payload_content() -> None:
     assert "not-for-repr" not in repr(job)
     assert receipt.disposition is QueueDispatchDisposition.ENQUEUED
     assert reservation.attempt == 2
+    assert reservation.expires_at == _NOW + timedelta(minutes=5)
     assert "job-contracts" in repr(reservation)
 
 
@@ -401,6 +407,20 @@ def test_queue_contracts_reject_invalid_envelopes_and_timestamps() -> None:
         QueueReservation(job=object(), attempt=1, reserved_at=_NOW)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="reservation attempt"):
         QueueReservation(job=_job("job-bad-attempt"), attempt=0, reserved_at=_NOW)
+    with pytest.raises(ValueError, match="reservation expiry"):
+        QueueReservation(
+            job=_job("job-bad-expiry"),
+            attempt=1,
+            reserved_at=_NOW,
+            expires_at=_NOW,
+        )
+    with pytest.raises(ValueError, match="reservation expiry"):
+        QueueReservation(
+            job=_job("job-naive-expiry"),
+            attempt=1,
+            reserved_at=_NOW,
+            expires_at=datetime(2026, 8, 1, 16),
+        )
 
 
 def test_sync_driver_reports_supported_and_unsupported_features() -> None:
