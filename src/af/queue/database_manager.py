@@ -55,6 +55,7 @@ def database_queue_registration(
     *,
     database_factory: Callable[[], DatabaseDriver],
     clock: Callable[[], datetime] | None = None,
+    reservation_lease: timedelta = timedelta(minutes=5),
 ) -> DriverRegistration[QueueDriver]:
     """Return an inert durable queue declaration backed by a relational driver."""
 
@@ -62,10 +63,16 @@ def database_queue_registration(
         raise TypeError("database queue factory must be callable")
     if clock is not None and not callable(clock):
         raise TypeError("database queue clock must be callable")
+    if (
+        not isinstance(reservation_lease, timedelta)
+        or reservation_lease <= timedelta(0)
+        or reservation_lease > timedelta(days=1)
+    ):
+        raise ValueError("database queue reservation lease must be within one day")
     evidence_clock = clock if clock is not None else (lambda: datetime.now(UTC))
     manifest = DriverManifest(
         driver_name="database",
-        version="1.0.0",
+        version="1.1.0",
         artifact_digest=_ARTIFACT_DIGEST,
         dependency_graph_digest=_DEPENDENCY_DIGEST,
         capabilities=_CAPABILITIES,
@@ -76,7 +83,11 @@ def database_queue_registration(
             raise ValueError("database queue registration received an invalid identity")
         if set(config) != {"driver"} or config.get("driver") != "database":
             raise ValueError("database queue connection configuration is invalid")
-        return DatabaseQueueDriver(database_factory(), clock=evidence_clock)
+        return DatabaseQueueDriver(
+            database_factory(),
+            clock=evidence_clock,
+            reservation_lease=reservation_lease,
+        )
 
     def verify(
         ref: ConnectionRef,

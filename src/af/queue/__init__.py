@@ -6,6 +6,7 @@ from af.queue.contracts import (
     QueueJob,
     QueueOperationError,
     QueueReservation,
+    QueueReservationLost,
     UnsupportedQueueFeature,
 )
 from af.queue.database import DatabaseQueueDriver
@@ -37,6 +38,7 @@ __all__ = (
     "QueueManager",
     "QueueOperationError",
     "QueueReservation",
+    "QueueReservationLost",
     "SyncQueueDriver",
     "UnsupportedQueueFeature",
     "WorkerKernel",

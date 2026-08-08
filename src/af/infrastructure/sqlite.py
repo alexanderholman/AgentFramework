@@ -35,12 +35,16 @@ _FEATURES = frozenset(
 
 
 def _failure(error: BaseException, *, stage: str) -> DatabaseOperationError:
-    reason = (
-        PlatformReason.CANCELLED
-        if isinstance(error, sqlite3.Error)
-        and getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT
-        else PlatformReason.PERMANENT_FAILURE
+    raw_code = (
+        getattr(error, "sqlite_errorcode", None) if isinstance(error, sqlite3.Error) else None
     )
+    code = raw_code & 0xFF if type(raw_code) is int else None
+    if code == sqlite3.SQLITE_INTERRUPT:
+        reason = PlatformReason.CANCELLED
+    elif code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+        reason = PlatformReason.TRANSIENT_FAILURE
+    else:
+        reason = PlatformReason.PERMANENT_FAILURE
     return DatabaseOperationError(
         reason=reason,
         stage=stage,
@@ -202,7 +206,12 @@ class _SQLiteTransactionContext(AbstractContextManager[_SQLiteTransaction]):
                 )
             if self._read_only:
                 self._driver._connection.execute("PRAGMA query_only = ON")
-            self._driver._connection.execute("BEGIN")
+            # Acquire the writer slot before reading mutable claim candidates. This avoids
+            # deferred-transaction snapshot upgrade failures across SQLite connections.
+            try:
+                self._driver._connection.execute("BEGIN" if self._read_only else "BEGIN IMMEDIATE")
+            except sqlite3.Error as error:
+                raise _failure(error, stage="database.transaction") from None
             self._driver._transaction_active = True
             self._transaction = _SQLiteTransaction(
                 self._driver._connection,

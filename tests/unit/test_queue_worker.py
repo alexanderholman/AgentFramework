@@ -22,6 +22,7 @@ from af.queue.contracts import (
     QueueJob,
     QueueOperationError,
     QueueReservation,
+    QueueReservationLost,
 )
 from af.queue.manager import QueueFeature
 from af.queue.worker import (
@@ -1225,6 +1226,27 @@ def test_worker_kernel_run_once_ack_failure_increments_jobs_failed() -> None:
     stats = kernel.stats
     assert stats.jobs_failed == 1
     assert driver.released == ["job-ack-fail-stats"]
+
+
+def test_worker_kernel_does_not_release_definitively_lost_reservation() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    lost = QueueReservationLost(stage="queue.ack")
+    driver.next_ack_error = lost
+    driver.dispatch(_job("job-lost-reservation"))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(QueueReservationLost) as captured:
+        kernel.run_once(consumer=lambda job: None)
+
+    assert captured.value is lost
+    assert driver.released == []
+    assert kernel.stats.jobs_failed == 1
+    assert dict(sink.signals[0].attributes)["reason"] == "reservation_lost"
 
 
 def test_worker_kernel_run_loop_ack_failure_increments_jobs_failed() -> None:

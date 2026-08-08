@@ -16,7 +16,12 @@ from typing import Protocol, cast
 
 from af.framework.errors import PlatformReason
 from af.observability.signals import TelemetryKind, TelemetryPublisher, TelemetrySignal
-from af.queue.contracts import QueueJob, QueueOperationError, QueueReservation
+from af.queue.contracts import (
+    QueueJob,
+    QueueOperationError,
+    QueueReservation,
+    QueueReservationLost,
+)
 from af.queue.manager import QueueDriver
 
 
@@ -424,6 +429,9 @@ class WorkerKernel:
                     if isinstance(acknowledgement_error, Exception)
                     else "cancellations"
                 )
+                if isinstance(acknowledgement_error, QueueReservationLost):
+                    observation.reason = "reservation_lost"
+                    raise _AcknowledgementFailure(acknowledgement_error) from acknowledgement_error
                 self._release_uncertain(reservation, acknowledgement_error)
                 observation.outcome = "released"
                 observation.settlement = "release"

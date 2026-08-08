@@ -16,6 +16,7 @@ __all__ = (
     "QueueJob",
     "QueueOperationError",
     "QueueReservation",
+    "QueueReservationLost",
     "UnsupportedQueueFeature",
 )
 
@@ -41,6 +42,13 @@ class UnsupportedQueueFeature(QueueOperationError):
     def __init__(self, feature: str) -> None:
         self.feature = feature
         super().__init__(reason=PlatformReason.CAPABILITY_UNAVAILABLE, stage="queue.capability")
+
+
+class QueueReservationLost(QueueOperationError):
+    """The caller no longer owns the reserved delivery generation."""
+
+    def __init__(self, *, stage: str) -> None:
+        super().__init__(reason=PlatformReason.INTEGRITY_FAILURE, stage=stage)
 
 
 class QueueDispatchDisposition(StrEnum):
@@ -139,6 +147,7 @@ class QueueReservation:
     attempt: int
     reserved_at: datetime
     fencing_token: int | None = None
+    expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.job, QueueJob):
@@ -150,10 +159,15 @@ class QueueReservation:
             type(self.fencing_token) is not int or self.fencing_token < 1
         ):
             raise ValueError("queue reservation fencing token must be a positive integer")
+        if self.expires_at is not None:
+            expires_at = _aware_utc(self.expires_at, "reservation expiry")
+            if expires_at <= self.reserved_at:
+                raise ValueError("queue reservation expiry must follow reservation time")
+            object.__setattr__(self, "expires_at", expires_at)
 
     def __repr__(self) -> str:
         return (
             f"QueueReservation(message_id={self.job.envelope.metadata.message_id!r}, "
             f"attempt={self.attempt!r}, reserved_at={self.reserved_at.isoformat()!r}, "
-            f"fencing_token={self.fencing_token!r})"
+            f"fencing_token={self.fencing_token!r}, expires_at={self.expires_at!r})"
         )
