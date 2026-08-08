@@ -15,6 +15,7 @@ from af.queue.contracts import (
     QueueJob,
     QueueOperationError,
     QueueReservation,
+    QueueReservationLost,
     UnsupportedQueueFeature,
 )
 from af.queue.manager import QueueFeature
@@ -25,6 +26,8 @@ _FEATURES = frozenset({QueueFeature.RESERVATION, QueueFeature.RETRY})
 _TABLE = "af_queue_jobs"
 _IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
 _MAX_ENVELOPE_BYTES = 1_048_576
+_DEFAULT_RESERVATION_LEASE = timedelta(minutes=5)
+_MAX_RESERVATION_LEASE = timedelta(days=1)
 
 
 def _aware_utc(value: object, field: str) -> datetime:
@@ -85,17 +88,25 @@ class DatabaseQueueDriver:
         *,
         clock: Callable[[], datetime],
         codec: JsonEnvelopeCodec | None = None,
+        reservation_lease: timedelta = _DEFAULT_RESERVATION_LEASE,
     ) -> None:
         if not _is_database_driver(database):
             raise TypeError("database queue requires a DatabaseDriver")
         if not callable(clock):
             raise TypeError("database queue clock must be callable")
+        if (
+            not isinstance(reservation_lease, timedelta)
+            or reservation_lease <= timedelta(0)
+            or reservation_lease > _MAX_RESERVATION_LEASE
+        ):
+            raise ValueError("database queue reservation lease must be within one day")
         resolved_codec = JsonEnvelopeCodec() if codec is None else codec
         if not isinstance(resolved_codec, JsonEnvelopeCodec):
             raise TypeError("database queue codec must be a JsonEnvelopeCodec")
         self._database = database
         self._clock = clock
         self._codec = resolved_codec
+        self._reservation_lease = reservation_lease
         self._closed = False
         self._install()
 
@@ -142,6 +153,7 @@ class DatabaseQueueDriver:
                             max_attempts,
                             backoff_seconds,
                             reserved_at,
+                            reservation_expires_at,
                             dead_lettered_at
                         ) VALUES (
                             :message_id,
@@ -155,6 +167,7 @@ class DatabaseQueueDriver:
                             0,
                             :max_attempts,
                             :backoff_seconds,
+                            NULL,
                             NULL,
                             NULL
                         )""",
@@ -189,12 +202,22 @@ class DatabaseQueueDriver:
     def reserve(self, *, lane: str | None = None) -> QueueReservation | None:
         self._assert_open()
         current = _aware_utc(self._clock(), "reservation time")
+        expires_at = current + self._reservation_lease
+        legacy_cutoff = current - self._reservation_lease
         if lane is not None:
             _identifier(lane, "lane")
         try:
             with self._database.transaction() as transaction:
-                where = "available_at <= :now AND reserved_at IS NULL AND dead_lettered_at IS NULL"
-                parameters: dict[str, object] = {"now": _timestamp(current)}
+                eligibility = """(
+                    reserved_at IS NULL
+                    OR reservation_expires_at <= :now
+                    OR (reservation_expires_at IS NULL AND reserved_at <= :legacy_cutoff)
+                )"""
+                where = f"available_at <= :now AND {eligibility} AND dead_lettered_at IS NULL"
+                parameters: dict[str, object] = {
+                    "now": _timestamp(current),
+                    "legacy_cutoff": _timestamp(legacy_cutoff),
+                }
                 if lane is not None:
                     where += " AND lane = :lane"
                     parameters["lane"] = lane
@@ -207,6 +230,8 @@ class DatabaseQueueDriver:
                             envelope_text,
                             attempt_count,
                             reservation_generation,
+                            reserved_at,
+                            reservation_expires_at,
                             max_attempts,
                             backoff_seconds
                         FROM {_TABLE}
@@ -221,33 +246,65 @@ class DatabaseQueueDriver:
                     return None
                 row = rows[0]
                 message_id = self._stored_text(row["message_id"])
-                attempt = self._stored_int(row["attempt_count"]) + 1
+                previous_attempts = self._stored_int(row["attempt_count"])
+                recovering = row["reserved_at"] is not None
+                consumed_attempts = previous_attempts + (1 if recovering else 0)
                 previous_generation = self._stored_int(row["reservation_generation"])
                 generation = previous_generation + 1
+                claim_parameters = {
+                    "reservation_generation": generation,
+                    "reserved_at": _timestamp(current),
+                    "reservation_expires_at": _timestamp(expires_at),
+                    "message_id": message_id,
+                    "previous_generation": previous_generation,
+                    "attempt_count": consumed_attempts,
+                    "now": _timestamp(current),
+                    "legacy_cutoff": _timestamp(legacy_cutoff),
+                }
+                if recovering and consumed_attempts >= self._stored_int(row["max_attempts"]):
+                    changed = transaction.execute(
+                        DatabaseStatement(
+                            f"""UPDATE {_TABLE}
+                            SET attempt_count = :attempt_count,
+                                reserved_at = NULL,
+                                reservation_expires_at = NULL,
+                                dead_lettered_at = :now
+                            WHERE message_id = :message_id
+                              AND reservation_generation = :previous_generation
+                              AND {eligibility}
+                              AND dead_lettered_at IS NULL""",
+                            claim_parameters,
+                        )
+                    )
+                    if changed == 0:
+                        return None
+                    if changed != 1:
+                        raise _attempt_conflict()
+                    return None
                 changed = transaction.execute(
                     DatabaseStatement(
                         f"""UPDATE {_TABLE}
                         SET reservation_generation = :reservation_generation,
-                            reserved_at = :reserved_at
+                            attempt_count = :attempt_count,
+                            reserved_at = :reserved_at,
+                            reservation_expires_at = :reservation_expires_at
                         WHERE message_id = :message_id
                           AND reservation_generation = :previous_generation
-                          AND reserved_at IS NULL
+                          AND {eligibility}
                           AND dead_lettered_at IS NULL""",
-                        {
-                            "reservation_generation": generation,
-                            "reserved_at": _timestamp(current),
-                            "message_id": message_id,
-                            "previous_generation": previous_generation,
-                        },
+                        claim_parameters,
                     )
                 )
+                if changed == 0:
+                    return None
                 if changed != 1:
                     raise _attempt_conflict()
                 return QueueReservation(
                     job=self._job_from_row(row),
-                    attempt=attempt,
+                    attempt=consumed_attempts + 1,
                     reserved_at=current,
                     fencing_token=generation,
+                    expires_at=expires_at,
                 )
         except QueueOperationError:
             raise
@@ -268,6 +325,8 @@ class DatabaseQueueDriver:
                 f"AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
                 f"AND reserved_at = :reserved_at "
+                f"AND reservation_expires_at = :reservation_expires_at "
+                f"AND reservation_expires_at > :now "
                 f"AND dead_lettered_at IS NULL"
             ),
         )
@@ -278,10 +337,13 @@ class DatabaseQueueDriver:
             reservation,
             stage="queue.reject",
             sql=(
-                f"UPDATE {_TABLE} SET reserved_at = NULL, dead_lettered_at = :terminal_at "
+                f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                f"dead_lettered_at = :terminal_at "
                 f"WHERE message_id = :message_id AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
-                f"AND reserved_at = :reserved_at AND dead_lettered_at IS NULL"
+                f"AND reserved_at = :reserved_at "
+                f"AND reservation_expires_at = :reservation_expires_at "
+                f"AND reservation_expires_at > :now AND dead_lettered_at IS NULL"
             ),
             terminal_at=_aware_utc(self._clock(), "dead-letter time"),
         )
@@ -293,11 +355,14 @@ class DatabaseQueueDriver:
             reservation,
             stage="queue.release",
             sql=(
-                f"UPDATE {_TABLE} SET reserved_at = NULL, available_at = :available_at, "
+                f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                f"available_at = :available_at, "
                 f"attempt_count = :previous_attempt WHERE message_id = :message_id "
                 f"AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
                 f"AND reserved_at = :reserved_at "
+                f"AND reservation_expires_at = :reservation_expires_at "
+                f"AND reservation_expires_at > :now "
                 f"AND dead_lettered_at IS NULL"
             ),
             available_at=_aware_utc(self._clock(), "release time"),
@@ -318,10 +383,13 @@ class DatabaseQueueDriver:
                 reservation,
                 stage="queue.retry",
                 sql=(
-                    f"UPDATE {_TABLE} SET reserved_at = NULL, dead_lettered_at = :terminal_at "
+                    f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                    f"dead_lettered_at = :terminal_at "
                     f"WHERE message_id = :message_id AND attempt_count = :previous_attempt "
                     f"AND reservation_generation = :fencing_token "
-                    f"AND reserved_at = :reserved_at AND dead_lettered_at IS NULL"
+                    f"AND reserved_at = :reserved_at "
+                    f"AND reservation_expires_at = :reservation_expires_at "
+                    f"AND reservation_expires_at > :now AND dead_lettered_at IS NULL"
                 ),
                 terminal_at=_aware_utc(self._clock(), "dead-letter time"),
             )
@@ -339,11 +407,14 @@ class DatabaseQueueDriver:
             reservation,
             stage="queue.retry",
             sql=(
-                f"UPDATE {_TABLE} SET reserved_at = NULL, available_at = :available_at, "
+                f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                f"available_at = :available_at, "
                 f"attempt_count = :attempt WHERE message_id = :message_id "
                 f"AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
-                f"AND reserved_at = :reserved_at AND dead_lettered_at IS NULL"
+                f"AND reserved_at = :reserved_at "
+                f"AND reservation_expires_at = :reservation_expires_at "
+                f"AND reservation_expires_at > :now AND dead_lettered_at IS NULL"
             ),
             available_at=next_available,
         )
@@ -379,11 +450,13 @@ class DatabaseQueueDriver:
                             max_attempts INTEGER NOT NULL,
                             backoff_seconds REAL NULL,
                             reserved_at VARCHAR(32) NULL,
+                            reservation_expires_at VARCHAR(32) NULL,
                             dead_lettered_at VARCHAR(32) NULL
                         )"""
                     )
                 )
             self._ensure_reservation_generation()
+            self._ensure_reservation_expiry()
         except DatabaseOperationError as error:
             raise QueueOperationError(
                 reason=error.reason,
@@ -416,6 +489,29 @@ class DatabaseQueueDriver:
             with self._database.transaction() as transaction:
                 transaction.query(probe)
 
+    def _ensure_reservation_expiry(self) -> None:
+        probe = DatabaseStatement(
+            f"SELECT reservation_expires_at FROM {_TABLE} WHERE 1 = 0",
+            read_only=True,
+        )
+        try:
+            with self._database.transaction() as transaction:
+                transaction.query(probe)
+            return
+        except DatabaseOperationError:
+            pass
+
+        try:
+            with self._database.transaction() as transaction:
+                transaction.execute(
+                    DatabaseStatement(
+                        f"ALTER TABLE {_TABLE} ADD COLUMN reservation_expires_at VARCHAR(32) NULL"
+                    )
+                )
+        except DatabaseOperationError:
+            with self._database.transaction() as transaction:
+                transaction.query(probe)
+
     def _transition_reserved(
         self,
         reservation: object,
@@ -433,12 +529,17 @@ class DatabaseQueueDriver:
                 reason=PlatformReason.INTEGRITY_FAILURE,
                 stage=stage,
             )
+        if reservation.expires_at is None:
+            raise QueueReservationLost(stage=stage)
+        current = _aware_utc(self._clock(), "settlement time")
         parameters: dict[str, object] = {
             "message_id": reservation.job.envelope.metadata.message_id,
             "attempt": reservation.attempt,
             "previous_attempt": reservation.attempt - 1,
             "fencing_token": reservation.fencing_token,
             "reserved_at": _timestamp(reservation.reserved_at),
+            "reservation_expires_at": _timestamp(reservation.expires_at),
+            "now": _timestamp(current),
         }
         if available_at is not None:
             parameters["available_at"] = _timestamp(available_at)
@@ -454,7 +555,7 @@ class DatabaseQueueDriver:
                 protected_cause=error,
             ) from None
         if changed != 1:
-            raise _attempt_conflict()
+            raise QueueReservationLost(stage=stage)
 
     def _job_from_row(self, row: object) -> QueueJob:
         from af.framework.relational import DatabaseRow

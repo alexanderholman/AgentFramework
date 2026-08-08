@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier, Lock, Thread
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ from af.queue import (
     QueueFeature,
     QueueJob,
     QueueManager,
+    QueueReservationLost,
     SyncQueueDriver,
     UnsupportedQueueFeature,
     database_queue_registration,
@@ -119,6 +121,253 @@ def test_database_queue_persists_jobs_across_driver_restart(tmp_path: Path) -> N
         reopened.close()
 
 
+def test_database_queue_recovers_expired_reservation_with_new_fence(tmp_path: Path) -> None:
+    database = tmp_path / "queue-lease-recovery.sqlite3"
+    clock = FakeClock(_NOW)
+    first = DatabaseQueueDriver(
+        SQLiteDriver(database),
+        clock=clock,
+        reservation_lease=timedelta(seconds=30),
+    )
+    second = DatabaseQueueDriver(
+        SQLiteDriver(database),
+        clock=clock,
+        reservation_lease=timedelta(seconds=30),
+    )
+    first.dispatch(_job("job-expired", max_attempts=2))
+
+    original = first.reserve()
+    assert original is not None
+    assert original.attempt == 1
+    assert original.expires_at == _NOW + timedelta(seconds=30)
+    assert second.reserve() is None
+
+    clock.advance(timedelta(seconds=30))
+    replacement = second.reserve()
+
+    assert replacement is not None
+    assert replacement.attempt == 2
+    assert replacement.fencing_token == 2
+    assert replacement.expires_at == _NOW + timedelta(seconds=60)
+    with pytest.raises(QueueReservationLost) as stale:
+        first.ack(original)
+    assert stale.value.stage == "queue.ack"
+    second.ack(replacement)
+    first.close()
+    second.close()
+
+
+@pytest.mark.parametrize("operation", ["ack", "reject", "release", "retry"])
+def test_database_queue_fences_every_stale_settlement_after_lease_takeover(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    database = tmp_path / f"queue-stale-{operation}.sqlite3"
+    clock = FakeClock(_NOW)
+    first = DatabaseQueueDriver(
+        SQLiteDriver(database),
+        clock=clock,
+        reservation_lease=timedelta(seconds=5),
+    )
+    second = DatabaseQueueDriver(
+        SQLiteDriver(database),
+        clock=clock,
+        reservation_lease=timedelta(seconds=5),
+    )
+    first.dispatch(_job(f"job-stale-{operation}", max_attempts=3))
+    original = first.reserve()
+    assert original is not None
+    clock.advance(timedelta(seconds=5))
+    replacement = second.reserve()
+    assert replacement is not None
+
+    with pytest.raises(QueueReservationLost) as stale:
+        getattr(first, operation)(original)
+
+    assert stale.value.stage == f"queue.{operation}"
+    second.ack(replacement)
+    first.close()
+    second.close()
+
+
+def test_database_queue_dead_letters_expired_final_attempt(tmp_path: Path) -> None:
+    database = tmp_path / "queue-expired-final.sqlite3"
+    clock = FakeClock(_NOW)
+    first = DatabaseQueueDriver(
+        SQLiteDriver(database),
+        clock=clock,
+        reservation_lease=timedelta(seconds=10),
+    )
+    first.dispatch(_job("job-expired-final", max_attempts=1))
+    assert first.reserve() is not None
+    first.close()
+
+    clock.advance(timedelta(seconds=10))
+    reopened = DatabaseQueueDriver(
+        SQLiteDriver(database),
+        clock=clock,
+        reservation_lease=timedelta(seconds=10),
+    )
+    assert reopened.reserve() is None
+    assert reopened.reserve() is None
+    reopened.close()
+
+
+@pytest.mark.parametrize("operation", ["ack", "reject", "release", "retry"])
+def test_database_queue_fences_settlement_at_exact_expiry_before_takeover(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / f"queue-expiry-{operation}.sqlite3"),
+        clock=clock,
+        reservation_lease=timedelta(seconds=5),
+    )
+    driver.dispatch(_job(f"job-expiry-{operation}", max_attempts=2))
+    reservation = driver.reserve()
+    assert reservation is not None
+
+    clock.advance(timedelta(seconds=5))
+    with pytest.raises(QueueReservationLost):
+        getattr(driver, operation)(reservation)
+
+    replacement = driver.reserve()
+    assert replacement is not None
+    assert replacement.attempt == 2
+    driver.ack(replacement)
+    driver.close()
+
+
+def test_database_queue_recovers_active_legacy_reservation_at_implicit_expiry(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDriver(tmp_path / "queue-legacy-active.sqlite3")
+    job = _job("job-legacy-active", max_attempts=2)
+    encoded = JsonEnvelopeCodec().encode(job.envelope).decode("utf-8")
+    timestamp = _NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    with database.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement(
+                """CREATE TABLE af_queue_jobs (
+                    message_id VARCHAR(200) PRIMARY KEY,
+                    message_type VARCHAR(128) NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    occurred_at VARCHAR(32) NOT NULL,
+                    lane VARCHAR(128) NOT NULL,
+                    available_at VARCHAR(32) NOT NULL,
+                    envelope_text TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    reservation_generation INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL,
+                    backoff_seconds REAL NULL,
+                    reserved_at VARCHAR(32) NULL,
+                    dead_lettered_at VARCHAR(32) NULL
+                )"""
+            )
+        )
+        transaction.execute(
+            DatabaseStatement(
+                """INSERT INTO af_queue_jobs (
+                    message_id, message_type, schema_version, occurred_at, lane,
+                    available_at, envelope_text, attempt_count, reservation_generation,
+                    max_attempts, backoff_seconds, reserved_at, dead_lettered_at
+                ) VALUES (
+                    :message_id, 'jobs.example', 1, :occurred_at, 'default',
+                    :available_at, :envelope_text, 0, 1, 2, NULL, :reserved_at, NULL
+                )""",
+                {
+                    "message_id": "job-legacy-active",
+                    "occurred_at": timestamp,
+                    "available_at": timestamp,
+                    "envelope_text": encoded,
+                    "reserved_at": timestamp,
+                },
+            )
+        )
+
+    clock = FakeClock(_NOW + timedelta(seconds=4))
+    driver = DatabaseQueueDriver(
+        database,
+        clock=clock,
+        reservation_lease=timedelta(seconds=5),
+    )
+    assert driver.reserve() is None
+    clock.advance(timedelta(seconds=1))
+    replacement = driver.reserve()
+    assert replacement is not None
+    assert replacement.attempt == 2
+    assert replacement.fencing_token == 2
+    driver.ack(replacement)
+    driver.close()
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_database_queue_serializes_concurrent_sqlite_claims(
+    tmp_path: Path,
+    expired: bool,
+) -> None:
+    database = tmp_path / f"queue-concurrent-{expired}.sqlite3"
+    clock = FakeClock(_NOW)
+    setup = DatabaseQueueDriver(
+        SQLiteDriver(database),
+        clock=clock,
+        reservation_lease=timedelta(seconds=5),
+    )
+    setup.dispatch(_job(f"job-concurrent-{str(expired).lower()}", max_attempts=3))
+    if expired:
+        assert setup.reserve() is not None
+        clock.advance(timedelta(seconds=5))
+    setup.close()
+
+    drivers = [
+        DatabaseQueueDriver(
+            SQLiteDriver(database),
+            clock=clock,
+            reservation_lease=timedelta(seconds=5),
+        )
+        for _ in range(2)
+    ]
+    start = Barrier(3)
+    lock = Lock()
+    reservations: list[object] = []
+    errors: list[BaseException] = []
+
+    def claim(driver: DatabaseQueueDriver) -> None:
+        start.wait()
+        try:
+            result = driver.reserve()
+            if result is not None:
+                with lock:
+                    reservations.append(result)
+        except BaseException as error:
+            with lock:
+                errors.append(error)
+
+    threads = [Thread(target=claim, args=(driver,)) for driver in drivers]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert errors == []
+    assert len(reservations) == 1
+    for driver in drivers:
+        driver.close()
+
+
+def test_database_queue_rejects_invalid_reservation_lease(tmp_path: Path) -> None:
+    for lease in (timedelta(0), timedelta(seconds=-1), timedelta(days=2)):
+        with pytest.raises(ValueError, match="reservation lease"):
+            DatabaseQueueDriver(
+                SQLiteDriver(tmp_path / f"invalid-{lease.total_seconds()}.sqlite3"),
+                clock=FakeClock(_NOW),
+                reservation_lease=lease,
+            )
+
+
 def test_database_queue_registration_binds_runtime_identity_and_evidence(tmp_path: Path) -> None:
     observed_at = datetime(2026, 8, 1, 16, tzinfo=UTC)
     database = tmp_path / "queue-registration.sqlite3"
@@ -163,6 +412,11 @@ def test_database_queue_registration_rejects_invalid_inputs_and_configuration() 
         database_queue_registration(
             database_factory=lambda: SQLiteDriver(":memory:"),
             clock="not callable",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="reservation lease"):
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(":memory:"),
+            reservation_lease=timedelta(0),
         )
 
     manager = QueueManager(
