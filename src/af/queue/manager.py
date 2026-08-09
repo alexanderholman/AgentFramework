@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
+import secrets
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
@@ -17,7 +20,12 @@ from af.framework.managers import (
 )
 from af.framework.unit_of_work import UnitOfWork
 from af.observability.signals import TelemetryPublisher
-from af.queue.contracts import QueueDispatchReceipt, QueueJob, QueueReservation
+from af.queue.contracts import (
+    QueueDispatchReceipt,
+    QueueJob,
+    QueueReservation,
+    QueueReservationLost,
+)
 
 __all__ = ("QueueDriver", "QueueFeature", "QueueManager", "bind_queue_manager")
 
@@ -119,6 +127,7 @@ class QueueManager(Manager[QueueDriver]):
             clock=clock,
             telemetry=telemetry,
         )
+        self._reservation_route_secret = secrets.token_bytes(32)
 
     def install(self, registration: DriverRegistration[QueueDriver]) -> None:
         """Install one inert queue registration."""
@@ -165,17 +174,36 @@ class QueueManager(Manager[QueueDriver]):
         lane: str | None = None,
         name: str | None = None,
     ) -> QueueReservation | None:
-        return self.connection(name, requires=(QueueFeature.RESERVATION,)).reserve(lane=lane)
+        connection_name = self._requested_name(name)
+        reservation = self.connection(
+            connection_name,
+            requires=(QueueFeature.RESERVATION,),
+        ).reserve(lane=lane)
+        if reservation is None:
+            return None
+        if reservation.reservation_id is None:
+            return reservation
+        return replace(
+            reservation,
+            connection_name=connection_name,
+            connection_binding=self._route_binding(
+                connection_name,
+                reservation.reservation_id,
+            ),
+        )
 
     def ack(self, reservation: QueueReservation, *, name: str | None = None) -> None:
-        self.connection(name, requires=(QueueFeature.RESERVATION,)).ack(reservation)
+        resolved = self._settlement_connection(reservation, name=name, stage="queue.ack")
+        self.connection(resolved, requires=(QueueFeature.RESERVATION,)).ack(reservation)
 
     def reject(self, reservation: QueueReservation, *, name: str | None = None) -> None:
-        self.connection(name, requires=(QueueFeature.RESERVATION,)).reject(reservation)
+        resolved = self._settlement_connection(reservation, name=name, stage="queue.reject")
+        self.connection(resolved, requires=(QueueFeature.RESERVATION,)).reject(reservation)
 
     def release(self, reservation: QueueReservation, *, name: str | None = None) -> None:
         """Release an interrupted reservation without consuming an attempt."""
-        self.connection(name, requires=(QueueFeature.RESERVATION,)).release(reservation)
+        resolved = self._settlement_connection(reservation, name=name, stage="queue.release")
+        self.connection(resolved, requires=(QueueFeature.RESERVATION,)).release(reservation)
 
     def retry(
         self,
@@ -184,10 +212,44 @@ class QueueManager(Manager[QueueDriver]):
         available_at: datetime | None = None,
         name: str | None = None,
     ) -> None:
-        self.connection(name, requires=(QueueFeature.RESERVATION, QueueFeature.RETRY)).retry(
+        resolved = self._settlement_connection(reservation, name=name, stage="queue.retry")
+        self.connection(
+            resolved,
+            requires=(QueueFeature.RESERVATION, QueueFeature.RETRY),
+        ).retry(
             reservation,
             available_at=available_at,
         )
+
+    def _settlement_connection(
+        self,
+        reservation: QueueReservation,
+        *,
+        name: str | None,
+        stage: str,
+    ) -> str | None:
+        if not isinstance(reservation, QueueReservation):
+            raise TypeError("queue settlement requires a QueueReservation")
+        bound = reservation.connection_name
+        if bound is None:
+            if reservation.reservation_id is not None:
+                raise QueueReservationLost(stage=stage)
+            return name
+        if reservation.connection_binding is None or reservation.reservation_id is None:
+            raise QueueReservationLost(stage=stage)
+        expected = self._route_binding(bound, reservation.reservation_id)
+        if not hmac.compare_digest(reservation.connection_binding, expected):
+            raise QueueReservationLost(stage=stage)
+        if name is None:
+            return bound
+        requested = self._requested_name(name)
+        if requested != bound:
+            raise QueueReservationLost(stage=stage)
+        return bound
+
+    def _route_binding(self, connection_name: str, reservation_id: str) -> str:
+        payload = f"{connection_name}\0{reservation_id}".encode()
+        return hmac.digest(self._reservation_route_secret, payload, "sha256").hex()
 
 
 def bind_queue_manager(

@@ -21,6 +21,7 @@ __all__ = (
 )
 
 _IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
+_OWNERSHIP_TOKEN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class QueueOperationError(PlatformError):
@@ -148,6 +149,10 @@ class QueueReservation:
     reserved_at: datetime
     fencing_token: int | None = None
     expires_at: datetime | None = None
+    owner_id: str | None = None
+    reservation_id: str | None = None
+    connection_name: str | None = None
+    connection_binding: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.job, QueueJob):
@@ -164,10 +169,34 @@ class QueueReservation:
             if expires_at <= self.reserved_at:
                 raise ValueError("queue reservation expiry must follow reservation time")
             object.__setattr__(self, "expires_at", expires_at)
+        if (self.owner_id is None) != (self.reservation_id is None):
+            raise ValueError("queue reservation ownership identity must be complete")
+        for value, field in (
+            (self.owner_id, "owner"),
+            (self.reservation_id, "acquisition"),
+        ):
+            if value is not None and (
+                type(value) is not str or _OWNERSHIP_TOKEN.fullmatch(value) is None
+            ):
+                raise ValueError(f"queue reservation {field} identity is invalid")
+        if self.connection_name is not None:
+            object.__setattr__(
+                self,
+                "connection_name",
+                _identifier(self.connection_name, "connection name"),
+            )
+        if (self.connection_name is None) != (self.connection_binding is None):
+            raise ValueError("queue reservation connection binding must be complete")
+        if self.connection_binding is not None and (
+            type(self.connection_binding) is not str
+            or _OWNERSHIP_TOKEN.fullmatch(self.connection_binding) is None
+        ):
+            raise ValueError("queue reservation connection binding is invalid")
 
     def __repr__(self) -> str:
         return (
             f"QueueReservation(message_id={self.job.envelope.metadata.message_id!r}, "
             f"attempt={self.attempt!r}, reserved_at={self.reserved_at.isoformat()!r}, "
-            f"fencing_token={self.fencing_token!r}, expires_at={self.expires_at!r})"
+            f"fencing_token={self.fencing_token!r}, expires_at={self.expires_at!r}, "
+            "ownership='[REDACTED]', connection_binding='[REDACTED]')"
         )

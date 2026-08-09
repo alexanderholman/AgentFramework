@@ -336,6 +336,10 @@ def test_queue_contracts_validate_and_redact_payload_content() -> None:
         attempt=2,
         reserved_at=_NOW,
         expires_at=_NOW + timedelta(minutes=5),
+        owner_id="a" * 64,
+        reservation_id="b" * 64,
+        connection_name="primary",
+        connection_binding="c" * 64,
     )
 
     assert job.delay == timedelta(seconds=1)
@@ -350,6 +354,9 @@ def test_queue_contracts_validate_and_redact_payload_content() -> None:
     assert receipt.disposition is QueueDispatchDisposition.ENQUEUED
     assert reservation.attempt == 2
     assert reservation.expires_at == _NOW + timedelta(minutes=5)
+    assert reservation.connection_name == "primary"
+    assert "a" * 16 not in repr(reservation)
+    assert "b" * 16 not in repr(reservation)
     assert "job-contracts" in repr(reservation)
 
 
@@ -420,6 +427,21 @@ def test_queue_contracts_reject_invalid_envelopes_and_timestamps() -> None:
             attempt=1,
             reserved_at=_NOW,
             expires_at=datetime(2026, 8, 1, 16),
+        )
+    with pytest.raises(ValueError, match="ownership"):
+        QueueReservation(
+            job=_job("job-partial-owner"),
+            attempt=1,
+            reserved_at=_NOW,
+            owner_id="a" * 64,
+        )
+    with pytest.raises(ValueError, match="owner"):
+        QueueReservation(
+            job=_job("job-invalid-owner"),
+            attempt=1,
+            reserved_at=_NOW,
+            owner_id="A" * 64,
+            reservation_id="b" * 64,
         )
 
 
