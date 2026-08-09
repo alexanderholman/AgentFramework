@@ -24,7 +24,13 @@ from af.queue.manager import QueueDriver, QueueFeature
 
 __all__ = ("database_queue_registration",)
 
-_CAPABILITIES = CapabilitySet((QueueFeature.RESERVATION.value, QueueFeature.RETRY.value))
+_CAPABILITIES = CapabilitySet(
+    (
+        QueueFeature.RESERVATION.value,
+        QueueFeature.RESERVATION_RENEWAL.value,
+        QueueFeature.RETRY.value,
+    )
+)
 _ARTIFACT_DIGEST = hashlib.sha256(Path(__file__).with_name("database.py").read_bytes()).hexdigest()
 _DEPENDENCY_DIGEST = hashlib.sha256(
     f"{platform.python_implementation()}:{platform.python_version()}".encode()
@@ -72,7 +78,7 @@ def database_queue_registration(
     evidence_clock = clock if clock is not None else (lambda: datetime.now(UTC))
     manifest = DriverManifest(
         driver_name="database",
-        version="1.2.0",
+        version="1.3.0",
         artifact_digest=_ARTIFACT_DIGEST,
         dependency_graph_digest=_DEPENDENCY_DIGEST,
         capabilities=_CAPABILITIES,
@@ -104,7 +110,13 @@ def database_queue_registration(
         if not isinstance(observed_at, datetime) or observed_at.utcoffset() is None:
             raise ValueError("database queue evidence clock must be timezone-aware")
         observed_at = observed_at.astimezone(UTC)
-        if driver.features != frozenset({QueueFeature.RESERVATION, QueueFeature.RETRY}):
+        if driver.features != frozenset(
+            {
+                QueueFeature.RESERVATION,
+                QueueFeature.RESERVATION_RENEWAL,
+                QueueFeature.RETRY,
+            }
+        ):
             raise ValueError("database queue runtime capability verification failed")
         return CapabilityEvidence(
             binding=expected,

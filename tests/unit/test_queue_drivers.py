@@ -19,7 +19,7 @@ from af.framework.managers import (
     DriverResolutionError,
     HealthStatus,
 )
-from af.framework.relational import DatabaseStatement
+from af.framework.relational import DatabaseStatement, DatabaseTransaction
 from af.infrastructure.sqlite import SQLiteDriver
 from af.messaging import EnvelopeKind, JsonEnvelopeCodec, MessageEnvelope, MessageMetadata
 from af.queue import (
@@ -28,6 +28,7 @@ from af.queue import (
     QueueFeature,
     QueueJob,
     QueueManager,
+    QueueReservation,
     QueueReservationLost,
     SyncQueueDriver,
     UnsupportedQueueFeature,
@@ -164,7 +165,170 @@ def test_database_queue_recovers_expired_reservation_with_new_fence(tmp_path: Pa
     second.close()
 
 
-@pytest.mark.parametrize("operation", ["ack", "reject", "release", "retry"])
+def test_database_queue_renews_owned_reservation_with_new_immutable_handle(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-renew.sqlite3"),
+        clock=clock,
+        reservation_lease=timedelta(seconds=10),
+    )
+    driver.dispatch(_job("job-renew", max_attempts=2))
+    original = driver.reserve()
+    assert original is not None
+    clock.advance(timedelta(seconds=6))
+
+    renewed = driver.renew(original)
+
+    assert renewed is not original
+    assert renewed.expires_at == _NOW + timedelta(seconds=16)
+    assert renewed.reservation_id != original.reservation_id
+    assert renewed.job == original.job
+    assert renewed.attempt == original.attempt
+    assert renewed.reserved_at == original.reserved_at
+    assert renewed.fencing_token == original.fencing_token
+    assert renewed.owner_id == original.owner_id
+    with pytest.raises(QueueReservationLost):
+        driver.ack(original)
+    driver.ack(renewed)
+    driver.close()
+
+
+def test_database_queue_rejects_frozen_clock_renewal_without_mutation(tmp_path: Path) -> None:
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-renew-frozen.sqlite3"),
+        clock=FakeClock(_NOW),
+        reservation_lease=timedelta(seconds=10),
+    )
+    driver.dispatch(_job("job-renew-frozen"))
+    reservation = driver.reserve()
+    assert reservation is not None
+
+    with pytest.raises(Exception) as failed:
+        driver.renew(reservation)
+    assert getattr(failed.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+
+    driver.ack(reservation)
+    driver.close()
+
+
+def test_database_queue_cannot_renew_at_exact_expiry(tmp_path: Path) -> None:
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-renew-expired.sqlite3"),
+        clock=clock,
+        reservation_lease=timedelta(seconds=5),
+    )
+    driver.dispatch(_job("job-renew-expired", max_attempts=2))
+    reservation = driver.reserve()
+    assert reservation is not None
+    clock.advance(timedelta(seconds=5))
+
+    with pytest.raises(QueueReservationLost):
+        driver.renew(reservation)
+
+    replacement = driver.reserve()
+    assert replacement is not None
+    assert replacement.attempt == 2
+    driver.ack(replacement)
+    driver.close()
+
+
+def test_queue_manager_renews_on_authenticated_reservation_route(tmp_path: Path) -> None:
+    database = tmp_path / "queue-renew-manager.sqlite3"
+    clock = FakeClock(_NOW)
+    manager = QueueManager(
+        connections={
+            "primary": {"driver": "database"},
+            "secondary": {"driver": "database"},
+        },
+        default="secondary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(database),
+            clock=clock,
+            reservation_lease=timedelta(seconds=10),
+        )
+    )
+    manager.dispatch(_job("job-renew-manager"), name="primary")
+    reservation = manager.reserve(name="primary")
+    assert reservation is not None
+    clock.advance(timedelta(seconds=6))
+
+    renew = DatabaseQueueDriver.renew
+
+    def renew_without_manager_provenance(
+        driver: DatabaseQueueDriver,
+        owned: QueueReservation,
+    ) -> QueueReservation:
+        return replace(
+            renew(driver, owned),
+            connection_name=None,
+            connection_binding=None,
+        )
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(DatabaseQueueDriver, "renew", renew_without_manager_provenance)
+
+        with pytest.raises(QueueReservationLost):
+            manager.renew(reservation, name="secondary")
+        renewed = manager.renew(reservation)
+
+    assert renewed.connection_name == "primary"
+    assert renewed.connection_binding != reservation.connection_binding
+    with pytest.raises(QueueReservationLost):
+        manager.ack(reservation)
+    manager.ack(renewed)
+    manager.close()
+
+
+def test_database_queue_samples_renewal_time_after_transaction_acquisition(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(_NOW)
+
+    class ExpiringTransactionSQLiteDriver(SQLiteDriver):
+        expire_on_next_transaction = False
+
+        @contextmanager
+        def transaction(
+            self,
+            *,
+            read_only: bool = False,
+        ) -> Iterator[DatabaseTransaction]:  # type: ignore[override]
+            with super().transaction(read_only=read_only) as transaction:
+                if self.expire_on_next_transaction:
+                    self.expire_on_next_transaction = False
+                    clock.advance(timedelta(seconds=4))
+                yield transaction
+
+    database = ExpiringTransactionSQLiteDriver(tmp_path / "queue-renew-linearization.sqlite3")
+    driver = DatabaseQueueDriver(
+        database,
+        clock=clock,
+        reservation_lease=timedelta(seconds=10),
+    )
+    driver.dispatch(_job("job-renew-linearization", max_attempts=2))
+    reservation = driver.reserve()
+    assert reservation is not None
+    clock.advance(timedelta(seconds=6))
+    database.expire_on_next_transaction = True
+
+    with pytest.raises(QueueReservationLost):
+        driver.renew(reservation)
+
+    replacement = driver.reserve()
+    assert replacement is not None
+    driver.ack(replacement)
+    driver.close()
+
+
+@pytest.mark.parametrize("operation", ["ack", "reject", "release", "renew", "retry"])
 def test_database_queue_foreign_driver_cannot_settle_owned_reservation(
     tmp_path: Path,
     operation: str,
@@ -395,7 +559,7 @@ def test_database_queue_token_failure_does_not_claim_job(tmp_path: Path) -> None
     driver.close()
 
 
-@pytest.mark.parametrize("operation", ["ack", "reject", "release", "retry"])
+@pytest.mark.parametrize("operation", ["ack", "reject", "release", "renew", "retry"])
 def test_database_queue_fences_every_stale_settlement_after_lease_takeover(
     tmp_path: Path,
     operation: str,
@@ -426,6 +590,76 @@ def test_database_queue_fences_every_stale_settlement_after_lease_takeover(
     second.ack(replacement)
     first.close()
     second.close()
+
+
+def test_database_queue_only_one_renewal_wins_for_the_same_snapshot(tmp_path: Path) -> None:
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-renew-cas.sqlite3"),
+        clock=clock,
+        reservation_lease=timedelta(seconds=10),
+    )
+    driver.dispatch(_job("job-renew-cas"))
+    original = driver.reserve()
+    assert original is not None
+    clock.advance(timedelta(seconds=6))
+
+    renewed = driver.renew(original)
+    with pytest.raises(QueueReservationLost):
+        driver.renew(original)
+
+    driver.ack(renewed)
+    driver.close()
+
+
+def test_database_queue_rejects_incomplete_renewal_handles_without_mutation(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-renew-incomplete.sqlite3"),
+        clock=clock,
+        reservation_lease=timedelta(seconds=10),
+    )
+    driver.dispatch(_job("job-renew-incomplete"))
+    reservation = driver.reserve()
+    assert reservation is not None
+    clock.advance(timedelta(seconds=6))
+
+    with pytest.raises(TypeError, match="QueueReservation"):
+        driver.renew(object())  # type: ignore[arg-type]
+    with pytest.raises(Exception) as missing_fence:
+        driver.renew(replace(reservation, fencing_token=None))
+    assert getattr(missing_fence.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+    with pytest.raises(QueueReservationLost):
+        driver.renew(replace(reservation, expires_at=None))
+
+    driver.ack(reservation)
+    driver.close()
+
+
+def test_database_queue_rejects_reused_renewal_capability_without_mutation(
+    tmp_path: Path,
+) -> None:
+    token = _token_factory("a" * 64, "b" * 64, "b" * 64)
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-renew-reused-token.sqlite3"),
+        clock=clock,
+        reservation_lease=timedelta(seconds=10),
+        token_factory=token,
+    )
+    driver.dispatch(_job("job-renew-reused-token"))
+    reservation = driver.reserve()
+    assert reservation is not None
+    clock.advance(timedelta(seconds=6))
+
+    with pytest.raises(Exception) as failed:
+        driver.renew(reservation)
+    assert getattr(failed.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+
+    driver.ack(reservation)
+    driver.close()
 
 
 def test_database_queue_dead_letters_expired_final_attempt(tmp_path: Path) -> None:
@@ -634,6 +868,7 @@ def test_database_queue_registration_binds_runtime_identity_and_evidence(tmp_pat
         assert evidence.capabilities == CapabilitySet(
             (
                 QueueFeature.RESERVATION.value,
+                QueueFeature.RESERVATION_RENEWAL.value,
                 QueueFeature.RETRY.value,
             )
         )
