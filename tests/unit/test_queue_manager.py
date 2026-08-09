@@ -473,6 +473,9 @@ def test_sync_driver_reports_supported_and_unsupported_features() -> None:
         driver.reject(reservation)
     with pytest.raises(UnsupportedQueueFeature):
         driver.retry(reservation, available_at=_NOW + timedelta(seconds=1))
+    with pytest.raises(UnsupportedQueueFeature) as renewal:
+        driver.renew(reservation)
+    assert renewal.value.feature == QueueFeature.RESERVATION_RENEWAL.value
 
 
 def test_sync_driver_rejects_invalid_inputs_and_surfaces_consumer_failures() -> None:

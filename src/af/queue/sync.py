@@ -138,6 +138,10 @@ class SyncQueueDriver:
         del reservation
         raise UnsupportedQueueFeature(QueueFeature.RESERVATION.value)
 
+    def renew(self, reservation: QueueReservation, /) -> QueueReservation:
+        del reservation
+        raise UnsupportedQueueFeature(QueueFeature.RESERVATION_RENEWAL.value)
+
     def retry(
         self,
         reservation: QueueReservation,
