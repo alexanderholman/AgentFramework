@@ -55,6 +55,12 @@ publication still requires a durable driver and worker boundary.
 - Fails closed for unsupported delay, priority, timeout, uniqueness, FIFO-group, and transactional
   dispatch requests.
 
+Worker-managed renewal runs independently while a synchronous handler is active, serializes renewal
+with terminal settlement, and always settles with the latest immutable handle. Renewal loss or an
+ambiguous renewal failure suppresses stale settlement but cannot stop handler side effects already in
+progress. Queue driver operations, including renewal, remain synchronous trust boundaries and must be
+operationally bounded; shutdown timeouts do not interrupt a blocked driver call.
+
 ## Capability boundaries
 
 `QueueJob` can express requested FIFO grouping and transactional dispatch requirements even when the
