@@ -72,7 +72,7 @@ def database_queue_registration(
     evidence_clock = clock if clock is not None else (lambda: datetime.now(UTC))
     manifest = DriverManifest(
         driver_name="database",
-        version="1.1.0",
+        version="1.2.0",
         artifact_digest=_ARTIFACT_DIGEST,
         dependency_graph_digest=_DEPENDENCY_DIGEST,
         capabilities=_CAPABILITIES,
