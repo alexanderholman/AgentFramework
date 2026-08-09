@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from af.framework.errors import PlatformReason
@@ -24,7 +25,9 @@ from af.queue.manager import QueueFeature
 
 __all__ = ("DatabaseQueueDriver",)
 
-_FEATURES = frozenset({QueueFeature.RESERVATION, QueueFeature.RETRY})
+_FEATURES = frozenset(
+    {QueueFeature.RESERVATION, QueueFeature.RESERVATION_RENEWAL, QueueFeature.RETRY}
+)
 _TABLE = "af_queue_jobs"
 _IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
 _MAX_ENVELOPE_BYTES = 1_048_576
@@ -404,6 +407,92 @@ class DatabaseQueueDriver:
             ),
             available_at=_aware_utc(self._clock(), "release time"),
         )
+
+    def renew(self, reservation: QueueReservation, /) -> QueueReservation:
+        """Extend one live owned lease and rotate its acquisition capability."""
+
+        self._assert_open()
+        if not isinstance(reservation, QueueReservation):
+            raise TypeError("database queue renew requires a QueueReservation")
+        if reservation.fencing_token is None:
+            raise QueueOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="queue.renew",
+            )
+        if reservation.expires_at is None:
+            raise QueueReservationLost(stage="queue.renew")
+        if (
+            reservation.owner_id is None
+            or reservation.reservation_id is None
+            or not secrets.compare_digest(reservation.owner_id, self._reservation_owner_id)
+        ):
+            raise QueueReservationLost(stage="queue.renew")
+
+        try:
+            with self._database.transaction() as transaction:
+                current = _aware_utc(self._clock(), "renewal time")
+                renewed_expiry = current + self._reservation_lease
+                if renewed_expiry <= reservation.expires_at:
+                    raise QueueOperationError(
+                        reason=PlatformReason.INTEGRITY_FAILURE,
+                        stage="queue.renew",
+                    )
+                renewed_id = self._new_token(stage="queue.renew")
+                if secrets.compare_digest(renewed_id, reservation.reservation_id):
+                    raise QueueOperationError(
+                        reason=PlatformReason.INTEGRITY_FAILURE,
+                        stage="queue.renew",
+                    )
+                parameters: dict[str, object] = {
+                    "message_id": reservation.job.envelope.metadata.message_id,
+                    "previous_attempt": reservation.attempt - 1,
+                    "fencing_token": reservation.fencing_token,
+                    "reserved_at": _timestamp(reservation.reserved_at),
+                    "reservation_expires_at": _timestamp(reservation.expires_at),
+                    "renewed_expiry": _timestamp(renewed_expiry),
+                    "now": _timestamp(current),
+                    "reservation_owner_id": self._reservation_owner_id,
+                    "reservation_id": reservation.reservation_id,
+                    "renewed_id": renewed_id,
+                }
+                changed = transaction.execute(
+                    DatabaseStatement(
+                        f"""UPDATE {_TABLE}
+                        SET reservation_expires_at = :renewed_expiry,
+                            reservation_id = :renewed_id
+                        WHERE message_id = :message_id
+                          AND attempt_count = :previous_attempt
+                          AND reservation_generation = :fencing_token
+                          AND reservation_owner_id = :reservation_owner_id
+                          AND reservation_id = :reservation_id
+                          AND reserved_at = :reserved_at
+                          AND reservation_expires_at = :reservation_expires_at
+                          AND reservation_expires_at > :now
+                          AND dead_lettered_at IS NULL""",
+                        parameters,
+                    )
+                )
+                if changed == 0:
+                    raise QueueReservationLost(stage="queue.renew")
+                if changed != 1:
+                    raise QueueOperationError(
+                        reason=PlatformReason.INTEGRITY_FAILURE,
+                        stage="queue.renew",
+                    )
+                renewed = replace(
+                    reservation,
+                    expires_at=renewed_expiry,
+                    reservation_id=renewed_id,
+                )
+        except QueueOperationError:
+            raise
+        except DatabaseOperationError as error:
+            raise QueueOperationError(
+                reason=error.reason,
+                stage="queue.renew",
+                protected_cause=error,
+            ) from None
+        return renewed
 
     def retry(
         self,

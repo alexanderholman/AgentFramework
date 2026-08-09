@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from af.framework.container import ProviderRegistrar, Resolver, Scope
 from af.framework.managers import (
@@ -35,6 +35,7 @@ class QueueFeature(StrEnum):
 
     INLINE_EXECUTION = "inline-execution"
     RESERVATION = "reservation"
+    RESERVATION_RENEWAL = "reservation-renewal"
     DELAY = "delay"
     PRIORITY = "priority"
     RETRY = "retry"
@@ -66,6 +67,11 @@ class QueueDriver(Protocol):
     ) -> None: ...
 
     def close(self) -> None: ...
+
+
+@runtime_checkable
+class _QueueRenewalDriver(Protocol):
+    def renew(self, reservation: QueueReservation, /) -> QueueReservation: ...
 
 
 def _capabilities(features: CapabilitySet | Iterable[str | QueueFeature]) -> CapabilitySet:
@@ -205,6 +211,33 @@ class QueueManager(Manager[QueueDriver]):
         resolved = self._settlement_connection(reservation, name=name, stage="queue.release")
         self.connection(resolved, requires=(QueueFeature.RESERVATION,)).release(reservation)
 
+    def renew(
+        self,
+        reservation: QueueReservation,
+        *,
+        name: str | None = None,
+    ) -> QueueReservation:
+        """Extend an owned lease and return its replacement settlement handle."""
+
+        resolved = self._settlement_connection(reservation, name=name, stage="queue.renew")
+        driver = self.connection(
+            resolved,
+            requires=(QueueFeature.RESERVATION, QueueFeature.RESERVATION_RENEWAL),
+        )
+        if not isinstance(driver, _QueueRenewalDriver):
+            raise QueueReservationLost(stage="queue.renew")
+        renewed = driver.renew(reservation)
+        if not self._valid_renewal(reservation, renewed):
+            raise QueueReservationLost(stage="queue.renew")
+        if resolved is None:
+            return renewed
+        assert renewed.reservation_id is not None
+        return replace(
+            renewed,
+            connection_name=resolved,
+            connection_binding=self._route_binding(resolved, renewed.reservation_id),
+        )
+
     def retry(
         self,
         reservation: QueueReservation,
@@ -250,6 +283,23 @@ class QueueManager(Manager[QueueDriver]):
     def _route_binding(self, connection_name: str, reservation_id: str) -> str:
         payload = f"{connection_name}\0{reservation_id}".encode()
         return hmac.digest(self._reservation_route_secret, payload, "sha256").hex()
+
+    @staticmethod
+    def _valid_renewal(original: QueueReservation, renewed: object) -> bool:
+        return (
+            isinstance(renewed, QueueReservation)
+            and original.expires_at is not None
+            and renewed.expires_at is not None
+            and renewed.expires_at > original.expires_at
+            and original.reservation_id is not None
+            and renewed.reservation_id is not None
+            and renewed.reservation_id != original.reservation_id
+            and renewed.job == original.job
+            and renewed.attempt == original.attempt
+            and renewed.reserved_at == original.reserved_at
+            and renewed.fencing_token == original.fencing_token
+            and renewed.owner_id == original.owner_id
+        )
 
 
 def bind_queue_manager(

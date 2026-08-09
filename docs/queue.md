@@ -37,8 +37,12 @@ publication still requires a durable driver and worker boundary.
 - Binds each claim to both an opaque driver-process owner and a one-acquisition capability. Wrong
   named connections, reconstructed drivers, fork-inherited drivers, and delete/redispatch ABA handles
   cannot settle the current row even when its public timestamps and generation happen to match.
-- Does not yet renew long-running reservations. A handler that runs beyond the configured lease can
-  overlap a replacement delivery and cannot settle the expired reservation.
+- Supports explicit renewal of a live reservation. Renewal extends from the trusted current clock,
+  rotates the one-acquisition capability, and returns a new immutable settlement handle; the old
+  handle is immediately stale. A clock reading that would not strictly advance the stored deadline,
+  exact-expiry calls, stale handles, wrong owners, and wrong named connections fail closed without
+  extending the lease. Workers do not yet renew automatically, so callers must renew before expiry
+  when handling long-running work.
 - Treats the configured timezone-aware clock as an operational trust boundary. Deployments must keep
   worker clocks synchronized and choose a lease longer than their bounded clock skew; a fast clock can
   cause early redelivery, but the newer generation still fences stale queue settlement. Existing
