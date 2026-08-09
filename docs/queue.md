@@ -34,6 +34,9 @@ publication still requires a durable driver and worker boundary.
 - Rejects acknowledgement, retry, rejection, or release once the reservation lease expires. Queue
   settlement fencing does not stop a stale handler's external side effects; handlers remain
   responsible for idempotent or transactionally fenced business operations.
+- Binds each claim to both an opaque driver-process owner and a one-acquisition capability. Wrong
+  named connections, reconstructed drivers, fork-inherited drivers, and delete/redispatch ABA handles
+  cannot settle the current row even when its public timestamps and generation happen to match.
 - Does not yet renew long-running reservations. A handler that runs beyond the configured lease can
   overlap a replacement delivery and cannot settle the expired reservation.
 - Treats the configured timezone-aware clock as an operational trust boundary. Deployments must keep
@@ -41,6 +44,10 @@ publication still requires a durable driver and worker boundary.
   cause early redelivery, but the newer generation still fences stale queue settlement. Existing
   reserved rows from older schemas use `reserved_at + reservation lease` as their finite compatibility
   deadline.
+- Requires a drain-first upgrade from binaries that predate owner-bound settlement. Old workers ignore
+  the additive ownership columns and must not overlap new workers; rollback likewise requires stopping
+  workers and waiting at least the maximum reservation lease. Ownership tokens are opaque database
+  state and are redacted from reservation representations, errors, and telemetry.
 - Fails closed for unsupported delay, priority, timeout, uniqueness, FIFO-group, and transactional
   dispatch requests.
 

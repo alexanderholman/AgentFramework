@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier, Lock, Thread
@@ -32,6 +33,7 @@ from af.queue import (
     UnsupportedQueueFeature,
     database_queue_registration,
 )
+from af.queue import database as database_module
 from af.testing import ConformanceEvidence, FakeClock, QueueDriverConformanceSuite
 
 _NOW = datetime(2026, 8, 1, 15, tzinfo=UTC)
@@ -52,6 +54,11 @@ def _job(message_id: str, **overrides: object) -> QueueJob:
     }
     fields.update(overrides)
     return QueueJob(**fields)
+
+
+def _token_factory(*tokens: str):  # type: ignore[no-untyped-def]
+    remaining = iter(tokens)
+    return lambda: next(remaining)
 
 
 def test_sync_driver_rejects_unsupported_dispatch_features_directly() -> None:
@@ -155,6 +162,237 @@ def test_database_queue_recovers_expired_reservation_with_new_fence(tmp_path: Pa
     second.ack(replacement)
     first.close()
     second.close()
+
+
+@pytest.mark.parametrize("operation", ["ack", "reject", "release", "retry"])
+def test_database_queue_foreign_driver_cannot_settle_owned_reservation(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    database = tmp_path / f"queue-owner-{operation}.sqlite3"
+    clock = FakeClock(_NOW)
+    owner = DatabaseQueueDriver(SQLiteDriver(database), clock=clock)
+    foreign = DatabaseQueueDriver(SQLiteDriver(database), clock=clock)
+    owner.dispatch(_job(f"job-owner-{operation}", max_attempts=2))
+    reservation = owner.reserve()
+    assert reservation is not None
+
+    with pytest.raises(QueueReservationLost) as lost:
+        getattr(foreign, operation)(reservation)
+
+    assert lost.value.stage == f"queue.{operation}"
+    owner.ack(reservation)
+    owner.close()
+    foreign.close()
+
+
+def test_database_queue_acquisition_identity_fences_delete_redispatch_aba(
+    tmp_path: Path,
+) -> None:
+    token = _token_factory("a" * 64, "b" * 64, "c" * 64)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-owner-aba.sqlite3"),
+        clock=FakeClock(_NOW),
+        token_factory=token,
+    )
+    job = _job("job-owner-aba")
+    driver.dispatch(job)
+    original = driver.reserve()
+    assert original is not None
+    driver.ack(original)
+    driver.dispatch(job)
+    replacement = driver.reserve()
+    assert replacement is not None
+
+    assert replacement.fencing_token == original.fencing_token == 1
+    assert replacement.reserved_at == original.reserved_at
+    assert replacement.owner_id == original.owner_id == "a" * 64
+    assert replacement.reservation_id != original.reservation_id
+    with pytest.raises(QueueReservationLost):
+        driver.ack(original)
+    driver.ack(replacement)
+    driver.close()
+
+
+def test_database_queue_identical_rows_are_bound_to_their_database_driver(tmp_path: Path) -> None:
+    clock = FakeClock(_NOW)
+    first = DatabaseQueueDriver(SQLiteDriver(tmp_path / "queue-owner-a.sqlite3"), clock=clock)
+    second = DatabaseQueueDriver(SQLiteDriver(tmp_path / "queue-owner-b.sqlite3"), clock=clock)
+    job = _job("job-owner-cross-database")
+    first.dispatch(job)
+    second.dispatch(job)
+    first_reservation = first.reserve()
+    second_reservation = second.reserve()
+    assert first_reservation is not None
+    assert second_reservation is not None
+    assert first_reservation.fencing_token == second_reservation.fencing_token
+    assert first_reservation.reserved_at == second_reservation.reserved_at
+
+    with pytest.raises(QueueReservationLost):
+        second.ack(first_reservation)
+
+    second.ack(second_reservation)
+    first.ack(first_reservation)
+    first.close()
+    second.close()
+
+
+def test_database_queue_rejects_forged_acquisition_identity(tmp_path: Path) -> None:
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-owner-forged.sqlite3"),
+        clock=FakeClock(_NOW),
+    )
+    driver.dispatch(_job("job-owner-forged"))
+    reservation = driver.reserve()
+    assert reservation is not None
+    forged = replace(reservation, reservation_id="f" * 64)
+
+    with pytest.raises(QueueReservationLost):
+        driver.ack(forged)
+
+    driver.ack(reservation)
+    driver.close()
+
+
+def test_database_queue_rejects_use_after_process_fork(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-owner-fork.sqlite3"),
+        clock=FakeClock(_NOW),
+    )
+    driver.dispatch(_job("job-owner-fork"))
+    reservation = driver.reserve()
+    assert reservation is not None
+    original_pid = database_module.os.getpid()
+    monkeypatch.setattr(database_module.os, "getpid", lambda: original_pid + 1)
+
+    with pytest.raises(Exception) as inherited:
+        driver.ack(reservation)
+    assert getattr(inherited.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+    assert getattr(inherited.value, "stage", None) == "queue.connection"
+
+    monkeypatch.setattr(database_module.os, "getpid", lambda: original_pid)
+    driver.ack(reservation)
+    driver.close()
+
+
+def test_queue_manager_binds_settlement_to_reserving_connection(tmp_path: Path) -> None:
+    database = tmp_path / "queue-owner-manager.sqlite3"
+    manager = QueueManager(
+        connections={
+            "primary": {"driver": "database"},
+            "secondary": {"driver": "database"},
+        },
+        default="secondary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=FakeClock(_NOW),
+    )
+    manager.install(
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(database),
+            clock=FakeClock(_NOW),
+        )
+    )
+    manager.dispatch(_job("job-owner-manager"), name="primary")
+    reservation = manager.reserve(name="primary")
+    assert reservation is not None
+    assert reservation.connection_name == "primary"
+
+    with pytest.raises(QueueReservationLost):
+        manager.ack(reservation, name="secondary")
+
+    manager.ack(reservation)
+    manager.close()
+
+
+def test_queue_manager_rejects_forged_route_binding_before_connection_resolution(
+    tmp_path: Path,
+) -> None:
+    manager = QueueManager(
+        connections={"primary": {"driver": "database"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=FakeClock(_NOW),
+    )
+    manager.install(
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(tmp_path / "queue-owner-route.sqlite3"),
+            clock=FakeClock(_NOW),
+        )
+    )
+    manager.dispatch(_job("job-owner-route"))
+    reservation = manager.reserve()
+    assert reservation is not None
+    forged = replace(
+        reservation,
+        connection_name="unconfigured",
+        connection_binding="f" * 64,
+    )
+
+    with pytest.raises(QueueReservationLost):
+        manager.ack(forged)
+
+    manager.ack(reservation)
+    manager.close()
+
+
+def test_queue_manager_rejects_removal_of_owned_route_provenance(tmp_path: Path) -> None:
+    manager = QueueManager(
+        connections={"primary": {"driver": "database"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=FakeClock(_NOW),
+    )
+    manager.install(
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(tmp_path / "queue-owner-downgrade.sqlite3"),
+            clock=FakeClock(_NOW),
+        )
+    )
+    manager.dispatch(_job("job-owner-downgrade"))
+    reservation = manager.reserve()
+    assert reservation is not None
+    downgraded = replace(reservation, connection_name=None, connection_binding=None)
+
+    with pytest.raises(QueueReservationLost):
+        manager.ack(downgraded)
+
+    manager.ack(reservation)
+    manager.close()
+
+
+def test_database_queue_token_failure_does_not_claim_job(tmp_path: Path) -> None:
+    calls = 0
+
+    def token() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("entropy unavailable")
+        return f"{calls:064x}"
+
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-owner-token-failure.sqlite3"),
+        clock=FakeClock(_NOW),
+        token_factory=token,
+    )
+    driver.dispatch(_job("job-owner-token-failure"))
+
+    with pytest.raises(Exception) as failed:
+        driver.reserve()
+    assert getattr(failed.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+
+    reservation = driver.reserve()
+    assert reservation is not None
+    assert reservation.fencing_token == 1
+    assert reservation.attempt == 1
+    driver.ack(reservation)
+    driver.close()
 
 
 @pytest.mark.parametrize("operation", ["ack", "reject", "release", "retry"])
@@ -298,6 +536,8 @@ def test_database_queue_recovers_active_legacy_reservation_at_implicit_expiry(
     assert replacement is not None
     assert replacement.attempt == 2
     assert replacement.fencing_token == 2
+    assert replacement.owner_id is not None
+    assert replacement.reservation_id is not None
     driver.ack(replacement)
     driver.close()
 
@@ -570,6 +810,8 @@ def test_database_queue_upgrades_legacy_table_without_losing_queued_work(
     assert reservation is not None
     assert reservation.job.envelope.metadata.message_id == "job-before-upgrade"
     assert reservation.fencing_token == 1
+    assert reservation.owner_id is not None
+    assert reservation.reservation_id is not None
     driver.ack(reservation)
     driver.close()
 

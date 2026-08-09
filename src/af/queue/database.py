@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -28,6 +30,8 @@ _IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
 _MAX_ENVELOPE_BYTES = 1_048_576
 _DEFAULT_RESERVATION_LEASE = timedelta(minutes=5)
 _MAX_RESERVATION_LEASE = timedelta(days=1)
+_MAX_RESERVATION_GENERATION = 2_147_483_647
+_OWNERSHIP_TOKEN = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _aware_utc(value: object, field: str) -> datetime:
@@ -89,11 +93,14 @@ class DatabaseQueueDriver:
         clock: Callable[[], datetime],
         codec: JsonEnvelopeCodec | None = None,
         reservation_lease: timedelta = _DEFAULT_RESERVATION_LEASE,
+        token_factory: Callable[[], str] | None = None,
     ) -> None:
         if not _is_database_driver(database):
             raise TypeError("database queue requires a DatabaseDriver")
         if not callable(clock):
             raise TypeError("database queue clock must be callable")
+        if token_factory is not None and not callable(token_factory):
+            raise TypeError("database queue token factory must be callable")
         if (
             not isinstance(reservation_lease, timedelta)
             or reservation_lease <= timedelta(0)
@@ -107,6 +114,9 @@ class DatabaseQueueDriver:
         self._clock = clock
         self._codec = resolved_codec
         self._reservation_lease = reservation_lease
+        self._token_factory = token_factory or (lambda: secrets.token_hex(32))
+        self._process_id = os.getpid()
+        self._reservation_owner_id = self._new_token(stage="queue.connection")
         self._closed = False
         self._install()
 
@@ -154,6 +164,8 @@ class DatabaseQueueDriver:
                             backoff_seconds,
                             reserved_at,
                             reservation_expires_at,
+                            reservation_owner_id,
+                            reservation_id,
                             dead_lettered_at
                         ) VALUES (
                             :message_id,
@@ -167,6 +179,8 @@ class DatabaseQueueDriver:
                             0,
                             :max_attempts,
                             :backoff_seconds,
+                            NULL,
+                            NULL,
                             NULL,
                             NULL,
                             NULL
@@ -250,9 +264,7 @@ class DatabaseQueueDriver:
                 recovering = row["reserved_at"] is not None
                 consumed_attempts = previous_attempts + (1 if recovering else 0)
                 previous_generation = self._stored_int(row["reservation_generation"])
-                generation = previous_generation + 1
                 claim_parameters = {
-                    "reservation_generation": generation,
                     "reserved_at": _timestamp(current),
                     "reservation_expires_at": _timestamp(expires_at),
                     "message_id": message_id,
@@ -268,6 +280,8 @@ class DatabaseQueueDriver:
                             SET attempt_count = :attempt_count,
                                 reserved_at = NULL,
                                 reservation_expires_at = NULL,
+                                reservation_owner_id = NULL,
+                                reservation_id = NULL,
                                 dead_lettered_at = :now
                             WHERE message_id = :message_id
                               AND reservation_generation = :previous_generation
@@ -281,13 +295,26 @@ class DatabaseQueueDriver:
                     if changed != 1:
                         raise _attempt_conflict()
                     return None
+                if previous_generation >= _MAX_RESERVATION_GENERATION:
+                    raise _attempt_conflict()
+                generation = previous_generation + 1
+                reservation_id = self._new_token(stage="queue.reserve")
+                claim_parameters.update(
+                    {
+                        "reservation_generation": generation,
+                        "reservation_owner_id": self._reservation_owner_id,
+                        "reservation_id": reservation_id,
+                    }
+                )
                 changed = transaction.execute(
                     DatabaseStatement(
                         f"""UPDATE {_TABLE}
                         SET reservation_generation = :reservation_generation,
                             attempt_count = :attempt_count,
                             reserved_at = :reserved_at,
-                            reservation_expires_at = :reservation_expires_at
+                            reservation_expires_at = :reservation_expires_at,
+                            reservation_owner_id = :reservation_owner_id,
+                            reservation_id = :reservation_id
                         WHERE message_id = :message_id
                           AND reservation_generation = :previous_generation
                           AND {eligibility}
@@ -305,6 +332,8 @@ class DatabaseQueueDriver:
                     reserved_at=current,
                     fencing_token=generation,
                     expires_at=expires_at,
+                    owner_id=self._reservation_owner_id,
+                    reservation_id=reservation_id,
                 )
         except QueueOperationError:
             raise
@@ -324,6 +353,8 @@ class DatabaseQueueDriver:
                 f"DELETE FROM {_TABLE} WHERE message_id = :message_id "
                 f"AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
+                f"AND reservation_owner_id = :reservation_owner_id "
+                f"AND reservation_id = :reservation_id "
                 f"AND reserved_at = :reserved_at "
                 f"AND reservation_expires_at = :reservation_expires_at "
                 f"AND reservation_expires_at > :now "
@@ -338,9 +369,12 @@ class DatabaseQueueDriver:
             stage="queue.reject",
             sql=(
                 f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                f"reservation_owner_id = NULL, reservation_id = NULL, "
                 f"dead_lettered_at = :terminal_at "
                 f"WHERE message_id = :message_id AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
+                f"AND reservation_owner_id = :reservation_owner_id "
+                f"AND reservation_id = :reservation_id "
                 f"AND reserved_at = :reserved_at "
                 f"AND reservation_expires_at = :reservation_expires_at "
                 f"AND reservation_expires_at > :now AND dead_lettered_at IS NULL"
@@ -356,10 +390,13 @@ class DatabaseQueueDriver:
             stage="queue.release",
             sql=(
                 f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                f"reservation_owner_id = NULL, reservation_id = NULL, "
                 f"available_at = :available_at, "
                 f"attempt_count = :previous_attempt WHERE message_id = :message_id "
                 f"AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
+                f"AND reservation_owner_id = :reservation_owner_id "
+                f"AND reservation_id = :reservation_id "
                 f"AND reserved_at = :reserved_at "
                 f"AND reservation_expires_at = :reservation_expires_at "
                 f"AND reservation_expires_at > :now "
@@ -384,9 +421,12 @@ class DatabaseQueueDriver:
                 stage="queue.retry",
                 sql=(
                     f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                    f"reservation_owner_id = NULL, reservation_id = NULL, "
                     f"dead_lettered_at = :terminal_at "
                     f"WHERE message_id = :message_id AND attempt_count = :previous_attempt "
                     f"AND reservation_generation = :fencing_token "
+                    f"AND reservation_owner_id = :reservation_owner_id "
+                    f"AND reservation_id = :reservation_id "
                     f"AND reserved_at = :reserved_at "
                     f"AND reservation_expires_at = :reservation_expires_at "
                     f"AND reservation_expires_at > :now AND dead_lettered_at IS NULL"
@@ -408,10 +448,13 @@ class DatabaseQueueDriver:
             stage="queue.retry",
             sql=(
                 f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
+                f"reservation_owner_id = NULL, reservation_id = NULL, "
                 f"available_at = :available_at, "
                 f"attempt_count = :attempt WHERE message_id = :message_id "
                 f"AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
+                f"AND reservation_owner_id = :reservation_owner_id "
+                f"AND reservation_id = :reservation_id "
                 f"AND reserved_at = :reserved_at "
                 f"AND reservation_expires_at = :reservation_expires_at "
                 f"AND reservation_expires_at > :now AND dead_lettered_at IS NULL"
@@ -429,6 +472,11 @@ class DatabaseQueueDriver:
         if self._closed:
             raise QueueOperationError(
                 reason=PlatformReason.SHUTDOWN_FAILED,
+                stage="queue.connection",
+            )
+        if os.getpid() != self._process_id:
+            raise QueueOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
                 stage="queue.connection",
             )
 
@@ -451,12 +499,16 @@ class DatabaseQueueDriver:
                             backoff_seconds REAL NULL,
                             reserved_at VARCHAR(32) NULL,
                             reservation_expires_at VARCHAR(32) NULL,
+                            reservation_owner_id VARCHAR(64) NULL,
+                            reservation_id VARCHAR(64) NULL,
                             dead_lettered_at VARCHAR(32) NULL
                         )"""
                     )
                 )
             self._ensure_reservation_generation()
             self._ensure_reservation_expiry()
+            self._ensure_reservation_owner()
+            self._ensure_reservation_id()
         except DatabaseOperationError as error:
             raise QueueOperationError(
                 reason=error.reason,
@@ -512,6 +564,34 @@ class DatabaseQueueDriver:
             with self._database.transaction() as transaction:
                 transaction.query(probe)
 
+    def _ensure_reservation_owner(self) -> None:
+        self._ensure_nullable_column("reservation_owner_id")
+
+    def _ensure_reservation_id(self) -> None:
+        self._ensure_nullable_column("reservation_id")
+
+    def _ensure_nullable_column(self, column: str) -> None:
+        if column not in {"reservation_owner_id", "reservation_id"}:
+            raise ValueError("database queue ownership column is invalid")
+        probe = DatabaseStatement(
+            f"SELECT {column} FROM {_TABLE} WHERE 1 = 0",
+            read_only=True,
+        )
+        try:
+            with self._database.transaction() as transaction:
+                transaction.query(probe)
+            return
+        except DatabaseOperationError:
+            pass
+        try:
+            with self._database.transaction() as transaction:
+                transaction.execute(
+                    DatabaseStatement(f"ALTER TABLE {_TABLE} ADD COLUMN {column} VARCHAR(64) NULL")
+                )
+        except DatabaseOperationError:
+            with self._database.transaction() as transaction:
+                transaction.query(probe)
+
     def _transition_reserved(
         self,
         reservation: object,
@@ -531,6 +611,12 @@ class DatabaseQueueDriver:
             )
         if reservation.expires_at is None:
             raise QueueReservationLost(stage=stage)
+        if (
+            reservation.owner_id is None
+            or reservation.reservation_id is None
+            or not secrets.compare_digest(reservation.owner_id, self._reservation_owner_id)
+        ):
+            raise QueueReservationLost(stage=stage)
         current = _aware_utc(self._clock(), "settlement time")
         parameters: dict[str, object] = {
             "message_id": reservation.job.envelope.metadata.message_id,
@@ -540,6 +626,8 @@ class DatabaseQueueDriver:
             "reserved_at": _timestamp(reservation.reserved_at),
             "reservation_expires_at": _timestamp(reservation.expires_at),
             "now": _timestamp(current),
+            "reservation_owner_id": self._reservation_owner_id,
+            "reservation_id": reservation.reservation_id,
         }
         if available_at is not None:
             parameters["available_at"] = _timestamp(available_at)
@@ -556,6 +644,19 @@ class DatabaseQueueDriver:
             ) from None
         if changed != 1:
             raise QueueReservationLost(stage=stage)
+
+    def _new_token(self, *, stage: str) -> str:
+        try:
+            token = self._token_factory()
+            if type(token) is not str or _OWNERSHIP_TOKEN.fullmatch(token) is None:
+                raise ValueError("database queue ownership token is invalid")
+            return token
+        except Exception as error:
+            raise QueueOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage=stage,
+                protected_cause=error,
+            ) from None
 
     def _job_from_row(self, row: object) -> QueueJob:
         from af.framework.relational import DatabaseRow
