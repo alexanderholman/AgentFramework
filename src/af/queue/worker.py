@@ -10,7 +10,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext, supp
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from threading import Condition, RLock, get_ident
+from threading import Condition, Event, RLock, Thread, get_ident
 from types import TracebackType
 from typing import Protocol, cast
 
@@ -22,7 +22,7 @@ from af.queue.contracts import (
     QueueReservation,
     QueueReservationLost,
 )
-from af.queue.manager import QueueDriver
+from af.queue.manager import QueueDriver, QueueFeature
 
 
 class WorkerState(StrEnum):
@@ -54,6 +54,10 @@ class JobHandler(Protocol):
     """Callable that processes one queue job."""
 
     def __call__(self, job: QueueJob) -> None: ...
+
+
+class _RenewalDriver(Protocol):
+    def renew(self, reservation: QueueReservation, /) -> QueueReservation: ...
 
 
 class IdempotencyStore(Protocol):
@@ -139,6 +143,124 @@ class _DeliveryObservation:
     settlement: str = "failed"
     phase: str = "execution"
     attempt_bucket: str = "first"
+    renewal_count_bucket: str = "none"
+    renewal_outcome: str = "not_required"
+
+
+class _RenewalCoordinator:
+    """Serialize lease replacement before the delivery's terminal settlement."""
+
+    def __init__(
+        self,
+        driver: QueueDriver,
+        reservation: QueueReservation,
+        *,
+        clock: Callable[[], datetime],
+        minimum_interval: timedelta,
+        maximum_interval: timedelta,
+    ) -> None:
+        self._driver = driver
+        self._current = reservation
+        self._clock = clock
+        self._minimum_interval = minimum_interval
+        self._maximum_interval = maximum_interval
+        self._stop = Event()
+        self._ready = Event()
+        self._lock = RLock()
+        self._failure: BaseException | None = None
+        self._renewals = 0
+        self._thread: Thread | None = None
+        if reservation.expires_at is None:
+            return
+        if not callable(getattr(driver, "renew", None)):
+            raise QueueOperationError(
+                reason=PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="queue.worker.renewal",
+            )
+        supports = getattr(driver, "supports", None)
+        if callable(supports) and not supports(QueueFeature.RESERVATION_RENEWAL):
+            raise QueueOperationError(
+                reason=PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="queue.worker.renewal",
+            )
+        remaining = reservation.expires_at - clock()
+        if remaining <= minimum_interval * 2:
+            raise QueueOperationError(
+                reason=PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="queue.worker.renewal",
+            )
+        self._thread = Thread(target=self._run, name="af-queue-renewal", daemon=True)
+        self._thread.start()
+        self._ready.wait()
+        with self._lock:
+            if self._failure is not None:
+                raise self._failure
+
+    @property
+    def required(self) -> bool:
+        return self._thread is not None
+
+    @property
+    def renewal_count(self) -> int:
+        with self._lock:
+            return self._renewals
+
+    def finish(self) -> QueueReservation:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join()
+        with self._lock:
+            if self._failure is not None:
+                raise self._failure
+            return self._current
+
+    def _run(self) -> None:
+        try:
+            while True:
+                with self._lock:
+                    expires_at = self._current.expires_at
+                assert expires_at is not None
+                remaining = expires_at - self._clock()
+                if remaining <= self._minimum_interval * 2:
+                    raise QueueOperationError(
+                        reason=PlatformReason.CAPABILITY_UNAVAILABLE,
+                        stage="queue.worker.renewal",
+                    )
+                delay = min(self._maximum_interval, remaining / 2)
+                self._ready.set()
+                if self._stop.wait(timeout=delay.total_seconds()):
+                    return
+                with self._lock:
+                    if self._stop.is_set():
+                        return
+                    renewer = cast(_RenewalDriver, self._driver)
+                    renewed = renewer.renew(self._current)
+                    if not self._valid_renewal(self._current, renewed):
+                        raise QueueReservationLost(stage="queue.worker.renewal")
+                    self._current = renewed
+                    self._renewals += 1
+        except BaseException as error:
+            with self._lock:
+                self._failure = error
+            self._ready.set()
+
+    def _valid_renewal(self, original: QueueReservation, renewed: object) -> bool:
+        return (
+            isinstance(renewed, QueueReservation)
+            and original.expires_at is not None
+            and renewed.expires_at is not None
+            and renewed.expires_at > original.expires_at
+            and renewed.expires_at - self._clock() > self._minimum_interval * 2
+            and original.reservation_id is not None
+            and renewed.reservation_id is not None
+            and renewed.reservation_id != original.reservation_id
+            and renewed.job == original.job
+            and renewed.attempt == original.attempt
+            and renewed.reserved_at == original.reserved_at
+            and renewed.fencing_token == original.fencing_token
+            and renewed.owner_id == original.owner_id
+        )
 
 
 def _duration_bucket(duration: timedelta) -> str:
@@ -161,6 +283,14 @@ def _attempt_bucket(reservation: QueueReservation) -> str:
     if reservation.attempt == 1:
         return "first"
     return "retry"
+
+
+def _renewal_count_bucket(count: int) -> str:
+    if count == 0:
+        return "none"
+    if count == 1:
+        return "one"
+    return "multiple"
 
 
 def _saturation_bucket(saturation: float) -> str:
@@ -219,6 +349,8 @@ class WorkerKernel:
         scope_factory: JobScopeFactory | None = None,
         telemetry: TelemetryPublisher | None = None,
         queue_wait_alert_after: timedelta | None = None,
+        renewal_min_interval: timedelta = timedelta(milliseconds=100),
+        renewal_max_interval: timedelta = timedelta(seconds=30),
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if type(max_concurrency) is not int or max_concurrency < 1:
@@ -238,6 +370,10 @@ class WorkerKernel:
             raise TypeError("worker telemetry publisher is invalid")
         if queue_wait_alert_after is not None and queue_wait_alert_after <= timedelta(0):
             raise ValueError("worker queue wait alert threshold must be positive")
+        if renewal_min_interval <= timedelta(0):
+            raise ValueError("worker renewal minimum interval must be positive")
+        if renewal_max_interval < renewal_min_interval:
+            raise ValueError("worker renewal maximum interval must not precede its minimum")
         if not callable(clock):
             raise TypeError("worker clock must be callable")
 
@@ -249,6 +385,8 @@ class WorkerKernel:
         self._scope_factory = scope_factory or (lambda job: nullcontext())
         self._telemetry = telemetry
         self._queue_wait_alert_after = queue_wait_alert_after
+        self._renewal_min_interval = renewal_min_interval
+        self._renewal_max_interval = renewal_max_interval
         self._clock = clock
 
         self._state = WorkerState.IDLE
@@ -385,6 +523,29 @@ class WorkerKernel:
         observation = _DeliveryObservation(attempt_bucket=_attempt_bucket(reservation))
         try:
             try:
+                renewal = _RenewalCoordinator(
+                    self._driver,
+                    reservation,
+                    clock=self._clock,
+                    minimum_interval=self._renewal_min_interval,
+                    maximum_interval=self._renewal_max_interval,
+                )
+            except BaseException as renewal_error:
+                observation.phase = "renewal"
+                observation.reason = "renewal_failure"
+                observation.renewal_outcome = "failed"
+                if not isinstance(renewal_error, QueueReservationLost):
+                    try:
+                        self._driver.release(reservation)
+                        observation.outcome = "released"
+                        observation.settlement = "release"
+                    except BaseException as release_error:
+                        raise BaseExceptionGroup(
+                            "queue renewal admission and release both failed",
+                            (renewal_error, release_error),
+                        ) from None
+                raise _AcknowledgementFailure(renewal_error) from renewal_error
+            try:
                 claim_context = (
                     self._idempotency.claim(message_id)
                     if self._idempotency is not None
@@ -400,6 +561,15 @@ class WorkerKernel:
                         claim.record()
             except Exception as error:
                 self._increment("jobs_failed")
+                try:
+                    reservation = renewal.finish()
+                    self._observe_renewal(observation, renewal)
+                except BaseException as renewal_error:
+                    self._observe_renewal_failure(observation, renewal, renewal_error)
+                    raise BaseExceptionGroup(
+                        "queue handler and renewal both failed",
+                        (error, renewal_error),
+                    ) from None
                 if reservation.attempt >= reservation.job.max_attempts:
                     observation.attempt_bucket = "exhausted"
                 settlement = self._settle_failure(reservation, error)
@@ -408,12 +578,28 @@ class WorkerKernel:
                 raise _SettledJobFailure(error) from error
             except BaseException as cancellation:
                 self._increment("cancellations")
+                try:
+                    reservation = renewal.finish()
+                    self._observe_renewal(observation, renewal)
+                except BaseException as renewal_error:
+                    self._observe_renewal_failure(observation, renewal, renewal_error)
+                    raise BaseExceptionGroup(
+                        "queue cancellation and renewal both failed",
+                        (cancellation, renewal_error),
+                    ) from None
                 observation.reason = "cancellation"
                 self._release_cancelled(reservation, cancellation)
                 observation.outcome = "released"
                 observation.settlement = "release"
                 raise
 
+            try:
+                reservation = renewal.finish()
+                self._observe_renewal(observation, renewal)
+            except BaseException as renewal_error:
+                self._increment("jobs_failed")
+                self._observe_renewal_failure(observation, renewal, renewal_error)
+                raise _AcknowledgementFailure(renewal_error) from renewal_error
             observation.phase = "ack"
             observation.reason = "acknowledgement_failure"
             try:
@@ -568,6 +754,8 @@ class WorkerKernel:
                     "outcome": observation.outcome,
                     "phase": observation.phase,
                     "reason": observation.reason,
+                    "renewal_count_bucket": observation.renewal_count_bucket,
+                    "renewal_outcome": observation.renewal_outcome,
                     "runtime_bucket": _duration_bucket(runtime),
                     "saturation_bucket": _saturation_bucket(saturation),
                     "settlement": observation.settlement,
@@ -630,6 +818,35 @@ class WorkerKernel:
                 self._stats,
                 **{field: getattr(self._stats, field) + 1},
             )
+
+    @staticmethod
+    def _observe_renewal(
+        observation: _DeliveryObservation,
+        renewal: _RenewalCoordinator,
+    ) -> None:
+        count = renewal.renewal_count
+        if not renewal.required:
+            return
+        observation.renewal_count_bucket = _renewal_count_bucket(count)
+        observation.renewal_outcome = "succeeded" if count else "not_needed"
+
+    @staticmethod
+    def _observe_renewal_failure(
+        observation: _DeliveryObservation,
+        renewal: _RenewalCoordinator,
+        error: BaseException,
+    ) -> None:
+        observation.phase = "renewal"
+        observation.reason = (
+            "reservation_lost" if isinstance(error, QueueReservationLost) else "renewal_failure"
+        )
+        observation.outcome = "settlement_failed"
+        observation.settlement = "none"
+        count = renewal.renewal_count
+        observation.renewal_count_bucket = _renewal_count_bucket(count)
+        observation.renewal_outcome = (
+            "lost" if isinstance(error, QueueReservationLost) else "failed"
+        )
 
     def _is_closed(self) -> bool:
         return self._closed

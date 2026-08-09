@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from typing import Any
@@ -754,6 +754,8 @@ def test_worker_kernel_emits_bounded_terminal_delivery_telemetry() -> None:
         "outcome": "processed",
         "phase": "ack",
         "reason": "success",
+        "renewal_count_bucket": "none",
+        "renewal_outcome": "not_required",
         "runtime_bucket": "lt_10ms",
         "saturation_bucket": "lt_50pct",
         "settlement": "ack",
@@ -875,6 +877,8 @@ def test_worker_kernel_emits_exhausted_bucket_when_terminal_rejection_fails() ->
         "outcome": "settlement_failed",
         "phase": "execution",
         "reason": "execution_failure",
+        "renewal_count_bucket": "none",
+        "renewal_outcome": "not_required",
         "runtime_bucket": "lt_10ms",
         "saturation_bucket": "lt_50pct",
         "settlement": "failed",
@@ -1452,6 +1456,265 @@ def test_worker_kernel_lag_calculated_from_reservation() -> None:
     assert stats.lag == timedelta(seconds=5)
 
 
+def test_worker_renews_long_running_delivery_and_acks_latest_handle() -> None:
+    driver = _RenewingQueueDriver()
+    driver.dispatch(_job("renew-long"))
+    kernel = WorkerKernel(
+        driver,
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    handler_started = Event()
+    finish_handler = Event()
+    result: list[QueueReservation | None] = []
+
+    def handler(_job: QueueJob) -> None:
+        handler_started.set()
+        assert finish_handler.wait(timeout=2)
+
+    thread = Thread(target=lambda: result.append(kernel.run_once(handler)))
+    thread.start()
+    assert handler_started.wait(timeout=2)
+    assert driver.renewed_twice.wait(timeout=2)
+    finish_handler.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert result[0] is not None
+    assert result[0].reservation_id == driver.acked_reservations[0].reservation_id
+    assert result[0].reservation_id == driver.latest_reservation_id
+    assert driver.renewal_count >= 2
+    kernel.close()
+
+
+def test_worker_releases_too_short_lease_before_handler_execution() -> None:
+    driver = _RenewingQueueDriver(lease=timedelta(milliseconds=15))
+    driver.dispatch(_job("renew-too-short"))
+    kernel = WorkerKernel(
+        driver,
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    handled = False
+
+    def handler(job: QueueJob) -> None:
+        del job
+        nonlocal handled
+        handled = True
+
+    with pytest.raises(QueueOperationError) as failed:
+        kernel.run_once(handler)
+
+    assert failed.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+    assert not handled
+    assert driver.released == ["renew-too-short"]
+    kernel.close()
+
+
+def test_worker_stops_settlement_after_successful_renewal_then_loss() -> None:
+    driver = _RenewingQueueDriver(lose_after=1)
+    driver.dispatch(_job("renew-then-lost"))
+    kernel = WorkerKernel(
+        driver,
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    finish_handler = Event()
+    failures: list[BaseException] = []
+
+    def handler(job: QueueJob) -> None:
+        del job
+        assert finish_handler.wait(timeout=2)
+
+    def run() -> None:
+        try:
+            kernel.run_once(handler)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    assert driver.attempted_twice.wait(timeout=2)
+    finish_handler.set()
+    thread.join(timeout=2)
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], QueueReservationLost)
+    assert driver.acked_reservations == []
+    assert driver.released == []
+    kernel.close()
+
+
+@pytest.mark.parametrize("mode", ["retry", "reject", "cancel", "uncertain_ack"])
+def test_worker_uses_latest_renewed_handle_for_every_settlement(mode: str) -> None:
+    driver = _RenewingQueueDriver()
+    max_attempts = 1 if mode == "reject" else 2
+    driver.dispatch(_job(f"renew-{mode}", max_attempts=max_attempts))
+    if mode == "uncertain_ack":
+        driver.next_ack_error = RuntimeError("ack failed")
+    kernel = WorkerKernel(
+        driver,
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    finish_handler = Event()
+    failures: list[BaseException] = []
+
+    def handler(job: QueueJob) -> None:
+        del job
+        assert finish_handler.wait(timeout=2)
+        if mode in {"retry", "reject"}:
+            raise ValueError("handler failed")
+        if mode == "cancel":
+            raise KeyboardInterrupt()
+
+    def run() -> None:
+        try:
+            kernel.run_once(handler)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    assert driver.completed_renewal.wait(timeout=2)
+    finish_handler.set()
+    thread.join(timeout=2)
+
+    assert len(failures) == 1
+    settled = {
+        "retry": driver.retried_reservations,
+        "reject": driver.rejected_reservations,
+        "cancel": driver.released_reservations,
+        "uncertain_ack": driver.released_reservations,
+    }[mode]
+    assert len(settled) == 1
+    assert settled[0].reservation_id == driver.latest_reservation_id
+    kernel.close()
+
+
+def test_worker_renewal_loss_never_settles_stale_handle() -> None:
+    driver = _RenewingQueueDriver(renewal_error=QueueReservationLost(stage="queue.renew"))
+    driver.dispatch(_job("renew-lost"))
+    sink = _RecordingTelemetrySink()
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    handler_started = Event()
+    finish_handler = Event()
+    failures: list[BaseException] = []
+
+    def handler(_job: QueueJob) -> None:
+        handler_started.set()
+        assert finish_handler.wait(timeout=2)
+
+    def run() -> None:
+        try:
+            kernel.run_once(handler)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    assert handler_started.wait(timeout=2)
+    assert driver.renewed.wait(timeout=2)
+    finish_handler.set()
+    thread.join(timeout=2)
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], QueueReservationLost)
+    assert driver.acked_reservations == []
+    assert driver.retried == []
+    assert driver.rejected == []
+    assert driver.released == []
+    attributes = dict(sink.signals[0].attributes)
+    assert attributes["phase"] == "renewal"
+    assert attributes["reason"] == "reservation_lost"
+    assert attributes["renewal_outcome"] == "lost"
+    assert attributes["settlement"] == "none"
+    kernel.close()
+
+
+@pytest.mark.parametrize("unsafe_expiry", [False, True])
+def test_worker_rejects_invalid_renewal_replacement_without_settlement(
+    unsafe_expiry: bool,
+) -> None:
+    driver = _RenewingQueueDriver(
+        invalid_replacement=not unsafe_expiry,
+        unsafe_replacement_expiry=unsafe_expiry,
+        lease=timedelta(milliseconds=30) if unsafe_expiry else timedelta(milliseconds=200),
+    )
+    driver.dispatch(_job("renew-invalid"))
+    kernel = WorkerKernel(
+        driver,
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    finish_handler = Event()
+    failures: list[BaseException] = []
+
+    def handler(job: QueueJob) -> None:
+        del job
+        assert finish_handler.wait(timeout=2)
+
+    def run() -> None:
+        try:
+            kernel.run_once(handler)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    assert driver.renewed.wait(timeout=2)
+    finish_handler.set()
+    thread.join(timeout=2)
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], QueueReservationLost)
+    assert driver.acked_reservations == []
+    assert driver.released == []
+    kernel.close()
+
+
+def test_worker_preserves_handler_and_renewal_failures() -> None:
+    renewal_error = QueueReservationLost(stage="queue.renew")
+    driver = _RenewingQueueDriver(renewal_error=renewal_error)
+    driver.dispatch(_job("renew-handler-failed", max_attempts=2))
+    kernel = WorkerKernel(
+        driver,
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    finish_handler = Event()
+    failures: list[BaseException] = []
+    handler_error = ValueError("handler failed")
+
+    def handler(job: QueueJob) -> None:
+        del job
+        assert finish_handler.wait(timeout=2)
+        raise handler_error
+
+    def run() -> None:
+        try:
+            kernel.run_once(handler)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    assert driver.renewed.wait(timeout=2)
+    finish_handler.set()
+    thread.join(timeout=2)
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], BaseExceptionGroup)
+    assert failures[0].exceptions == (handler_error, renewal_error)
+    assert driver.retried == []
+    kernel.close()
+
+
 # -- Fake driver helper -------------------------------------------------------
 
 
@@ -1466,9 +1729,13 @@ class _TestQueueDriver:
         self._attempts: dict[str, int] = {}
         self._lock = Lock()
         self.acked: list[str] = []
+        self.acked_reservations: list[QueueReservation] = []
         self.rejected: list[str] = []
+        self.rejected_reservations: list[QueueReservation] = []
         self.retried: list[str] = []
+        self.retried_reservations: list[QueueReservation] = []
         self.released: list[str] = []
+        self.released_reservations: list[QueueReservation] = []
         self.fail_next_ack = False
         self.next_ack_error: BaseException | None = None
         self.fail_next_retry = False
@@ -1541,12 +1808,14 @@ class _TestQueueDriver:
             self.fail_next_ack = False
             raise RuntimeError("ack failed")
         self.acked.append(reservation.job.envelope.metadata.message_id)
+        self.acked_reservations.append(reservation)
 
     def reject(self, reservation: QueueReservation, /) -> None:
         if self.fail_next_reject:
             self.fail_next_reject = False
             raise RuntimeError("reject failed")
         self.rejected.append(reservation.job.envelope.metadata.message_id)
+        self.rejected_reservations.append(reservation)
 
     def retry(
         self,
@@ -1559,6 +1828,7 @@ class _TestQueueDriver:
             self.fail_next_retry = False
             raise RuntimeError("retry failed")
         self.retried.append(reservation.job.envelope.metadata.message_id)
+        self.retried_reservations.append(reservation)
         self._queue.appendleft(reservation.job)
 
     def release(self, reservation: QueueReservation, /) -> None:
@@ -1566,6 +1836,7 @@ class _TestQueueDriver:
             self.fail_next_release = False
             raise RuntimeError("release failed")
         self.released.append(reservation.job.envelope.metadata.message_id)
+        self.released_reservations.append(reservation)
         message_id = reservation.job.envelope.metadata.message_id
         self._attempts[message_id] = max(0, self._attempts.get(message_id, 1) - 1)
         self._queue.appendleft(reservation.job)
@@ -1579,3 +1850,78 @@ class _TestQueueDriver:
 
 def _make_driver() -> _TestQueueDriver:
     return _TestQueueDriver()
+
+
+class _RenewingQueueDriver(_TestQueueDriver):
+    def __init__(
+        self,
+        *,
+        renewal_error: BaseException | None = None,
+        lose_after: int | None = None,
+        lease: timedelta = timedelta(milliseconds=200),
+        invalid_replacement: bool = False,
+        unsafe_replacement_expiry: bool = False,
+    ) -> None:
+        super().__init__()
+        self._features = frozenset(
+            {
+                QueueFeature.RESERVATION,
+                QueueFeature.RESERVATION_RENEWAL,
+            }
+        )
+        self.renewal_error = renewal_error
+        self.lose_after = lose_after
+        self.lease = lease
+        self.invalid_replacement = invalid_replacement
+        self.unsafe_replacement_expiry = unsafe_replacement_expiry
+        self.renewed = Event()
+        self.renewed_twice = Event()
+        self.attempted_twice = Event()
+        self.completed_renewal = Event()
+        self._renewal_count = 0
+        self.latest_reservation_id = "1" * 64
+
+    @property
+    def renewal_count(self) -> int:
+        return self._renewal_count
+
+    def reserve(self, *, lane: str | None = None) -> QueueReservation | None:
+        reservation = super().reserve(lane=lane)
+        if reservation is None:
+            return None
+        now = datetime.now(UTC)
+        return replace(
+            reservation,
+            reserved_at=now,
+            expires_at=now + self.lease,
+            owner_id="0" * 64,
+            reservation_id="1" * 64,
+        )
+
+    def renew(self, reservation: QueueReservation, /) -> QueueReservation:
+        self.renewed.set()
+        if self._renewal_count >= 1:
+            self.attempted_twice.set()
+        if self.renewal_error is not None:
+            raise self.renewal_error
+        if self.lose_after is not None and self._renewal_count >= self.lose_after:
+            raise QueueReservationLost(stage="queue.renew")
+        if self.invalid_replacement:
+            return reservation
+        if self.unsafe_replacement_expiry:
+            assert reservation.expires_at is not None
+            return replace(
+                reservation,
+                expires_at=reservation.expires_at + timedelta(milliseconds=1),
+                reservation_id="2" * 64,
+            )
+        self._renewal_count += 1
+        self.latest_reservation_id = f"{self._renewal_count + 1:064x}"
+        self.completed_renewal.set()
+        if self._renewal_count >= 2:
+            self.renewed_twice.set()
+        return replace(
+            reservation,
+            expires_at=datetime.now(UTC) + self.lease,
+            reservation_id=self.latest_reservation_id,
+        )
