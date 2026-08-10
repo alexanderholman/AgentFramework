@@ -21,6 +21,7 @@ from af.queue.runtime import (
 from af.queue.sync import SyncQueueDriver
 from af.queue.sync_manager import sync_queue_registration
 from af.queue.worker import (
+    CooperativeJobHandler,
     IdempotencyClaim,
     IdempotencyStore,
     InMemoryIdempotencyStore,
@@ -32,6 +33,7 @@ from af.queue.worker import (
 
 __all__ = (
     "ContainerJobHandlerFactory",
+    "CooperativeJobHandler",
     "DatabaseQueueDriver",
     "IdempotencyClaim",
     "IdempotencyStore",

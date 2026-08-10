@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
+from threading import Thread
 
 import pytest
 
@@ -67,6 +68,42 @@ def test_cancellation_token_propagates_state_and_waiters() -> None:
         assert token.cancelled is True
 
     asyncio.run(scenario())
+
+
+def test_cancellation_token_wakes_waiters_from_another_thread() -> None:
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_debug(True)
+        token = CancellationToken()
+        waiter = asyncio.create_task(token.wait())
+        await asyncio.sleep(0)
+        failures: list[BaseException] = []
+
+        def cancel() -> None:
+            try:
+                token.cancel()
+            except BaseException as error:
+                failures.append(error)
+
+        thread = Thread(target=cancel)
+        thread.start()
+        thread.join()
+        await asyncio.wait_for(waiter, timeout=1)
+
+        assert failures == []
+        assert token.cancelled is True
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_token_repeated_cancel_and_late_wait_are_idempotent() -> None:
+    token = CancellationToken()
+
+    token.cancel()
+    token.cancel()
+    asyncio.run(token.wait())
+
+    assert token.cancelled
 
 
 def test_context_binding_nests_and_restores_exact_parent() -> None:

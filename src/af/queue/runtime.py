@@ -8,10 +8,10 @@ from datetime import timedelta
 from enum import StrEnum
 from threading import Condition, Event, RLock, Thread, get_ident
 from time import monotonic
-from typing import Protocol, TypeVar, cast
+from typing import Protocol, TypeVar, cast, runtime_checkable
 
 from af.framework.container import Container, InvocationKind
-from af.framework.context import ExecutionContext
+from af.framework.context import CancellationToken, ExecutionContext
 from af.framework.errors import PlatformReason, ScopeDisposalError
 from af.queue.contracts import QueueJob, QueueOperationError
 from af.queue.worker import JobHandler
@@ -57,6 +57,11 @@ class WorkerRuntimeKernel(Protocol):
     def close(self, *, timeout: timedelta | None = None) -> None: ...
 
 
+@runtime_checkable
+class _ActiveCancellationKernel(Protocol):
+    def cancel_active(self) -> None: ...
+
+
 def _validate_sync_handler(handler: object) -> None:
     if not callable(handler):
         raise TypeError("queue job handler must be callable")
@@ -70,6 +75,8 @@ def _validate_sync_handler(handler: object) -> None:
 class ContainerJobHandlerFactory:
     """Resolve and dispose a fresh synchronous handler for every queue job."""
 
+    cooperative_cancellation = True
+
     def __init__(self, application: Container, handler_type: type[_HandlerT]) -> None:
         if not isinstance(application, Container):
             raise TypeError("container job handler requires an application container")
@@ -81,13 +88,25 @@ class ContainerJobHandlerFactory:
         self._handler_type = handler_type
 
     def __call__(self, job: QueueJob) -> None:
+        self.invoke(job, cancellation=CancellationToken())
+
+    def invoke(
+        self,
+        job: QueueJob,
+        /,
+        *,
+        cancellation: CancellationToken,
+    ) -> None:
         if not isinstance(job, QueueJob):
             raise TypeError("container job handler requires a QueueJob")
+        if not isinstance(cancellation, CancellationToken):
+            raise TypeError("container job handler cancellation must be a CancellationToken")
         metadata = job.envelope.metadata
         context = ExecutionContext(
             correlation_id=metadata.correlation_id,
             causation_id=metadata.causation_id,
             deadline=metadata.deadline,
+            cancellation=cancellation,
         )
         scope = self._application.invocation_scope(
             context=context,
@@ -179,6 +198,9 @@ class WorkerRuntime:
         self._state = WorkerRuntimeState.IDLE
         self._failure: BaseException | None = None
         self._drain_started = False
+        self._drain_starting = False
+        self._active_cancellation_requested = False
+        self._active_cancellation_requesting = False
         self._closing = False
         self._closed = False
         self._condition = Condition(RLock())
@@ -278,13 +300,13 @@ class WorkerRuntime:
     def drain(self, *, timeout: timedelta | None = None) -> None:
         deadline = self._deadline(timeout)
         self._assert_external("queue.runtime.self-drain")
-        self._begin_drain()
+        self._begin_drain(cancel_active=False, deadline=deadline)
         self._join_workers(deadline)
 
     def close(self, *, timeout: timedelta | None = None) -> None:
         deadline = self._deadline(timeout)
         self._assert_external("queue.runtime.self-close")
-        self._begin_drain()
+        self._begin_drain(cancel_active=True, deadline=deadline)
         self._join_workers(deadline)
 
         with self._condition:
@@ -344,23 +366,77 @@ class WorkerRuntime:
                 first = self._failure is None
                 self._record_failure_locked(error)
             if first:
-                self._begin_drain()
+                try:
+                    self._begin_drain(cancel_active=True, deadline=None)
+                except BaseException as drain_failure:
+                    with self._condition:
+                        self._record_failure_locked(drain_failure)
         finally:
             with self._condition:
                 self._owned_thread_ids.discard(thread_id)
                 self._condition.notify_all()
 
-    def _begin_drain(self) -> None:
+    def _begin_drain(self, *, cancel_active: bool, deadline: float | None) -> None:
         with self._condition:
             if self._closed:
                 return
             self._stop.set()
             if self._failure is None:
                 self._state = WorkerRuntimeState.DRAINING
+        self._apply_drain(deadline)
+        if cancel_active:
+            self._apply_active_cancellation(deadline)
+
+    def _apply_drain(self, deadline: float | None) -> None:
+        with self._condition:
+            while self._drain_starting:
+                remaining = self._remaining(deadline)
+                if remaining is not None and remaining <= 0:
+                    self._raise_timeout()
+                self._condition.wait(timeout=remaining)
             if self._drain_started:
                 return
+            remaining = self._remaining(deadline)
+            if remaining is not None and remaining <= 0:
+                self._raise_timeout()
+            self._drain_starting = True
+        try:
+            self._kernel.start_draining()
+        except BaseException:
+            with self._condition:
+                self._drain_starting = False
+                self._condition.notify_all()
+            raise
+        with self._condition:
             self._drain_started = True
-        self._kernel.start_draining()
+            self._drain_starting = False
+            self._condition.notify_all()
+
+    def _apply_active_cancellation(self, deadline: float | None) -> None:
+        with self._condition:
+            while self._active_cancellation_requesting:
+                remaining = self._remaining(deadline)
+                if remaining is not None and remaining <= 0:
+                    self._raise_timeout()
+                self._condition.wait(timeout=remaining)
+            if self._active_cancellation_requested:
+                return
+            remaining = self._remaining(deadline)
+            if remaining is not None and remaining <= 0:
+                self._raise_timeout()
+            self._active_cancellation_requesting = True
+        try:
+            if isinstance(self._kernel, _ActiveCancellationKernel):
+                self._kernel.cancel_active()
+        except BaseException:
+            with self._condition:
+                self._active_cancellation_requesting = False
+                self._condition.notify_all()
+            raise
+        with self._condition:
+            self._active_cancellation_requested = True
+            self._active_cancellation_requesting = False
+            self._condition.notify_all()
 
     def _join_workers(self, deadline: float | None) -> None:
         for thread in self._threads:
@@ -372,6 +448,18 @@ class WorkerRuntime:
     def _record_failure_locked(self, error: BaseException) -> None:
         if self._failure is None:
             self._failure = error
+        elif isinstance(self._failure, BaseExceptionGroup) and (
+            self._failure.message == "queue worker failures"
+        ):
+            self._failure = BaseExceptionGroup(
+                "queue worker failures",
+                (*self._failure.exceptions, error),
+            )
+        else:
+            self._failure = BaseExceptionGroup(
+                "queue worker failures",
+                (self._failure, error),
+            )
         self._state = WorkerRuntimeState.FAILED
         self._stop.set()
         self._condition.notify_all()
