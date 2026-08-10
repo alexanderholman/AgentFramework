@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from af.framework.container import Container, InvocationKind, Scope
-from af.framework.context import current_context
+from af.framework.context import CancellationToken, current_context
 from af.framework.errors import PlatformError, PlatformReason
 from af.messaging import EnvelopeKind, MessageEnvelope, MessageMetadata, PolicyContext
 from af.observability import TelemetryContext
@@ -143,6 +143,25 @@ def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() 
     assert closed == [observations[0][0], observations[1][0]]
 
 
+def test_container_job_handler_projects_exact_cooperative_cancellation_token() -> None:
+    observed: list[CancellationToken] = []
+
+    class Handler:
+        def __call__(self, job: QueueJob) -> None:
+            del job
+            observed.append(current_context().cancellation)
+
+    root = Container()
+    root.bind(Handler, lambda _: Handler(), scope=Scope.INVOCATION)
+    adapter = ContainerJobHandlerFactory(root.application_scope(), Handler)
+    token = CancellationToken()
+
+    adapter.invoke(_job(), cancellation=token)
+
+    assert observed == [token]
+    assert observed[0] is token
+
+
 def test_container_job_handler_allows_broad_lifetime_stateless_dispatcher() -> None:
     handled: list[str] = []
 
@@ -267,6 +286,7 @@ class _Kernel:
         self.all_started = Event()
         self.started = 0
         self.drains = 0
+        self.cancellations = 0
         self.closes = 0
         self.failures: list[BaseException] = []
         self.fail_close = False
@@ -293,6 +313,10 @@ class _Kernel:
     def start_draining(self) -> None:
         with self._lock:
             self.drains += 1
+
+    def cancel_active(self) -> None:
+        with self._lock:
+            self.cancellations += 1
 
     def close(self, *, timeout: timedelta | None = None) -> None:
         del timeout
@@ -635,6 +659,159 @@ def test_runtime_first_fatal_infrastructure_failure_is_sticky_and_stops_siblings
         assert captured.value is first
 
 
+def test_runtime_preserves_multiple_worker_failures() -> None:
+    failures = (RuntimeError("worker one"), SystemExit(2))
+
+    class SimultaneousFailureKernel(_Kernel):
+        def run_loop(self, handler: object, **kwargs: Any) -> None:
+            del handler, kwargs
+            with self._lock:
+                index = self.started
+                self.started += 1
+                if self.started == 2:
+                    self.all_started.set()
+            assert self.all_started.wait(timeout=1)
+            raise failures[index]
+
+    kernel = SimultaneousFailureKernel(expected_workers=2)
+    runtime = WorkerRuntime(kernel, lambda job: None, worker_count=2)
+    runtime.start()
+    assert runtime.wait(timeout=timedelta(seconds=1))
+
+    observed = runtime.failure
+    assert isinstance(observed, BaseExceptionGroup)
+    assert len(observed.exceptions) == 2
+    assert {id(error) for error in observed.exceptions} == {id(error) for error in failures}
+
+    with pytest.raises(BaseExceptionGroup) as sticky:
+        runtime.close(timeout=timedelta(seconds=1))
+    assert sticky.value is observed
+
+
+def test_runtime_retries_failed_active_cancellation_request() -> None:
+    cancellation_failure = RuntimeError("cancellation request failed")
+
+    class CancellationFailingKernel(_Kernel):
+        def cancel_active(self) -> None:
+            self.cancellations += 1
+            if self.cancellations == 1:
+                raise cancellation_failure
+
+    kernel = CancellationFailingKernel()
+    runtime = WorkerRuntime(kernel, lambda job: None)
+    runtime.start()
+    assert kernel.all_started.wait(timeout=1)
+
+    with pytest.raises(RuntimeError, match="cancellation request failed") as failed:
+        runtime.close(timeout=timedelta(seconds=1))
+    assert failed.value is cancellation_failure
+    assert kernel.closes == 0
+
+    runtime.close(timeout=timedelta(seconds=1))
+    assert kernel.cancellations == 2
+    assert kernel.closes == 1
+    assert runtime.state is WorkerRuntimeState.STOPPED
+
+
+@pytest.mark.parametrize("blocked_operation", ["drain", "cancel"])
+def test_runtime_timeout_bounds_concurrent_shutdown_coordination(
+    blocked_operation: str,
+) -> None:
+    entered = Event()
+    release = Event()
+    first_failures: list[BaseException] = []
+
+    class BlockingCoordinationKernel(_Kernel):
+        def start_draining(self) -> None:
+            if blocked_operation == "drain":
+                entered.set()
+                assert release.wait(timeout=2)
+            super().start_draining()
+
+        def cancel_active(self) -> None:
+            if blocked_operation == "cancel":
+                entered.set()
+                assert release.wait(timeout=2)
+            super().cancel_active()
+
+    kernel = BlockingCoordinationKernel()
+    runtime = WorkerRuntime(kernel, lambda job: None)
+    first_operation = runtime.drain if blocked_operation == "drain" else runtime.close
+
+    def first_shutdown() -> None:
+        try:
+            first_operation(timeout=timedelta(seconds=1))
+        except BaseException as error:
+            first_failures.append(error)
+
+    first = Thread(target=first_shutdown)
+    try:
+        runtime.start()
+        assert kernel.all_started.wait(timeout=1)
+        first.start()
+        assert entered.wait(timeout=1)
+
+        started = monotonic()
+        with pytest.raises(QueueOperationError) as timeout:
+            runtime.close(timeout=timedelta(milliseconds=20))
+        elapsed = monotonic() - started
+
+        assert timeout.value.reason is PlatformReason.SHUTDOWN_FAILED
+        assert timeout.value.stage == "queue.runtime.shutdown"
+        assert elapsed < 0.5
+        release.set()
+        first.join(timeout=1)
+        assert not first.is_alive()
+        assert first_failures == []
+        runtime.close(timeout=timedelta(seconds=1))
+    finally:
+        release.set()
+        if first.ident is not None:
+            first.join(timeout=1)
+        with suppress(BaseException):
+            runtime.close(timeout=timedelta(seconds=1))
+
+
+def test_runtime_does_not_start_cancellation_after_drain_crosses_deadline() -> None:
+    entered_drain = Event()
+    release_drain = Event()
+
+    class SlowDrainKernel(_Kernel):
+        def start_draining(self) -> None:
+            entered_drain.set()
+            assert release_drain.wait(timeout=1)
+            super().start_draining()
+
+    kernel = SlowDrainKernel()
+    runtime = WorkerRuntime(kernel, lambda job: None)
+
+    def delayed_release() -> None:
+        assert entered_drain.wait(timeout=1)
+        Event().wait(0.05)
+        release_drain.set()
+
+    releaser = Thread(target=delayed_release)
+    try:
+        runtime.start()
+        releaser.start()
+        with pytest.raises(QueueOperationError) as timeout:
+            runtime.close(timeout=timedelta(milliseconds=20))
+
+        assert timeout.value.stage == "queue.runtime.shutdown"
+        assert kernel.drains == 1
+        assert kernel.cancellations == 0
+
+        runtime.close(timeout=timedelta(seconds=1))
+        assert kernel.cancellations == 1
+        assert kernel.closes == 1
+    finally:
+        release_drain.set()
+        if releaser.ident is not None:
+            releaser.join(timeout=1)
+        with suppress(BaseException):
+            runtime.close(timeout=timedelta(seconds=1))
+
+
 def test_runtime_groups_sticky_worker_and_simultaneous_kernel_close_failures() -> None:
     worker_failure = RuntimeError("infrastructure failed")
     kernel = _Kernel()
@@ -726,6 +903,7 @@ def test_runtime_drain_timeout_is_retryable() -> None:
         runtime.drain(timeout=timedelta(seconds=1))
         runtime.close(timeout=timedelta(seconds=1))
         assert kernel.drains == 1
+        assert kernel.cancellations == 1
         assert kernel.closes == 1
 
 
@@ -859,6 +1037,95 @@ def test_runtime_composes_worker_kernel_driver_and_container_scope_deterministic
         release.set()
         if drain_thread is not None:
             drain_thread.join(timeout=1)
+        runtime.close(timeout=timedelta(seconds=1))
+
+
+def test_runtime_close_cooperatively_cancels_and_releases_container_job() -> None:
+    entered = Event()
+    cancellation_observed = Event()
+    disposed: list[str] = []
+
+    class Handler:
+        def __call__(self, job: QueueJob) -> None:
+            del job
+            token = current_context().cancellation
+            entered.set()
+            while not token.cancelled:
+                Event().wait(0.005)
+            cancellation_observed.set()
+
+        def close(self) -> None:
+            disposed.append("handler")
+
+    root = Container()
+    root.bind(Handler, lambda _: Handler(), scope=Scope.INVOCATION)
+    driver = _ReservingDriver()
+    driver.dispatch(_job("runtime-job-active"))
+    driver.dispatch(_job("runtime-job-queued"))
+    kernel = WorkerKernel(driver, max_concurrency=1, clock=lambda: _NOW)
+    runtime = WorkerRuntime(
+        kernel,
+        ContainerJobHandlerFactory(root.application_scope(), Handler),
+    )
+
+    runtime.start()
+    assert entered.wait(timeout=1)
+    runtime.close(timeout=timedelta(seconds=1))
+
+    assert cancellation_observed.is_set()
+    assert driver.acked == []
+    assert driver.queued_message_ids == ["runtime-job-active", "runtime-job-queued"]
+    assert disposed == ["handler"]
+    assert kernel.stats.cancellations == 1
+    assert driver.closes == 1
+    assert runtime.state is WorkerRuntimeState.STOPPED
+
+
+def test_runtime_close_timeout_never_releases_handler_that_ignores_cancellation() -> None:
+    entered = Event()
+    release_handler = Event()
+    observed_tokens: list[CancellationToken] = []
+
+    class Handler:
+        def __call__(self, job: QueueJob) -> None:
+            del job
+            observed_tokens.append(current_context().cancellation)
+            entered.set()
+            assert release_handler.wait(timeout=2)
+
+    root = Container()
+    root.bind(Handler, lambda _: Handler(), scope=Scope.INVOCATION)
+    driver = _ReservingDriver()
+    driver.dispatch(_job("runtime-job-ignored-cancellation"))
+    kernel = WorkerKernel(driver, max_concurrency=1, clock=lambda: _NOW)
+    runtime = WorkerRuntime(
+        kernel,
+        ContainerJobHandlerFactory(root.application_scope(), Handler),
+    )
+
+    try:
+        runtime.start()
+        assert entered.wait(timeout=1)
+        with pytest.raises(QueueOperationError) as timeout:
+            runtime.close(timeout=timedelta(milliseconds=20))
+
+        assert timeout.value.reason is PlatformReason.SHUTDOWN_FAILED
+        assert timeout.value.stage == "queue.runtime.shutdown"
+        assert observed_tokens[0].cancelled
+        assert driver.queued_message_ids == []
+        assert driver.acked == []
+        assert driver.closes == 0
+        assert runtime.state is WorkerRuntimeState.DRAINING
+
+        release_handler.set()
+        runtime.close(timeout=timedelta(seconds=1))
+
+        assert driver.queued_message_ids == ["runtime-job-ignored-cancellation"]
+        assert driver.acked == []
+        assert driver.closes == 1
+        assert runtime.state is WorkerRuntimeState.STOPPED
+    finally:
+        release_handler.set()
         runtime.close(timeout=timedelta(seconds=1))
 
 

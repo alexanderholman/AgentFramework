@@ -41,8 +41,8 @@ publication still requires a durable driver and worker boundary.
   rotates the one-acquisition capability, and returns a new immutable settlement handle; the old
   handle is immediately stale. A clock reading that would not strictly advance the stored deadline,
   exact-expiry calls, stale handles, wrong owners, and wrong named connections fail closed without
-  extending the lease. Workers do not yet renew automatically, so callers must renew before expiry
-  when handling long-running work.
+  extending the lease. The worker kernel renews finite leases automatically while a synchronous
+  handler remains active.
 - Treats the configured timezone-aware clock as an operational trust boundary. Deployments must keep
   worker clocks synchronized and choose a lease longer than their bounded clock skew; a fast clock can
   cause early redelivery, but the newer generation still fences stale queue settlement. Existing
@@ -66,6 +66,17 @@ concurrent shutdown callers. It cannot preempt a synchronous driver operation al
 including `reserve`, settlement, renewal, or `close`. Drivers must therefore operationally bound every
 synchronous operation themselves. In particular, runtime close invokes driver close in the calling
 thread rather than starting unsafe background cleanup that could outlive the runtime's ownership.
+
+Runtime drain stops intake and lets admitted work finish. Runtime close additionally signals one
+worker-owned cancellation token to each active handler that implements `CooperativeJobHandler` by
+declaring `cooperative_cancellation = True` and providing synchronous
+`invoke(job, *, cancellation) -> None`.
+Container-resolved handlers observe that exact token through their invocation context. A cooperative
+return releases the latest renewed reservation only after handler scope disposal; it does not record
+idempotency or acknowledge the job. Legacy handlers remain graceful-drain-only. A handler that ignores
+cancellation is never released while its side effects may still continue: close can time out in the
+draining state, renewal remains active, and a later close can finish after the handler exits. This is
+in-process cooperation, not thread preemption, process supervision, or exactly-once execution.
 
 ## Capability boundaries
 
