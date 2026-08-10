@@ -12,6 +12,12 @@ from af.queue.contracts import (
 from af.queue.database import DatabaseQueueDriver
 from af.queue.database_manager import database_queue_registration
 from af.queue.manager import QueueDriver, QueueFeature, QueueManager, bind_queue_manager
+from af.queue.runtime import (
+    ContainerJobHandlerFactory,
+    WorkerRuntime,
+    WorkerRuntimeKernel,
+    WorkerRuntimeState,
+)
 from af.queue.sync import SyncQueueDriver
 from af.queue.sync_manager import sync_queue_registration
 from af.queue.worker import (
@@ -25,6 +31,7 @@ from af.queue.worker import (
 )
 
 __all__ = (
+    "ContainerJobHandlerFactory",
     "DatabaseQueueDriver",
     "IdempotencyClaim",
     "IdempotencyStore",
@@ -42,6 +49,9 @@ __all__ = (
     "SyncQueueDriver",
     "UnsupportedQueueFeature",
     "WorkerKernel",
+    "WorkerRuntime",
+    "WorkerRuntimeKernel",
+    "WorkerRuntimeState",
     "WorkerState",
     "WorkerStats",
     "bind_queue_manager",

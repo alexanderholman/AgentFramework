@@ -46,7 +46,11 @@ class QueueFeature(StrEnum):
 
 
 class QueueDriver(Protocol):
-    """Minimum synchronous backend contract owned by QueueManager."""
+    """Minimum synchronous backend contract owned by QueueManager.
+
+    Every operation, including ``close``, is an operationally bounded trust boundary;
+    callers cannot safely preempt an implementation blocked inside a synchronous call.
+    """
 
     def dispatch(self, job: QueueJob, /) -> QueueDispatchReceipt: ...
 

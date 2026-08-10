@@ -251,6 +251,32 @@ def test_worker_kernel_run_loop_rejects_invalid_handler_before_polling() -> None
     assert driver.rejected == []
 
 
+def test_worker_kernel_run_loop_idle_wait_is_interruptible() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+    stop = Event()
+    failures: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                lambda job: None,
+                poll_interval=timedelta(seconds=30),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+
+    thread.start()
+    stop.set()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+
+
 def test_worker_kernel_tracks_runtime() -> None:
     driver = _make_driver()
     kernel = WorkerKernel(driver, clock=lambda: _NOW)
