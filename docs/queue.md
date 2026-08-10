@@ -61,6 +61,12 @@ ambiguous renewal failure suppresses stale settlement but cannot stop handler si
 progress. Queue driver operations, including renewal, remain synchronous trust boundaries and must be
 operationally bounded; shutdown timeouts do not interrupt a blocked driver call.
 
+The owned worker runtime's timeout bounds admission waits, worker joins, and coordination between
+concurrent shutdown callers. It cannot preempt a synchronous driver operation already executing,
+including `reserve`, settlement, renewal, or `close`. Drivers must therefore operationally bound every
+synchronous operation themselves. In particular, runtime close invokes driver close in the calling
+thread rather than starting unsafe background cleanup that could outlive the runtime's ownership.
+
 ## Capability boundaries
 
 `QueueJob` can express requested FIFO grouping and transactional dispatch requirements even when the
