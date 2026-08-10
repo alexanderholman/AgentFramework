@@ -96,6 +96,16 @@ def test_cancellation_token_wakes_waiters_from_another_thread() -> None:
     asyncio.run(scenario())
 
 
+def test_cancellation_token_repeated_cancel_and_late_wait_are_idempotent() -> None:
+    token = CancellationToken()
+
+    token.cancel()
+    token.cancel()
+    asyncio.run(token.wait())
+
+    assert token.cancelled
+
+
 def test_context_binding_nests_and_restores_exact_parent() -> None:
     parent = context("parent")
     child = derive_context(parent, causation_id="child-cause")

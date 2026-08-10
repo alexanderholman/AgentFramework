@@ -713,6 +713,32 @@ def test_runtime_retries_failed_active_cancellation_request() -> None:
     assert runtime.state is WorkerRuntimeState.STOPPED
 
 
+def test_runtime_retries_failed_drain_request() -> None:
+    drain_failure = RuntimeError("drain request failed")
+
+    class DrainFailingKernel(_Kernel):
+        def start_draining(self) -> None:
+            self.drains += 1
+            if self.drains == 1:
+                raise drain_failure
+
+    kernel = DrainFailingKernel()
+    runtime = WorkerRuntime(kernel, lambda job: None)
+    runtime.start()
+    assert kernel.all_started.wait(timeout=1)
+
+    with pytest.raises(RuntimeError, match="drain request failed") as failed:
+        runtime.drain(timeout=timedelta(seconds=1))
+    assert failed.value is drain_failure
+    assert kernel.closes == 0
+
+    runtime.close(timeout=timedelta(seconds=1))
+    assert kernel.drains == 2
+    assert kernel.cancellations == 1
+    assert kernel.closes == 1
+    assert runtime.state is WorkerRuntimeState.STOPPED
+
+
 @pytest.mark.parametrize("blocked_operation", ["drain", "cancel"])
 def test_runtime_timeout_bounds_concurrent_shutdown_coordination(
     blocked_operation: str,
