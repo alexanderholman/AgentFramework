@@ -14,6 +14,7 @@ from threading import Condition, Event, RLock, Thread, get_ident
 from types import TracebackType
 from typing import Protocol, cast
 
+from af.framework.context import CancellationToken
 from af.framework.errors import PlatformReason
 from af.observability.signals import TelemetryKind, TelemetryPublisher, TelemetrySignal
 from af.queue.contracts import (
@@ -54,6 +55,22 @@ class JobHandler(Protocol):
     """Callable that processes one queue job."""
 
     def __call__(self, job: QueueJob) -> None: ...
+
+
+class CooperativeJobHandler(Protocol):
+    """Synchronous handler that accepts one worker-owned cancellation token."""
+
+    cooperative_cancellation: bool
+
+    def __call__(self, job: QueueJob) -> None: ...
+
+    def invoke(
+        self,
+        job: QueueJob,
+        /,
+        *,
+        cancellation: CancellationToken,
+    ) -> None: ...
 
 
 class _RenewalDriver(Protocol):
@@ -132,6 +149,10 @@ class _AcknowledgementFailure(Exception):
     def __init__(self, error: BaseException) -> None:
         super().__init__(str(error))
         self.error = error
+
+
+class _CooperativeCancellation(BaseException):
+    """Expected worker-owned cancellation after cooperative execution exits."""
 
 
 @dataclass(slots=True)
@@ -313,6 +334,21 @@ def _validate_handler(consumer: object) -> None:
         raise TypeError("sync queue worker returned an asynchronous result")
 
 
+def _resolve_cooperative_handler(consumer: object) -> CooperativeJobHandler | None:
+    if getattr(consumer, "cooperative_cancellation", None) is not True:
+        return None
+    invoke = getattr(consumer, "invoke", None)
+    if not callable(invoke):
+        raise TypeError("cooperative queue handler requires callable invoke")
+    if inspect.iscoroutinefunction(invoke) or inspect.isasyncgenfunction(invoke):
+        raise TypeError("sync queue worker returned an asynchronous result")
+    try:
+        inspect.signature(invoke).bind(object(), cancellation=CancellationToken())
+    except (TypeError, ValueError) as error:
+        raise TypeError("invalid cooperative signature") from error
+    return cast(CooperativeJobHandler, consumer)
+
+
 def _validate_sync_result(result: object) -> None:
     if inspect.iscoroutine(result):
         result.close()
@@ -398,6 +434,7 @@ class WorkerKernel:
         self._closing = False
         self._draining = False
         self._active_jobs: set[str] = set()
+        self._active_cancellations: dict[str, CancellationToken] = {}
         self._active_threads: set[int] = set()
         self._last_heartbeat: datetime | None = None
         self._last_activity: datetime | None = None
@@ -440,6 +477,14 @@ class WorkerKernel:
         """Stop reserving new work while admitted jobs finish or settle."""
         with self._condition:
             self._draining = True
+            self._condition.notify_all()
+
+    def cancel_active(self) -> None:
+        """Stop intake, then ask active cooperative handlers to exit."""
+        with self._condition:
+            self._draining = True
+            for cancellation in self._active_cancellations.values():
+                cancellation.cancel()
             self._condition.notify_all()
 
     def close(self, *, timeout: timedelta | None = None) -> None:
@@ -518,11 +563,14 @@ class WorkerKernel:
         *,
         lane: str | None = None,
     ) -> QueueReservation | None:
+        cooperative_handler = _resolve_cooperative_handler(consumer)
         reservation = self._admit(lane=lane)
         if reservation is None:
             return None
 
         message_id = reservation.job.envelope.metadata.message_id
+        with self._condition:
+            cancellation = self._active_cancellations[message_id]
         started = self._clock()
         lag = max(
             timedelta(0),
@@ -564,11 +612,48 @@ class WorkerKernel:
                     duplicate = claim.already_processed
                     if not duplicate:
                         with self._scope_factory(reservation.job):
-                            sync_consumer = cast(Callable[[QueueJob], object], consumer)
-                            result = sync_consumer(reservation.job)
+                            if cooperative_handler is not None and cancellation.cancelled:
+                                result = None
+                            elif cooperative_handler is not None:
+                                cooperative_invoke = cast(
+                                    Callable[..., object],
+                                    cooperative_handler.invoke,
+                                )
+                                result = cooperative_invoke(
+                                    reservation.job,
+                                    cancellation=cancellation,
+                                )
+                            else:
+                                sync_consumer = cast(Callable[[QueueJob], object], consumer)
+                                result = sync_consumer(reservation.job)
                             _validate_sync_result(result)
+                        with self._condition:
+                            cooperative_cancelled = (
+                                cooperative_handler is not None and cancellation.cancelled
+                            )
+                            self._active_cancellations.pop(message_id, None)
+                        if cooperative_cancelled:
+                            raise _CooperativeCancellation
                         claim.record()
+            except _CooperativeCancellation as cooperative_cancellation:
+                self._increment("cancellations")
+                try:
+                    reservation = renewal.finish()
+                    self._observe_renewal(observation, renewal)
+                except BaseException as renewal_error:
+                    self._observe_renewal_failure(observation, renewal, renewal_error)
+                    raise BaseExceptionGroup(
+                        "queue cancellation and renewal both failed",
+                        (cooperative_cancellation, renewal_error),
+                    ) from None
+                observation.reason = "cancellation"
+                self._release_cancelled(reservation, cooperative_cancellation)
+                observation.outcome = "released"
+                observation.settlement = "release"
+                return reservation
             except Exception as error:
+                with self._condition:
+                    self._active_cancellations.pop(message_id, None)
                 self._increment("jobs_failed")
                 try:
                     reservation = renewal.finish()
@@ -586,6 +671,8 @@ class WorkerKernel:
                 observation.settlement = settlement
                 raise _SettledJobFailure(error) from error
             except BaseException as cancellation:
+                with self._condition:
+                    self._active_cancellations.pop(message_id, None)
                 self._increment("cancellations")
                 try:
                     reservation = renewal.finish()
@@ -646,6 +733,7 @@ class WorkerKernel:
                     self._stats,
                     total_runtime=self._stats.total_runtime + elapsed,
                 )
+                self._active_cancellations.pop(message_id, None)
                 self._active_jobs.discard(message_id)
                 self._active_threads.discard(get_ident())
                 self._last_activity = finished_at
@@ -719,6 +807,7 @@ class WorkerKernel:
                 return None
 
             self._active_jobs.add(message_id)
+            self._active_cancellations[message_id] = CancellationToken()
             self._active_threads.add(get_ident())
             self._state = WorkerState.PROCESSING
             saturation = len(self._active_jobs) / self._max_concurrency

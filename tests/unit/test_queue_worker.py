@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from af.framework.context import CancellationToken
 from af.framework.errors import PlatformReason
 from af.messaging import EnvelopeKind, MessageEnvelope, MessageMetadata
 from af.observability import (
@@ -36,6 +37,7 @@ _NOW = datetime(2026, 8, 1, 15, tzinfo=UTC)
 
 def test_queue_public_api_exports_worker_reliability_boundaries() -> None:
     from af.queue import (
+        CooperativeJobHandler,
         IdempotencyClaim,
         IdempotencyStore,
         InMemoryIdempotencyStore,
@@ -43,6 +45,7 @@ def test_queue_public_api_exports_worker_reliability_boundaries() -> None:
     )
 
     assert IdempotencyClaim is not None
+    assert CooperativeJobHandler is not None
     assert IdempotencyStore is not None
     assert InMemoryIdempotencyStore is not None
     assert JobScopeFactory is not None
@@ -431,6 +434,135 @@ def test_worker_kernel_cancellation_aborts_job() -> None:
     assert driver.released == ["job-cancel"]
     assert kernel.stats.cancellations == 1
     assert kernel.state is WorkerState.IDLE
+
+
+def test_worker_kernel_cooperatively_cancels_active_job_and_releases_it() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+    driver.dispatch(_job("job-cooperative-cancel"))
+    entered = Event()
+    exit_handler = Event()
+    observed: list[CancellationToken] = []
+    failures: list[BaseException] = []
+
+    class Handler:
+        cooperative_cancellation = True
+
+        def __call__(self, job: QueueJob) -> None:
+            del job
+            raise AssertionError("cooperative handler must use invoke")
+
+        def invoke(
+            self,
+            job: QueueJob,
+            /,
+            *,
+            cancellation: CancellationToken,
+        ) -> None:
+            del job
+            observed.append(cancellation)
+            entered.set()
+            assert exit_handler.wait(timeout=2)
+
+    def run() -> None:
+        try:
+            kernel.run_once(Handler())
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    assert entered.wait(timeout=2)
+
+    kernel.cancel_active()
+
+    assert observed[0].cancelled
+    assert driver.released == []
+    exit_handler.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert failures == []
+    assert driver.released == ["job-cooperative-cancel"]
+    assert driver.acked == []
+    assert kernel.stats.cancellations == 1
+
+
+def test_worker_kernel_does_not_reclassify_legacy_handler_as_cooperative() -> None:
+    driver = _make_driver()
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+    driver.dispatch(_job("job-legacy-drain"))
+    entered = Event()
+    exit_handler = Event()
+
+    def handler(job: QueueJob) -> None:
+        del job
+        entered.set()
+        assert exit_handler.wait(timeout=2)
+
+    thread = Thread(target=kernel.run_once, args=(handler,))
+    thread.start()
+    assert entered.wait(timeout=2)
+
+    kernel.cancel_active()
+    exit_handler.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert driver.acked == ["job-legacy-drain"]
+    assert driver.released == []
+    assert kernel.stats.jobs_processed == 1
+    assert kernel.stats.cancellations == 0
+
+
+def test_worker_kernel_rejects_invalid_cooperative_signature_before_reserving() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-invalid-cooperative"))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    class Handler:
+        cooperative_cancellation = True
+
+        def __call__(self, job: QueueJob) -> None:
+            del job
+
+        def invoke(self) -> None:
+            return
+
+    with pytest.raises(TypeError, match="cooperative signature"):
+        kernel.run_once(Handler())
+
+    assert driver.queued_message_ids == ["job-invalid-cooperative"]
+    assert driver.retried == []
+    assert driver.rejected == []
+
+
+def test_worker_kernel_validates_cooperative_handler_result() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-invalid-cooperative-result", max_attempts=2))
+    kernel = WorkerKernel(driver, clock=lambda: _NOW)
+
+    class Handler:
+        cooperative_cancellation = True
+
+        def __call__(self, job: QueueJob) -> None:
+            del job
+
+        def invoke(
+            self,
+            job: QueueJob,
+            /,
+            *,
+            cancellation: CancellationToken,
+        ) -> object:
+            del job, cancellation
+            return 1
+
+    with pytest.raises(TypeError, match="return None"):
+        kernel.run_once(Handler())
+
+    assert driver.acked == []
+    assert driver.retried == ["job-invalid-cooperative-result"]
 
 
 # -- WorkerKernel idempotency -------------------------------------------------
@@ -1510,6 +1642,61 @@ def test_worker_renews_long_running_delivery_and_acks_latest_handle() -> None:
     assert result[0].reservation_id == driver.acked_reservations[0].reservation_id
     assert result[0].reservation_id == driver.latest_reservation_id
     assert driver.renewal_count >= 2
+    kernel.close()
+
+
+def test_worker_cooperative_cancellation_releases_latest_renewed_handle_once() -> None:
+    driver = _RenewingQueueDriver()
+    driver.dispatch(_job("renew-cooperative-cancel"))
+    kernel = WorkerKernel(
+        driver,
+        renewal_min_interval=timedelta(milliseconds=10),
+        renewal_max_interval=timedelta(milliseconds=25),
+    )
+    entered = Event()
+    exit_handler = Event()
+    failures: list[BaseException] = []
+
+    class Handler:
+        cooperative_cancellation = True
+
+        def __call__(self, job: QueueJob) -> None:
+            del job
+
+        def invoke(
+            self,
+            job: QueueJob,
+            /,
+            *,
+            cancellation: CancellationToken,
+        ) -> None:
+            del job
+            entered.set()
+            assert exit_handler.wait(timeout=2)
+            assert cancellation.cancelled
+
+    def run() -> None:
+        try:
+            kernel.run_once(Handler())
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    assert entered.wait(timeout=2)
+    assert driver.renewed_twice.wait(timeout=2)
+
+    kernel.cancel_active()
+    exit_handler.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert failures == []
+    assert len(driver.released_reservations) == 1
+    assert driver.released_reservations[0].reservation_id == driver.latest_reservation_id
+    assert driver.acked_reservations == []
+    assert driver.retried_reservations == []
+    assert driver.rejected_reservations == []
     kernel.close()
 
 
