@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from threading import Lock
 from typing import cast
 
 from af.framework.errors import PlatformError, PlatformReason
@@ -91,17 +92,51 @@ class TraceContext:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class CancellationToken:
-    _event: asyncio.Event = field(default_factory=asyncio.Event, compare=False)
+    _cancelled: bool = field(default=False, init=False, compare=False)
+    _lock: Lock = field(default_factory=Lock, init=False, compare=False)
+    _waiters: set[asyncio.Future[None]] = field(
+        default_factory=set,
+        init=False,
+        compare=False,
+    )
 
     @property
     def cancelled(self) -> bool:
-        return self._event.is_set()
+        with self._lock:
+            return self._cancelled
 
     def cancel(self) -> None:
-        self._event.set()
+        with self._lock:
+            if self._cancelled:
+                return
+            object.__setattr__(self, "_cancelled", True)
+            waiters = tuple(self._waiters)
+        for waiter in waiters:
+            try:
+                waiter.get_loop().call_soon_threadsafe(self._wake, waiter)
+            except RuntimeError:
+                # A closed waiter loop no longer has an observer to notify.
+                with self._lock:
+                    self._waiters.discard(waiter)
+                continue
 
     async def wait(self) -> None:
-        await self._event.wait()
+        loop = asyncio.get_running_loop()
+        waiter = loop.create_future()
+        with self._lock:
+            if self._cancelled:
+                return
+            self._waiters.add(waiter)
+        try:
+            await waiter
+        finally:
+            with self._lock:
+                self._waiters.discard(waiter)
+
+    @staticmethod
+    def _wake(waiter: asyncio.Future[None]) -> None:
+        if not waiter.done():
+            waiter.set_result(None)
 
     def __repr__(self) -> str:
         return f"CancellationToken(cancelled={self.cancelled})"
