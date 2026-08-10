@@ -331,6 +331,10 @@ class WorkerKernel:
     admission lock. ``start_draining`` stops all new reservations; work already admitted
     is allowed to settle before ``close`` releases the driver.
 
+    Driver operations are synchronous, operationally bounded trust boundaries. A close
+    timeout bounds waiting for admitted work but cannot preempt a blocked driver call,
+    including the driver's own ``close`` operation.
+
     Durable exactly-once business effects are deliberately not claimed. An injected
     ``IdempotencyStore`` records only after the job scope exits successfully and before the
     queue acknowledgement. If recording fails, the delivery is retried and handler effects
@@ -420,6 +424,11 @@ class WorkerKernel:
     def heartbeat_interval(self) -> timedelta:
         """Configured minimum heartbeat interval."""
         return self._heartbeat_interval
+
+    @property
+    def max_concurrency(self) -> int:
+        """Maximum number of deliveries admitted concurrently."""
+        return self._max_concurrency
 
     @property
     def stats(self) -> WorkerStats:
@@ -659,6 +668,7 @@ class WorkerKernel:
         *,
         lane: str | None = None,
         poll_interval: timedelta = timedelta(milliseconds=100),
+        stop_event: Event | None = None,
     ) -> None:
         """Poll serially until shutdown or drain begins.
 
@@ -669,6 +679,8 @@ class WorkerKernel:
             raise ValueError("worker poll interval must be positive")
         _validate_handler(consumer)
         while True:
+            if stop_event is not None and stop_event.is_set():
+                return
             with self._condition:
                 if self._closed or self._draining:
                     return
@@ -679,7 +691,10 @@ class WorkerKernel:
             except _SettledJobFailure:
                 continue
             if reservation is None:
-                time.sleep(poll_interval.total_seconds())
+                if stop_event is None:
+                    time.sleep(poll_interval.total_seconds())
+                elif stop_event.wait(timeout=poll_interval.total_seconds()):
+                    return
 
     def _admit(self, *, lane: str | None) -> QueueReservation | None:
         with self._condition:
