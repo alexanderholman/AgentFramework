@@ -12,6 +12,10 @@ REPO_ROOT = Path(__file__).parents[2]
 EPIC_WORKER = REPO_ROOT / "scripts" / "af_epic_worker"
 
 
+def test_epic_worker_is_directly_executable() -> None:
+    assert os.access(EPIC_WORKER, os.X_OK)
+
+
 def _executable(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
     path.chmod(0o755)

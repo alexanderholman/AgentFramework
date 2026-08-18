@@ -3024,6 +3024,8 @@ network, subagent, configuration, and credential authority.
 - Added: `scripts/verify_epic_worker_policy.py`
 - Tested by: `tests/unit/test_epic_worker.py`, `tests/unit/test_epic_worker_policy.py`
 
+---
+
 ## [DEC-053] Admit Only Credentialless Loopback Models to Epic Checkpoints
 **Date**: 2026-08-05
 **Status**: Accepted
@@ -3949,3 +3951,41 @@ ranking even if each profile were independently valid.
 - Updated: `src/af/application/worker_qualification.py`
 - Added: `tests/unit/test_worker_optimization_selection.py`
 - Related: issue #21
+
+---
+
+## [DEC-077] Authorize Worker Optimization Before Candidate Inspection
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The deterministic selector could compare safe qualified candidates, but callers still had to join
+authorization, target binding, selection, and recording themselves. That allowed an interface to
+inspect candidate evidence or promote a profile without proving operator authority for the exact
+backend environment.
+
+### Decision
+1. Add an application-layer `WorkerOptimizationControlService` behind the central `Gate`.
+2. Require the caller to declare the canonical driver and environment digest being authorized.
+3. Authorize that exact target before candidate iteration so default denial leaks no candidate
+   information and causes no recorder effect.
+4. Reuse the existing selector and reject any selected target that differs from the authorized
+   declaration.
+5. Inject a synchronous recorder receiving the complete selection and priorities, preserving the
+   selection digest without coupling the application layer to a filesystem or presentation.
+6. Treat every asynchronous or value-returning recorder as a contract violation and propagate
+   recorder failures without issuing success evidence.
+
+### Consequences
+- A wizard or operator interface now has one fail-closed promotion boundary instead of manually
+  composing policy and selection.
+- Pure selection remains deterministic and infrastructure-neutral; recording storage and evidence
+  authentication remain separate adapters.
+- This slice does not fabricate normalized measurements or qualify any real service, and issue #21
+  remains open for those gates and independent review.
+
+### Output References
+- Added: `src/af/application/worker_optimization_control.py`
+- Added: `tests/unit/test_worker_optimization_control.py`
+- Related: SPEC-062 and issue #21

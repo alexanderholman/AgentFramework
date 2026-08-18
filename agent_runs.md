@@ -3335,3 +3335,113 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
   claimed.
 - Direct governance completed 36/36; release declaration, registry schema, dry-run convention,
   repeatable-script references, byte-compilation, and the Node route gate passed 9/9.
+
+---
+
+## Run #061 - Authorized Worker Optimization Promotion Boundary
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, PR comments, reviews, open PRs, and
+  issue-named branches
+- PR #206 is the only active issue #21 branch/PR, is open and mergeable, and has no review or
+  comments; the operator hold remains active for this automation run
+- SPEC-061/DEC-076's explicit remaining protected operator-service boundary
+
+### Outputs
+- Added central default-deny authorization before candidate iteration or recorder effects
+- Bound promotion authority to one canonical driver and exact environment digest
+- Reused deterministic safe-candidate selection and rejected authorized-target drift
+- Added a synchronous recorder port receiving the complete selection, priorities, digest, and UTC
+  operation time
+- Added redacted promotion evidence and fail-closed asynchronous/malformed recorder handling
+
+### Verified Results
+- Intended test collection failed because the control module did not exist
+- After implementation, 17 focused tests passed with 100% statement and branch coverage
+- Focused Ruff format/lint and strict mypy passed
+- No normalized measurement, qualification, service result, publication, merge, acceptance, or
+  closure is claimed
+
+### Remaining Work
+- Run the locked aggregate, governance, Node, and package gates for this checkpoint
+- Implement an authorized evidence-ingress/normalization adapter backed by applicable real-service
+  measurements; do not treat caller indices as authenticated evidence
+- Obtain exact-head independent review and real-service qualification before merging or closing
+  issue #21
+
+### Related References
+- SPEC-062
+- DEC-077
+- Issue #21 and PR #206
+
+### Validation Addendum
+- Locked production declaration, Ruff format across 377 files, Ruff lint, and strict mypy across
+  194 source files passed.
+- Locked pytest collected 2,975 tests and completed with 2,922 passed, 52 applicable real-service
+  skips, and the one expected synthetic-history topology failure; branch coverage passed at 90.03%.
+- The sole failure cannot resolve historical commit `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`
+  because this connector-reconstructed checkout contains exact branch blobs but synthetic Git
+  ancestry. No full aggregate pass is claimed.
+
+---
+
+## Run #062 - PR 206 Review-Invariant Repair
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Review blockers repaired locally; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, PR comments, review submissions,
+  review threads, open PRs, and issue-named branches
+- PR #206 remains the only active issue #21 pull request and is open and mergeable
+- Automated review at commit `61609bb0e9` reported two P1 blockers: lost executable mode on
+  `scripts/af_epic_worker` and removal of the governed separator before DEC-053
+- Issue #177 still permits only directly supervised bounded publication; this unattended run did
+  not push, merge, mutate issue state, resolve review threads, or claim acceptance completion
+
+### Outputs
+- Restored the exact `---` separator and blank-line framing before DEC-053, matching the immutable
+  default-branch bytes rather than appending a replacement decision
+- Confirmed the reconstructed checkpoint tree stores `scripts/af_epic_worker` as mode `100755`
+- Added a direct-execution regression test that fails for mode `0644` and passes for mode `0755`
+- Preserved the executable-mode correction as an explicit required tree entry for supervised
+  publication because the local reconstruction already contained the correct mode and therefore
+  cannot express it as a new mode-only diff against its synthetic parent
+
+### Verified Results
+- Intended failure: with the worker changed to mode `0644`, the new focused test failed because
+  `os.access(..., os.X_OK)` returned false
+- After restoration to mode `0755`, the executable regression and append-only mutation regression
+  passed 2/2
+- Locked release declaration, Ruff format across 377 files, Ruff lint, and strict mypy across 194
+  source files passed
+- Locked pytest collected 2,976 tests and completed with 2,923 passed, 52 applicable real-service
+  skips, and only the known synthetic-history topology failure; branch coverage passed at 90.03%
+- Node route authorization passed 9/9
+- The clean package gate passed: sdist SHA-256
+  `c04ab2744c94bdd11918d3d8647ecbe805fda7a5f5da09e9067edd06e55729e9`; wheel SHA-256
+  `5a41b418e69ddbf315a4e59b9476bbbe389a593638012cddce00c970738c5100`
+- The first direct governance run passed 35/36: its sole failure compared the repaired historical
+  separator with the immediately preceding synthetic checkpoint. A final clean-head rerun is
+  required after this append-only run record is committed; no governance pass is claimed yet
+
+### Remaining Work
+- Re-run direct governance and package gates from the clean final local head
+- During directly supervised publication, construct the GitHub tree with
+  `scripts/af_epic_worker` mode `100755`; updating file contents alone cannot repair Git mode
+- Obtain exact-head independent review and resolve both P1 findings before any bounded merge
+- Continue issue #21 with authenticated real-service evidence ingress/normalization and complete
+  criterion-mapped qualification; this repair does not close issue #21
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- After committing the repair and its append-only record, direct governance passed 36/36 from a
+  clean head; this supersedes the interim 35/36 result without rewriting it
+- The clean package gate passed again with the same sdist and wheel digests recorded above

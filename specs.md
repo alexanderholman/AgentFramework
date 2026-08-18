@@ -2927,3 +2927,42 @@ priorities without inventing measurements, comparing unlike targets, or hiding t
 - SPEC-060 (measured worker qualification recording)
 - SPEC-058 (verified backend-specific worker generation)
 - Issue #21
+
+---
+
+## [SPEC-062] Authorized Exact-Target Worker Optimization Promotion
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Authorize one exact worker backend/environment target before inspecting candidates, then select and
+hand the complete auditable result to an injected synchronous recorder.
+
+### Requirements
+- Promotion MUST require operator-evaluation scope through the central default-deny `Gate` before
+  candidate iteration, selection, or recording.
+- Authorization MUST bind the canonical driver name and exact environment SHA-256 digest.
+- Selection MUST reuse `WorkerOptimizationSelector`; the control service MUST NOT synthesize
+  measurements, indices, priorities, or qualification evidence.
+- The selected qualification MUST match the authorized driver and environment before recording.
+- The recorder MUST receive the complete selection, exact priorities, selection digest, and one
+  aware UTC operation time, and MUST return synchronously with no result.
+- Recorder failure MUST propagate unchanged; coroutine, awaitable, async-generator, or non-`None`
+  results MUST fail closed and MUST NOT produce promotion evidence.
+- Successful promotion evidence MUST retain the allowing decision while redacting the selected
+  qualification from its representation.
+
+### Tests
+- **TEST-062-1**: Default denial occurs before a deliberately uninspectable candidate iterable and
+  makes no recorder call.
+- **TEST-062-2**: Allowing exact-target authorization selects the deterministic winner and records
+  the exact selection, priorities, digest, and UTC time once.
+- **TEST-062-3**: Declared driver or environment drift fails before recording.
+- **TEST-062-4**: Recorder failure and invalid synchronous-boundary results produce no success.
+- **TEST-062-5**: Composition, time, target, and promotion value boundaries reject malformed input.
+
+### Related Specs
+- SPEC-061 (explicit worker optimization objective policy)
+- SPEC-060 (measured worker qualification recording)
+- Issue #21
