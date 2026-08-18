@@ -87,3 +87,4 @@ before driver execution so unsupported semantics fail closed instead of being si
 Future Redis, RabbitMQ, SQS, and Beanstalkd drivers must document their exact acknowledgement,
 ordering, visibility, retry, and dead-letter behavior with real-service conformance evidence before
 claiming those capabilities.
+

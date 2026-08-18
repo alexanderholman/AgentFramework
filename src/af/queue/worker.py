@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -133,6 +134,36 @@ class InMemoryIdempotencyStore:
 
 
 JobScopeFactory = Callable[[QueueJob], AbstractContextManager[None]]
+
+
+class WorkerAdmissionGate(Protocol):
+    """Fail-closed host-resource admission before a queue reservation is acquired."""
+
+    def __call__(
+        self,
+        *,
+        lane: str | None,
+        active_jobs: int,
+        max_concurrency: int,
+    ) -> bool | WorkerAdmissionPermit: ...
+
+
+class WorkerAdmissionPermit(Protocol):
+    """One acquired host-resource capability held for a delivery lifecycle."""
+
+    def release(self) -> None: ...
+
+
+class WorkerConnectionRecycler(Protocol):
+    """Post-settlement cleanup for worker-owned backend connections."""
+
+    def recycle(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedDelivery:
+    reservation: QueueReservation
+    permit: WorkerAdmissionPermit | None = None
 
 
 class _SettledJobFailure(Exception):
@@ -387,6 +418,9 @@ class WorkerKernel:
         max_idle_time: timedelta | None = None,
         idempotency: IdempotencyStore | None = None,
         scope_factory: JobScopeFactory | None = None,
+        admission_gate: WorkerAdmissionGate | None = None,
+        connection_recycler: WorkerConnectionRecycler | None = None,
+        driver_close: Callable[[], object] | None = None,
         telemetry: TelemetryPublisher | None = None,
         queue_wait_alert_after: timedelta | None = None,
         renewal_min_interval: timedelta = timedelta(milliseconds=100),
@@ -406,6 +440,21 @@ class WorkerKernel:
             raise TypeError("worker idempotency store requires callable claim")
         if scope_factory is not None and not callable(scope_factory):
             raise TypeError("worker scope factory must be callable")
+        if admission_gate is not None and not callable(admission_gate):
+            raise TypeError("worker resource admission gate must be callable")
+        if connection_recycler is not None:
+            recycle = getattr(connection_recycler, "recycle", None)
+            if not callable(recycle):
+                raise TypeError("worker connection recycler requires callable recycle")
+            if inspect.iscoroutinefunction(recycle) or inspect.isasyncgenfunction(recycle):
+                raise TypeError("worker connection recycler must be synchronous")
+        if driver_close is not None:
+            if not callable(driver_close):
+                raise TypeError("worker driver close boundary must be callable")
+            if inspect.iscoroutinefunction(driver_close) or inspect.isasyncgenfunction(
+                driver_close
+            ):
+                raise TypeError("worker driver close boundary must be synchronous")
         if telemetry is not None and not isinstance(telemetry, TelemetryPublisher):
             raise TypeError("worker telemetry publisher is invalid")
         if queue_wait_alert_after is not None and queue_wait_alert_after <= timedelta(0):
@@ -423,6 +472,9 @@ class WorkerKernel:
         self._max_idle_time = max_idle_time
         self._idempotency = idempotency
         self._scope_factory = scope_factory or (lambda job: nullcontext())
+        self._admission_gate = admission_gate
+        self._connection_recycler = connection_recycler
+        self._driver_close = driver.close if driver_close is None else driver_close
         self._telemetry = telemetry
         self._queue_wait_alert_after = queue_wait_alert_after
         self._renewal_min_interval = renewal_min_interval
@@ -438,6 +490,7 @@ class WorkerKernel:
         self._active_threads: set[int] = set()
         self._last_heartbeat: datetime | None = None
         self._last_activity: datetime | None = None
+        self._queue_wait_alert_active = False
         self._stats = WorkerStats()
         self._condition = Condition(RLock())
 
@@ -515,7 +568,14 @@ class WorkerKernel:
                 self._condition.wait(timeout=remaining)
             self._closing = True
         try:
-            self._driver.close()
+            result = self._driver_close()
+            if inspect.iscoroutine(result):
+                result.close()
+                raise TypeError("worker driver close boundary returned an asynchronous result")
+            if inspect.isawaitable(result) or inspect.isasyncgen(result):
+                raise TypeError("worker driver close boundary returned an asynchronous result")
+            if result is not None:
+                raise TypeError("worker driver close boundary must return None")
         except BaseException:
             with self._condition:
                 self._closing = False
@@ -564,9 +624,11 @@ class WorkerKernel:
         lane: str | None = None,
     ) -> QueueReservation | None:
         cooperative_handler = _resolve_cooperative_handler(consumer)
-        reservation = self._admit(lane=lane)
-        if reservation is None:
+        admitted = self._admit(lane=lane)
+        if admitted is None:
             return None
+        reservation = admitted.reservation
+        permit = admitted.permit
 
         message_id = reservation.job.envelope.metadata.message_id
         with self._condition:
@@ -726,6 +788,12 @@ class WorkerKernel:
             self._increment("duplicates" if duplicate else "jobs_processed")
             return reservation
         finally:
+            active_failure = sys.exception()
+            finalization_failure: BaseException | None = None
+            try:
+                self._finalize_delivery_resources(permit, active_failure=active_failure)
+            except BaseException as error:
+                finalization_failure = error
             finished_at = self._clock()
             elapsed = finished_at - started
             with self._condition:
@@ -749,6 +817,8 @@ class WorkerKernel:
                     lag=lag,
                     saturation=saturation,
                 )
+            if finalization_failure is not None:
+                raise finalization_failure.with_traceback(finalization_failure.__traceback__)
 
     def run_loop(
         self,
@@ -784,7 +854,8 @@ class WorkerKernel:
                 elif stop_event.wait(timeout=poll_interval.total_seconds()):
                     return
 
-    def _admit(self, *, lane: str | None) -> QueueReservation | None:
+    def _admit(self, *, lane: str | None) -> _AdmittedDelivery | None:
+        active_jobs = 0
         with self._condition:
             if self._closed:
                 raise QueueOperationError(
@@ -796,13 +867,52 @@ class WorkerKernel:
             self._update_heartbeat(now)
             if self._draining or len(self._active_jobs) >= self._max_concurrency:
                 return None
+            active_jobs = len(self._active_jobs)
 
-            reservation = self._driver.reserve(lane=lane)
+        admission_gate = self._admission_gate
+        permit: WorkerAdmissionPermit | None = None
+        if admission_gate is not None:
+            decision = admission_gate(
+                lane=lane,
+                active_jobs=active_jobs,
+                max_concurrency=self._max_concurrency,
+            )
+            if type(decision) is bool:
+                if not decision:
+                    return None
+            else:
+                release = getattr(decision, "release", None)
+                if not callable(release):
+                    raise TypeError("worker admission permit requires callable release")
+                permit = decision
+
+        with self._condition:
+            if self._is_closed():
+                error = QueueOperationError(
+                    reason=PlatformReason.SHUTDOWN_FAILED,
+                    stage="queue.worker.admission",
+                )
+                self._release_admission_permit(permit, active_failure=error)
+                raise error
+            if self._draining or len(self._active_jobs) >= self._max_concurrency:
+                self._release_admission_permit(permit)
+                return None
+            try:
+                reservation = self._driver.reserve(lane=lane)
+            except BaseException as error:
+                self._release_admission_permit(permit, active_failure=error)
+                raise
             if reservation is None:
+                self._release_admission_permit(permit)
                 return None
             message_id = reservation.job.envelope.metadata.message_id
             if message_id in self._active_jobs:
-                self._driver.retry(reservation)
+                try:
+                    self._driver.retry(reservation)
+                except BaseException as error:
+                    self._release_admission_permit(permit, active_failure=error)
+                    raise
+                self._release_admission_permit(permit)
                 self._stats = replace(self._stats, retries=self._stats.retries + 1)
                 return None
 
@@ -818,7 +928,68 @@ class WorkerKernel:
                 lag=max(self._stats.lag, lag),
                 saturation=max(self._stats.saturation, saturation),
             )
-            return reservation
+            return _AdmittedDelivery(reservation=reservation, permit=permit)
+
+    @staticmethod
+    def _release_admission_permit(
+        permit: WorkerAdmissionPermit | None,
+        *,
+        active_failure: BaseException | None = None,
+    ) -> None:
+        if permit is None:
+            return
+        try:
+            permit.release()
+        except BaseException as release_failure:
+            if active_failure is not None:
+                raise BaseExceptionGroup(
+                    "queue delivery and resource permit release both failed",
+                    (active_failure, release_failure),
+                ) from None
+            raise
+
+    def _finalize_delivery_resources(
+        self,
+        permit: WorkerAdmissionPermit | None,
+        *,
+        active_failure: BaseException | None,
+    ) -> None:
+        cleanup_failures: list[BaseException] = []
+        recycler = self._connection_recycler
+        if recycler is not None:
+            try:
+                recycle = cast(Callable[[], object], recycler.recycle)
+                result = recycle()
+                if inspect.iscoroutine(result):
+                    result.close()
+                    raise TypeError("worker connection recycler returned an asynchronous result")
+                if inspect.isawaitable(result) or inspect.isasyncgen(result):
+                    raise TypeError("worker connection recycler returned an asynchronous result")
+                if result is not None:
+                    raise TypeError("worker connection recycler must return None")
+            except BaseException as recycle_failure:
+                cleanup_failures.append(recycle_failure)
+        try:
+            self._release_admission_permit(permit)
+        except BaseException as release_failure:
+            cleanup_failures.append(release_failure)
+        if not cleanup_failures:
+            return
+        exposed_failure = active_failure
+        if isinstance(active_failure, (_SettledJobFailure, _AcknowledgementFailure)):
+            exposed_failure = active_failure.error
+        failures = (
+            tuple(cleanup_failures)
+            if exposed_failure is None
+            else (exposed_failure, *cleanup_failures)
+        )
+        if len(failures) == 1:
+            failure = failures[0]
+            raise failure.with_traceback(failure.__traceback__)
+        raise BaseExceptionGroup(
+            "queue delivery and resource cleanup failed",
+            failures,
+        ) from None
 
     def _settle_failure(self, reservation: QueueReservation, error: Exception) -> str:
         try:
@@ -867,20 +1038,26 @@ class WorkerKernel:
             )
         )
         threshold = self._queue_wait_alert_after
-        if threshold is not None and lag > threshold:
-            self._publish_telemetry(
-                TelemetrySignal.create(
-                    kind=TelemetryKind.LOG,
-                    name="queue.worker.wait_alert",
-                    observed_at=observed_at,
-                    context=context,
-                    attributes={
-                        "lag_bucket": _duration_bucket(lag),
-                        "status": "exceeded",
-                        "threshold_bucket": _duration_bucket(threshold),
-                    },
-                )
+        if threshold is None:
+            return
+        exceeded = lag > threshold
+        with self._condition:
+            if exceeded == self._queue_wait_alert_active:
+                return
+            self._queue_wait_alert_active = exceeded
+        self._publish_telemetry(
+            TelemetrySignal.create(
+                kind=TelemetryKind.LOG,
+                name="queue.worker.wait_alert",
+                observed_at=observed_at,
+                context=context,
+                attributes={
+                    "lag_bucket": _duration_bucket(lag),
+                    "status": "exceeded" if exceeded else "recovered",
+                    "threshold_bucket": _duration_bucket(threshold),
+                },
             )
+        )
 
     def _publish_telemetry(self, signal: TelemetrySignal) -> None:
         try:

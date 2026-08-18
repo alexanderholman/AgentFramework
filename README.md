@@ -223,3 +223,4 @@ Do not rewrite append-only history. Add a dated entry at the end and run
 ## License
 
 Copyright © 2019 Alexander Holman. All rights reserved; see [LICENSE](LICENSE).
+

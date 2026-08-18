@@ -1988,3 +1988,942 @@ moving aggregation, persistence, or health semantics into transport adapters.
 ### Related Specs
 - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
 - Issues #27, #29, #33, and #178
+
+---
+
+## [SPEC-039] Fail-Closed Queue Worker Resource Admission Boundary
+**Date**: 2026-08-17
+**Status**: Implemented
+**Priority**: MUST
+
+### Description
+Require the synchronous queue worker kernel to consult an injected host-resource admission gate
+before acquiring a queue reservation. The gate is a policy and capacity boundary; it is not a
+resource allocator, lease repository, or authorization source.
+
+### Requirements
+- MUST invoke the gate before `QueueDriver.reserve` and before incrementing a delivery attempt.
+- MUST expose the requested lane, current active-job count, and configured maximum concurrency.
+- MUST accept only the literal boolean decisions `True` and `False`.
+- MUST treat denial, gate failure, and malformed decisions as zero-reservation outcomes.
+- MUST recheck closed, draining, and concurrency state after an allowed decision so a concurrent
+  lifecycle transition cannot admit new work.
+- MUST NOT let the gate widen scope, authorize work, execute a handler, or mutate a queued job.
+
+### Tests
+- **TEST-039-1**: Denial leaves the job queued, consumes no attempt, and executes no handler.
+- **TEST-039-2**: Gate failure and non-boolean output fail closed before reservation.
+- **TEST-039-3**: A drain that begins while the gate is evaluating prevents later reservation.
+- **TEST-039-4**: A later allowed decision can process the untouched queued job normally.
+
+### Related Specs
+- SPEC-037 (Queue Capability Boundaries and Deterministic Ordering Declarations)
+- Issue #21
+
+## [SPEC-043] Atomic Fenced Resource-Lease Worker Admission
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Acquire an authorization-bound resource lease before queue reservation, retain its latest fencing
+capability for the delivery lifetime, and release and reconcile the capacity after settlement.
+
+### Requirements
+- MUST create leases atomically and reject duplicate identities without overwriting the prior
+  capability.
+- MUST accept only the exact current fencing token for every lifecycle transition; both older and
+  future tokens fail closed.
+- MUST persist transitions by atomic compare-and-swap so concurrent uses of one fence cannot both
+  succeed.
+- MUST bind activation and renewal to the lease authorization digest and prevent scope widening.
+- MUST renew active finite-duration leases using the latest owned fence while a permit is held.
+- MUST stop renewal, release the active lease, and reconcile it when the worker releases the permit.
+- MUST expire and reconcile a reserved lease if activation fails, preserving simultaneous
+  activation and cleanup failures.
+- MUST bind an explicitly selected queue lane into the lease scope and reject conflicting scope.
+- MUST retain the worker's literal boolean denial behavior when concurrency capacity is exhausted.
+
+### Tests
+- **TEST-043-1**: Duplicate creation and non-exact fencing tokens fail without mutating the lease.
+- **TEST-043-2**: Two concurrent renewals using one fence produce one success and one stale-fence
+  rejection.
+- **TEST-043-3**: Worker settlement releases and reconciles its lane-bound lease.
+- **TEST-043-4**: Manual renewal advances expiration and the permit releases using the renewed
+  fence.
+- **TEST-043-5**: Existing resource-lease lifecycle and worker-kernel behaviors remain passing.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- SPEC-042 (held worker resource admission permits)
+- Issues #21 and #46
+
+### SPEC-043 Addendum: Permit-Startup Cleanup
+- MUST release and reconcile an already activated lease if constructing or starting its renewal
+  permit fails.
+- MUST preserve both the permit-startup failure and cleanup failure when both occur.
+- **TEST-043-6**: Renewal-thread construction failure propagates and leaves the activated lease
+  reconciled rather than leaking capacity.
+
+---
+
+## [SPEC-042] Resource Permit Lifecycle at Worker Admission
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Allow a fail-closed worker admission gate to return an acquired host-resource permit and make the
+worker kernel own its exact release across every reservation and delivery outcome.
+
+### Requirements
+- MUST acquire a permit before queue reservation and hold it until delivery settlement completes.
+- MUST release the permit exactly once when the queue is empty or a post-gate drain, shutdown, or
+  concurrency decision prevents reservation.
+- MUST release the permit after success, retry, rejection, duplicate acknowledgement, cancellation,
+  renewal failure, or settlement failure.
+- MUST reject malformed permit objects before reserving work.
+- MUST preserve both the delivery failure and the permit-release failure when they occur together.
+- MUST retain literal boolean admission decisions for policy-only gates while permitting a fenced
+  backend adapter to supply a lifecycle-bearing capability.
+
+### Tests
+- **TEST-042-1**: A permit remains held during handler execution and releases after settlement.
+- **TEST-042-2**: Empty-queue admission releases its permit without consuming work.
+- **TEST-042-3**: A malformed permit reserves no job.
+- **TEST-042-4**: Handler and permit-release failures survive as one exception group.
+- **TEST-042-5**: Existing denial, drain-race, cancellation, renewal, acknowledgement, and shutdown
+  worker behaviors remain passing.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- Issue #21
+- Issue #46
+
+---
+
+## [SPEC-041] Durable Context-Bound Queue Job Tags
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Attach typed worker identities to queue jobs without allowing tags to invent or diverge from the
+message envelope's correlation and tenant security context, and preserve those tags through durable
+relational delivery and recovery.
+
+### Requirements
+- MUST support correlation, opaque tenant, agent, task, and capability identifiers as a typed,
+  immutable queue-job contract.
+- MUST derive correlation and tenant tags from envelope metadata without inspecting the payload.
+- MUST reject correlation or tenant tags that diverge from the envelope security context.
+- MUST redact all tag values from contract representations.
+- MUST persist tags through relational dispatch, restart, reservation, dead-letter inspection, and
+  replay while remaining compatible with pre-tag queue tables and untagged jobs.
+- MUST record the consumed attempt when explicit rejection or retry exhaustion dead-letters a job.
+
+### Tests
+- **TEST-041-1**: Context-derived tags validate, remain accessible to authorized code, and redact
+  every value from `repr`.
+- **TEST-041-2**: Divergent correlation and tenant contexts are rejected before dispatch.
+- **TEST-041-3**: Relational restart preserves agent, task, and capability tags.
+- **TEST-041-4**: Direct rejection records one consumed attempt and tagged dead-letter replay retains
+  tags while rotating the reservation fence.
+
+### Related Specs
+- SPEC-016 (versioned message envelope contracts)
+- SPEC-037 (queue capability boundaries)
+- SPEC-040 (durable queue dead-letter inspection and replay)
+- Issue #21
+- Issue #46
+
+---
+
+## [SPEC-040] Durable Queue Dead-Letter Inspection and Replay
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Expose deterministic inspection and explicit replay of terminal relational queue deliveries while
+preserving payload redaction and reservation fencing.
+
+### Requirements
+- MUST inspect dead letters in deterministic terminal-time and message-ID order with a bounded
+  result count.
+- MUST retain the immutable job for authorized recovery code while keeping payloads out of contract
+  representations.
+- MUST atomically replay only a currently dead-lettered message and fail closed for live, missing,
+  or corrupt records.
+- MUST reset delivery attempts for the new replay series while retaining the monotonically
+  increasing reservation generation so stale settlement capabilities cannot become valid again.
+- MUST clear prior reservation ownership and make replay immediately eligible at the recorded replay
+  time.
+
+### Tests
+- **TEST-040-1**: Inspection returns terminal metadata and the recoverable job without exposing its
+  payload in `repr`.
+- **TEST-040-2**: Replay produces a fresh first attempt with a higher fencing generation.
+- **TEST-040-3**: Replay rejects live and missing identifiers without mutating the live queue.
+
+### Related Specs
+- SPEC-037 (Queue Capability Boundaries and Deterministic Ordering Declarations)
+- Issue #21
+
+---
+
+## [SPEC-044] Post-Settlement Worker Connection Recycling
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Recycle connections owned exclusively by a worker after each reserved delivery settles, while
+keeping shutdown and resource-permit ownership aligned with the full cleanup lifetime.
+
+### Requirements
+- MUST expose one synchronous connection-recycler port on the worker kernel.
+- MUST recycle exactly once after a reserved delivery is acknowledged, retried, rejected, or safely
+  released, and MUST NOT recycle when no delivery was reserved.
+- MUST run recycling after the job scope exits and before releasing the delivery's resource permit.
+- MUST keep the delivery active until recycling and permit cleanup finish so shutdown cannot close
+  the queue driver during cleanup.
+- MUST attempt permit release even when connection recycling fails.
+- MUST preserve the delivery, recycling, and permit-release failures when they occur together.
+- MUST provide a concrete adapter that purges every explicitly worker-owned AF manager and preserves
+  all manager purge failures.
+- MUST NOT imply that application-shared managers are safe to purge from one concurrent worker;
+  ownership remains an explicit composition requirement.
+
+### Tests
+- **TEST-044-1**: Successful execution orders scope exit, acknowledgement, recycling, and permit
+  release without overlap.
+- **TEST-044-2**: Delivery, recycling, and permit-release failures are retained in deterministic
+  order and every cleanup is attempted.
+- **TEST-044-3**: Empty-queue polling does not invoke the recycler.
+- **TEST-044-4**: Shutdown waits while connection recycling is blocked.
+- **TEST-044-5**: The owned-manager adapter purges every configured manager in order.
+- **TEST-044-6**: One manager purge failure does not prevent later managers from being purged.
+
+### Related Specs
+- SPEC-042 (held worker resource admission permits)
+- SPEC-043 (atomic fenced resource-lease worker admission)
+- Issue #21
+
+---
+
+## [SPEC-045] Bounded Worker-Runtime Generation Supervision
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Detect a worker loop that disappears without a requested shutdown and replace failed runtime
+generations only within an explicit, interruptible restart budget.
+
+### Requirements
+- MUST classify a kernel loop that returns before shutdown as a sticky worker-loss failure.
+- MUST stop sibling intake and initiate active cancellation when any owned worker is lost.
+- MUST create every replacement from a runtime factory so kernels, stop events, scopes, and owned
+  connections are not reused across generations.
+- MUST cap replacements with a non-negative restart budget and preserve every generation failure in
+  chronological order when that budget is exhausted.
+- MUST close a failed generation before starting its replacement and MUST fail closed without
+  restarting when bounded cleanup cannot prove that the prior kernel closed.
+- MUST make restart delay interruptible by the external stop event and close the active generation
+  with a bounded shutdown timeout.
+- MUST expose generation, restart, failure-history, and terminal-state evidence without implying
+  process isolation; spawning and crash certification remain separate deployment work.
+
+### Tests
+- **TEST-045-1**: An unexpected kernel-loop return becomes a sticky worker-loss failure and starts
+  draining.
+- **TEST-045-2**: One failed generation is closed and replaced when one restart is available.
+- **TEST-045-3**: Exhausting the budget fails closed with both generation failures in order.
+- **TEST-045-4**: A kernel-close failure prevents an overlapping replacement generation.
+- **TEST-045-5**: A stop request during restart delay prevents another factory invocation.
+- **TEST-045-6**: The supervisor and its lifecycle state are exported from the public queue API.
+
+### Related Specs
+- SPEC-044 (post-settlement worker connection recycling)
+- Issue #21
+
+---
+
+## [SPEC-046] Spawn-Based Worker Process Boundary and Signal Translation
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Run a worker supervisor behind an explicit operating-system process boundary without inheriting
+parent threads or live connection ownership, and translate normal process stop signals into the
+existing cooperative shutdown contract.
+
+### Requirements
+- MUST use the multiprocessing `spawn` context rather than `fork` so child composition begins from
+  a fresh interpreter.
+- MUST invoke the supervisor factory only inside the child process and MUST create a non-daemon
+  child.
+- MUST accept one structural stop-signal contract that works for both thread and multiprocessing
+  events.
+- MUST translate `SIGTERM` and `SIGINT` into cooperative stop requests inside the child and restore
+  every previous handler after supervision exits.
+- MUST request parent-driven shutdown through the shared stop signal and perform a bounded join.
+- MUST leave a timed-out child intact for explicit retry rather than terminating or killing it
+  implicitly.
+- MUST expose PID, exact exit code, lifecycle state, and a sticky sanitized failure for nonzero or
+  missing child exit status.
+- MUST NOT claim crash restart, stale-heartbeat fencing, or cross-process resource certification;
+  those require a parent-level reconciliation policy and real-service evidence.
+
+### Tests
+- **TEST-046-1**: Starting a process does not call the supervisor factory in the parent, and the
+  child target calls it exactly once.
+- **TEST-046-2**: The process is non-daemon and a real spawn child composes, runs, and exits cleanly.
+- **TEST-046-3**: Cooperative close sets the shared stop signal and joins within the supplied bound.
+- **TEST-046-4**: A close timeout is retryable and does not invoke destructive termination.
+- **TEST-046-5**: A nonzero child exit retains the exact exit code and produces sticky failed state.
+- **TEST-046-6**: `SIGTERM` and `SIGINT` handlers set the stop signal and restore prior handlers in
+  reverse order.
+- **TEST-046-7**: Process supervision contracts are exported from the public queue API.
+
+### Related Specs
+- SPEC-045 (bounded worker-runtime generation supervision)
+- Issue #21
+
+### SPEC-046 Verification Addendum
+- Injected process contexts MUST report the `spawn` start method; test seams cannot weaken the
+  fresh-interpreter boundary.
+- **TEST-046-8**: A context reporting `fork` is rejected before an event or child is created.
+
+---
+
+## [SPEC-047] Bounded Parent-Level Worker Process Reconciliation
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Detect an unexpectedly exited worker child at the parent process boundary and create replacement
+process generations only within an explicit, interruptible restart budget and only after the prior
+child is observably dead.
+
+### Requirements
+- MUST create each process generation from a factory and require it to return a
+  `SpawnWorkerProcess` synchronously.
+- MUST treat both nonzero child exit and an unexpected clean exit as worker-process loss when no
+  external stop was requested.
+- MUST use explicit non-negative restart budget, restart delay, watch interval, and shutdown timeout
+  bounds.
+- MUST retire the failed child through bounded cooperative close before starting a replacement.
+- MUST prove the prior child reports `alive == False` before invoking the factory for a replacement;
+  a start or cleanup failure that leaves a possibly-live child MUST fail closed without restart.
+- MUST preserve process-generation failures in chronological order and expose generation count,
+  completed-restart count, and terminal lifecycle state.
+- MUST make restart delay interruptible by the external stop event so a stop request cannot race a
+  new factory invocation.
+- MUST NOT claim stale-heartbeat fencing, resource-ownership fencing, or real-service crash
+  qualification; those remain separate issue #21 work.
+
+### Tests
+- **TEST-047-1**: A dead failed child is retired and replaced without overlapping process
+  generations when one restart is available.
+- **TEST-047-2**: Exhausting the restart budget fails closed and preserves ordered failures from
+  every process generation.
+- **TEST-047-3**: A start failure that leaves the prior child alive prevents another factory call.
+- **TEST-047-4**: An external stop during restart delay prevents creation of another process.
+- **TEST-047-5**: Parent reconciliation contracts are exported from the public queue API.
+
+### Related Specs
+- SPEC-046 (spawn-based worker process boundary and signal translation)
+- Issue #21
+
+---
+
+## [SPEC-048] Stale Worker Heartbeat and Settlement Fencing
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Prevent an obsolete or paused worker generation from extending expired resource ownership or
+settling queue work after a replacement generation has acquired it.
+
+### Requirements
+- A resource lease heartbeat MUST fail at and after its recorded expiry even when its persisted
+  lifecycle state remains `active`.
+- Rejected post-expiry renewal MUST NOT rotate the fence, extend expiry, or otherwise mutate the
+  persisted lease.
+- Queue replacement MUST continue to use the durable reservation generation, owner identity, and
+  rotating acquisition identity as its authoritative work fence rather than a second process-local
+  generation counter.
+- Once a replacement reservation is acquired, every renewal and settlement attempted with the
+  predecessor reservation MUST fail as lost ownership.
+- The worker kernel MUST propagate renewal loss without acknowledging, retrying, rejecting, or
+  releasing through the stale reservation.
+- This slice MUST NOT claim durable cross-process resource-capacity reconciliation or physical-host
+  crash qualification.
+
+### Tests
+- **TEST-048-1**: A fenced resource permit cannot renew at the exact heartbeat-expiry boundary and
+  the stored lease remains byte-for-byte equivalent to the prior active lease.
+- **TEST-048-2**: A paused SQLite-backed worker whose reservation expires cannot renew when it
+  resumes after a replacement worker completes the delivery.
+- **TEST-048-3**: The stale worker surfaces `QueueReservationLost` and performs no terminal
+  settlement through its obsolete reservation.
+
+### Related Specs
+- SPEC-047 (bounded parent-level worker process reconciliation)
+- Issue #21
+
+---
+
+## [SPEC-049] Atomic Aggregate Resource-Lease Admission Contract
+**Date**: 2026-08-17
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Make capacity reservation one atomic repository operation so two worker threads or processes cannot
+both pass separate read/check/insert steps for the same resource identity.
+
+### Requirements
+- `reserved` and `active` leases for the same complete resource identity MUST consume aggregate
+  quantity and concurrency; terminal lifecycle states MUST NOT consume either limit.
+- Duplicate identity, available quantity, current concurrency, and insertion MUST be evaluated as
+  one repository operation.
+- A duplicate lease ID MUST return a distinct disposition so the application can retain exact fence
+  conflict behavior.
+- Aggregate quantity rejection MUST return the available quantity observed by the atomic decision
+  and MUST NOT persist the candidate lease.
+- Aggregate concurrency rejection MUST return the concurrent count observed by the atomic decision
+  and MUST NOT persist the candidate lease.
+- The application service MUST translate repository dispositions to the existing AF-specific budget,
+  concurrency, and stale-fence errors.
+- Every durable repository implementation MUST provide equivalent transaction or compare-and-swap
+  isolation. The lock-backed in-memory reference proves only same-process behavior and MUST NOT be
+  presented as durable cross-process certification.
+
+### Tests
+- **TEST-049-1**: Two simultaneous full-capacity reservations produce exactly one reservation and
+  one capacity rejection, with only one capacity-consuming lease stored.
+- **TEST-049-2**: A second reservation beyond `max_concurrent` is rejected with exact observed
+  concurrency evidence and is not stored.
+
+### Related Specs
+- SPEC-048 (stale worker heartbeat and settlement fencing)
+- Issue #21
+
+### SPEC-049 Verification Addendum
+- A candidate MUST NOT widen the quantity or concurrency ceiling while another capacity-consuming
+  lease for that resource identity exists. The atomic decision MUST enforce the most restrictive
+  applicable ceiling among the candidate and consuming records.
+- **TEST-049-3**: A candidate with wider declared limits cannot exceed a consuming identity's
+  stricter concurrency ceiling, reports that effective ceiling, and is not stored.
+
+---
+
+## [SPEC-050] Durable SQLite Resource-Lease Repository
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Persist the complete fenced resource-lease lifecycle in SQLite and enforce aggregate admission
+across independent connections and spawned worker processes.
+
+### Requirements
+- MUST persist every `Lease`, `ResourceBudget`, `ResourceIdentity`, scope, authorization, digest,
+  timestamp, renewal, and fence field without weakening immutable application semantics.
+- MUST retain scalar identity, state, capacity, concurrency, fence, and creation columns alongside a
+  deterministic JSON lease snapshot so admission and compare-and-swap remain transactional.
+- MUST install its private schema idempotently and leave connection ownership with the caller.
+- MUST evaluate duplicate ID, all capacity-consuming rows, the most restrictive live budget, and
+  candidate insertion within one SQLite serialized-writer transaction.
+- MUST update lifecycle state only when the persisted fencing value exactly matches the expected
+  value and MUST report lost compare-and-swap ownership without overwriting the winner.
+- MUST fail closed with a sanitized relational integrity failure for malformed stored values or
+  impossible affected-row counts.
+- MUST remain explicitly SQLite-specific. Other relational drivers require their own proven locking
+  or serializable transaction strategy before sharing this certification.
+
+### Tests
+- **TEST-050-1**: A fully populated active lease round-trips exactly after closing and reopening the
+  database through an independent driver.
+- **TEST-050-2**: Two independent SQLite connections contending for one full budget produce exactly
+  one reservation and one capacity rejection.
+- **TEST-050-3**: Two freshly spawned processes contending for one full budget produce exactly one
+  reservation and one capacity rejection, and both exit cleanly.
+
+### Related Specs
+- SPEC-049 (atomic aggregate resource-lease admission contract)
+- Issue #21
+
+---
+
+## [SPEC-051] Explicit Durable Resource-Lease Composition
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Allow deployments to opt into the durable SQLite lease repository through typed configuration while
+retaining the in-memory repository as the compatibility default and assigning driver ownership to
+the application lifecycle.
+
+### Requirements
+- The default resource-lease backend MUST remain `memory`; durable persistence MUST NOT be selected
+  implicitly from the task or trace database configuration.
+- `AF_RESOURCE_LEASE_BACKEND` MUST accept only a declared backend value, and the SQLite selection
+  MUST use an explicit bounded filesystem path rather than `:memory:`.
+- A caller-supplied `LeaseRepository` MUST take precedence over configured composition and MUST
+  remain externally owned.
+- Configured SQLite composition MUST create one application-scoped `SQLiteDriver`, construct the
+  lease repository from that driver, and eagerly materialize it during boot so schema failures are
+  reported at the lifecycle boundary.
+- Application shutdown MUST close each boot-owned SQLite lease driver exactly once.
+- Recreating an application with the same configured lease path MUST recover the exact previously
+  persisted lease through the public resource-lease service.
+
+### Tests
+- **TEST-051-1**: Configuration defaults to memory, accepts the explicit SQLite backend and path,
+  and rejects an unknown backend or an ephemeral SQLite durable path.
+- **TEST-051-2**: Two sequential application lifecycles recover the same reserved lease from one
+  configured SQLite path and each closes its owned driver exactly once.
+
+### Related Specs
+- SPEC-050 (durable SQLite resource-lease repository)
+- Issue #21
+
+---
+
+## [SPEC-052] Restart-Safe Expired Resource-Lease Sweeping
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Recover capacity abandoned by a crashed lease owner without allowing that owner to reactivate,
+renew, or overwrite the replacement generation through an obsolete fence.
+
+### Requirements
+- A finite-duration reservation MUST record an expiry deadline when it is created, and activation
+  MUST fail without mutation at or after that exact deadline.
+- A persisted legacy reservation without an explicit expiry MUST use `created_at + max_duration` as
+  its effective deadline; an unbounded lease MUST NOT be swept merely because it is old.
+- A sweep MUST consider only due `reserved` and `active` leases plus already persisted `expired`
+  leases, with optional exact-host filtering and deterministic result ordering.
+- Each due capacity-consuming lease MUST move to `expired` only through compare-and-swap against its
+  current fence. The transition MUST rotate the fence before the old capacity stops counting.
+- A lost compare-and-swap MUST be reported as a conflict and MUST NOT overwrite a concurrent renewal
+  or other newer lifecycle transition.
+- After a successful expiry, the sweep MUST reconcile the lease through a second fenced transition.
+  A later sweep MUST finish an `expired` transition left durable by a crash between those steps.
+- The result MUST separately identify expired, reconciled, and conflicted lease IDs without claiming
+  that a conflicted transition succeeded.
+
+### Tests
+- **TEST-052-1**: At the exact deadline after restart, a stale reservation cannot activate; one
+  active lease and one legacy reservation are fenced, reconciled, reject the stale active fence,
+  and release their complete budget to a replacement lease.
+- **TEST-052-2**: A restart after durable expiry but before reconciliation finishes the remaining
+  transition without repeating the expiry claim.
+
+### Related Specs
+- SPEC-048 (stale worker heartbeat and settlement fencing)
+- SPEC-050 (durable SQLite resource-lease repository)
+- SPEC-051 (explicit durable resource-lease composition)
+- Issue #21
+
+---
+
+## [SPEC-053] Supervised Resource-Lease Maintenance Cadence
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Run expired resource-lease reconciliation as an owned part of worker supervision before admission
+starts and at a declared periodic cadence, with fail-closed lifecycle behavior and bounded telemetry.
+
+### Requirements
+- Worker-supervisor maintenance MUST be a synchronous, no-result capability with a strictly positive
+  cadence visible through the supervisor API.
+- A configured maintenance pass MUST complete successfully before the first runtime factory call for
+  every worker generation; a startup failure MUST create no worker or kernel.
+- While a generation is running, maintenance MUST repeat no later than its declared cadence, while
+  retaining the supervisor's existing stop, watch, shutdown, and restart bounds.
+- A periodic maintenance failure MUST enter the existing failed-generation retirement path so the
+  runtime is closed before any replacement generation is created.
+- A pre-set stop signal MUST stop without running maintenance or constructing a worker generation.
+- Resource-lease maintenance MUST retain the exact last sweep result and completion time locally for
+  operator inspection, while telemetry MUST expose only bounded `none|one|multiple` count buckets
+  and a canonical clean, reconciled, conflicted, or failed status.
+- Telemetry construction or delivery failure MUST NOT change reconciliation semantics. A sweep
+  failure MUST propagate and prevent unsafe worker startup.
+
+### Tests
+- **TEST-053-1**: Maintenance completes before the first worker enters its loop, repeats at the
+  configured cadence, and exposes its successful run count and interval.
+- **TEST-053-2**: Startup maintenance failure fails the supervisor before runtime construction and
+  records no successful maintenance or worker generation.
+- **TEST-053-3**: The resource adapter retains exact sweep evidence, reconciles the lease, and emits
+  bounded first-pass and clean-pass telemetry without lease identity data.
+
+### Related Specs
+- SPEC-047 (bounded parent-level worker process reconciliation)
+- SPEC-052 (restart-safe expired resource-lease sweeping)
+- Issue #21
+
+---
+
+## [SPEC-054] Application-Composed Worker Lease Maintenance
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Expose a deployment-facing worker-supervisor factory from every bootstrapped application so a host
+cannot accidentally construct a supervised worker without the resource-lease maintenance required
+to recover crashed-owner capacity.
+
+### Requirements
+- Configuration MUST expose an optional exact maintenance host scope and a finite strictly positive
+  cadence no greater than one day; the default scope MUST include all hosts and the default cadence
+  MUST be 30 seconds.
+- Environment configuration MUST parse the cadence as a typed number and reject zero, non-finite,
+  malformed, or out-of-range values through the existing sanitized configuration boundary.
+- Application bootstrap MUST bind one application-scoped supervisor factory to the same
+  `ResourceLeaseService` used by the public application handle.
+- Every supervisor produced by that factory MUST receive a fresh resource-lease maintenance adapter,
+  the configured host scope, and the configured cadence; callers MUST NOT be able to omit that
+  maintenance accidentally.
+- The deployment host MUST retain ownership of the runtime factory, optional telemetry publisher,
+  restart policy, and stop signal. Constructing the application or factory MUST NOT start a thread,
+  process, worker runtime, or sweep.
+- Maintenance MUST complete before the caller's runtime factory is invoked and MUST retain the
+  fail-closed and bounded-telemetry semantics of SPEC-053.
+
+### Tests
+- **TEST-054-1**: Defaults and environment overrides expose the typed host scope and cadence, while
+  zero, non-finite, and over-one-day cadences fail through sanitized configuration.
+- **TEST-054-2**: A bootstrapped factory applies the configured exact host scope and cadence, emits
+  clean bounded telemetry, and completes maintenance before a deliberately failing runtime factory.
+
+### Related Specs
+- SPEC-051 (explicit durable resource-lease composition)
+- SPEC-053 (supervised resource-lease maintenance cadence)
+- Issue #21
+
+---
+
+## [SPEC-055] Capability-Routed Failed-Job Inspection and Replay
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Expose the relational queue driver's existing failed-delivery inspection and atomic replay behavior
+through the named queue control plane without allowing an unverified backend to receive either
+operation.
+
+### Requirements
+- Dead-letter inspection and dead-letter replay MUST be independent declared queue capabilities;
+  neither capability may be inferred from reservation or retry support.
+- `QueueManager` MUST resolve the requested/default named connection with the exact required
+  capability before invoking failed-job inspection or replay.
+- Inspection MUST preserve the driver's bounded lane filter, `1..1000` limit, deterministic failure
+  order, immutable job evidence, and payload-redacting representation.
+- Manager inspection MUST reject a malformed driver result rather than returning objects that are
+  not validated `QueueDeadLetter` values.
+- Replay MUST return a validated `QueueDeadLetterReplayReceipt` and retain the relational driver's
+  atomic reset to a fresh attempt series while preserving monotonically increasing reservation
+  generations and rotating the acquisition identity.
+- A connection without the applicable certified capability MUST fail closed before its driver
+  operation is called.
+- The database registration's manifest and runtime evidence MUST declare both capabilities only
+  while the concrete database driver exposes the matching operations.
+
+### Tests
+- **TEST-055-1**: Through `QueueManager`, inspect one lane deterministically, replay its failed job,
+  retain the other failure, and reserve the replay as attempt one with a rotated acquisition.
+- **TEST-055-2**: A sync connection fails both inspection and replay with the stable unavailable-
+  capability reason.
+
+### Related Specs
+- SPEC-020 (named queue manager and verified drivers)
+- SPEC-053 (supervised resource-lease maintenance cadence)
+- Issue #21
+
+---
+
+## [SPEC-056] Edge-Triggered Queue-Wait Alerts
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Bound queue-wait alert volume to worker-generation state transitions while retaining the existing
+payload-blind lag evidence and best-effort telemetry boundary.
+
+### Requirements
+- A configured positive queue-wait threshold MUST continue to classify lag from immutable envelope
+  occurrence time to reservation time; runtime and handler duration MUST NOT inflate queue wait.
+- The first delivery above the threshold MUST emit an `exceeded` alert and consecutive above-
+  threshold deliveries in the same worker generation MUST NOT emit duplicate alerts.
+- The first subsequent delivery at or below the threshold MUST emit one `recovered` transition;
+  consecutive recovered deliveries MUST remain silent, and a later breach MUST alert again.
+- Transition decisions MUST be concurrency-safe across all threads sharing one worker kernel.
+- Alert attributes MUST remain bounded to lag bucket, threshold bucket, and transition status; job,
+  payload, lane, tenant, and correlation identifiers MUST NOT be copied into attributes.
+- Alert delivery MUST remain best-effort and MUST NOT change queue settlement semantics. Transition
+  state is generation-local and intentionally resets when supervision constructs a fresh kernel.
+
+### Tests
+- **TEST-056-1**: Four deliveries across exceeded, repeated-exceeded, recovered, and re-exceeded
+  states emit exactly the three corresponding edge transitions.
+- **TEST-056-2**: The existing first-breach contract retains bounded buckets and no delivery
+  identifier or payload attribute.
+
+### Related Specs
+- SPEC-045 (bounded worker-runtime generation supervision)
+- SPEC-055 (capability-routed failed-job inspection and replay)
+- Issue #21
+
+---
+
+## [SPEC-057] Authorized Payload-Blind Failed-Job Control
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Provide an application-layer boundary for operator failed-job inspection and replay that authorizes
+the exact selected queue resource before protected manager access and never returns the recoverable
+job envelope or payload to presentation adapters.
+
+### Requirements
+- Inspection and replay MUST use the existing central default-deny `Gate` and MUST require operator-
+  evaluation scope before invoking the queue backend.
+- Authorization MUST bind inspection to the selected connection and lane scope, and replay to the
+  selected connection and message identity; denial MUST occur before existence disclosure or queue
+  mutation.
+- Successful inspection MUST project only message identity, lane, attempt count, and terminal time;
+  it MUST NOT return an envelope, payload, tag values, principal identity, or raw tenant identity.
+- Successful replay MUST project only message identity, prior attempts, replay time, and the exact
+  allowing gate decision.
+- Result representations MUST redact message and lane identities while retaining count/time and
+  authorization evidence that is already safe by contract.
+- The service MUST validate backend result shapes even though `QueueManager` already validates its
+  verified driver boundary.
+- Authorized successes and backend failures MUST emit only bounded status, count/attempt bucket,
+  and lane-scope telemetry. Identifiers, payloads, errors, and connection names MUST NOT become
+  telemetry attributes.
+- Telemetry delivery MUST remain best-effort. Backend failures MUST be re-raised unchanged, and no
+  telemetry failure may change inspection or replay semantics.
+
+### Tests
+- **TEST-057-1**: A default-deny gate rejects inspection and replay before any backend access.
+- **TEST-057-2**: An allowing gate returns payload-blind projections, retains authorization
+  evidence, and emits bounded success telemetry without identities.
+- **TEST-057-3**: The service composes with the real verified database `QueueManager` inspection and
+  atomic replay path while omitting job payloads.
+- **TEST-057-4**: Backend inspection and replay failures emit bounded failure telemetry and preserve
+  the original exception objects.
+
+### Related Specs
+- SPEC-055 (capability-routed failed-job inspection and replay)
+- SPEC-056 (edge-triggered queue-wait alerts)
+- Issue #21
+
+---
+
+## [SPEC-058] Verified Backend-Specific Worker Generation
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Compose each worker generation from a freshly owned verified queue manager and an exact backend-
+specific optimization provider without inventing unprofiled defaults or violating driver ownership.
+
+### Requirements
+- A worker-generation factory MUST receive a synchronous factory for a fresh unresolved
+  `QueueManager`; a pre-resolved manager MUST be rejected without being closed or otherwise mutated.
+- The selected named queue connection MUST verify reservation capability and expose current
+  capability evidence before any optimization provider is invoked.
+- Provider selection MUST use the exact configured queue driver identity. A missing, asynchronous,
+  failing, or malformed provider MUST fail closed and close the newly owned queue manager.
+- Runtime values MUST explicitly bound worker count, maximum concurrency, polling, heartbeats, idle
+  lifetime, wait alerts, and renewal cadence. Worker count MUST NOT exceed maximum concurrency.
+- A pinned provider MUST match both its declared backend identity and the complete qualified
+  `CapabilityBinding`; it MUST reject configuration, artifact, dependency, deployment, policy, or
+  driver drift. Its profiling artifact MUST be identified by a lowercase SHA-256 digest.
+- The worker kernel MUST use an injectable synchronous close boundary so a manager-owned driver is
+  closed through its owning manager exactly once rather than directly behind that manager.
+- Handler-side recyclable managers MUST be passed through the existing
+  `OwnedManagerConnectionRecycler`. Any `QueueManager` MUST be rejected from that set so post-job
+  cleanup cannot purge the active worker transport.
+- Composition failures after ownership transfer MUST attempt manager rollback and preserve both the
+  primary and cleanup failures when both occur.
+
+### Tests
+- **TEST-058-1**: Verified evidence reaches the exact backend provider and its bounded values configure
+  the returned runtime; repeated runtime close disposes the manager-owned driver exactly once.
+- **TEST-058-2**: A missing provider fails closed and rolls back the newly owned manager.
+- **TEST-058-3**: A pre-resolved borrowed manager is rejected without being closed.
+- **TEST-058-4**: Explicit handler-manager recycling rejects every queue manager.
+- **TEST-058-5**: A pinned optimization rejects backend identity and capability-binding drift.
+
+### Related Specs
+- SPEC-045 (bounded worker-runtime generation supervision)
+- SPEC-053 (supervised resource-lease maintenance cadence)
+- SPEC-057 (authorized failed-job control)
+- Issue #21
+
+---
+
+## [SPEC-059] Exact-Binding Worker Profile Bootstrap
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Make the verified worker-generation factory deployable through explicit application configuration
+while preventing startup from treating unqualified values or a changed queue store as benchmark
+evidence.
+
+### Requirements
+- Default application bootstrap MUST NOT bind a worker-generation factory or create queue storage.
+- SQLite worker queue storage and a worker optimization profile path MUST be configured together;
+  partial configuration and in-memory worker storage MUST fail configuration validation.
+- The profile loader MUST accept at most 65,536 bytes of UTF-8 JSON with an exact version-one
+  schema. Unknown, missing, malformed, non-positive, or incorrectly typed values MUST fail closed
+  behind a bounded provider-configuration error.
+- A profile MUST declare its backend identity, complete `CapabilityBinding`, and explicit bounded
+  worker count, concurrency, poll, heartbeat, idle, queue-wait, and renewal values in milliseconds.
+- The profile's SHA-256 MUST be computed from its exact bytes and retained by the pinned provider;
+  startup MUST NOT generate or substitute an allegedly qualified profile.
+- The database queue registration MUST optionally bind a lowercase SHA-256 storage identity into
+  the manager connection configuration and MUST reject a different or undeclared identity. This
+  contract is versioned as database queue registration 1.5.0.
+- SQLite bootstrap MUST derive a non-reversible identity from the resolved storage target, include
+  it in registration validation and capability binding, and compare the configured binding to the
+  profile before opening the queue database.
+- Backend, driver artifact, dependency graph, queue storage, deployment profile, or policy drift
+  MUST fail application boot without creating or opening the configured queue store.
+- A successful opt-in MUST expose one application-scoped `WorkerGenerationFactory`; each generated
+  runtime MUST continue to receive a fresh manager and the exact qualified runtime values.
+
+### Tests
+- **TEST-059-1**: Default bootstrap has no worker factory; complete two-path configuration opts in,
+  while partial and in-memory configurations fail with the stable configuration reason.
+- **TEST-059-2**: An exact profile boots a worker factory and creates a runtime with the declared
+  worker count, concurrency, poll interval, and lane.
+- **TEST-059-3**: Capability-binding drift fails application boot before queue creation.
+- **TEST-059-4**: Changing only the SQLite storage target under the same profile fails application
+  boot before either queue file is created.
+- **TEST-059-5**: Malformed, incomplete, and oversized profile documents fail application boot.
+- **TEST-059-6**: The database registration rejects malformed and mismatched storage identities.
+
+### Related Specs
+- SPEC-020 (named queue manager and verified drivers)
+- SPEC-058 (verified backend-specific worker generation)
+- Issue #21
+
+---
+
+## [SPEC-060] Measured Worker Qualification Recording
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Record one backend-specific worker runtime profile from explicit external qualification evidence,
+without synthesizing measurements or allowing bootstrap to consume stale, synthetic, or
+failure-bearing evidence.
+
+### Requirements
+- A qualification record MUST bind a canonical driver identity, complete `CapabilityBinding`,
+  explicit `WorkerRuntimeOptimization`, evidence and environment SHA-256 digests, observation and
+  expiry times, positive sample count, real-service status, and correctness, settlement, and
+  reservation-loss counts.
+- Recording MUST reject non-real-service evidence, any non-zero correctness, settlement, or
+  reservation-loss count, and evidence that is expired at recording time.
+- Runtime durations MUST be representable as positive whole milliseconds; recording MUST NOT round
+  or silently alter optimizer-selected values.
+- Profiles MUST use bounded canonical UTF-8 JSON with a trailing newline, exact version-two fields,
+  and an embedded qualification record. Version one is superseded and MUST be rejected because it
+  cannot prove the provenance or freshness of tuning values.
+- Recording MUST use a same-directory mode-0600 temporary file, flush it before atomic promotion,
+  remove failed temporary files, and preserve an existing profile when promotion fails. Symlinks,
+  directories, missing parents, and oversized output MUST fail behind a bounded provider error.
+- Loading MUST revalidate the exact document, qualification safety findings, real-service flag, and
+  expiry before returning a provider. The provider MUST retain both the exact profile digest and
+  the external qualification evidence digest.
+- This recorder MUST accept externally produced evidence only. It MUST NOT execute a benchmark,
+  infer that unit-test timings qualify production, or claim that a profile is optimal.
+
+### Tests
+- **TEST-060-1**: Recording emits canonical mode-0600 version-two JSON which round-trips through the
+  loader with exact binding, profile digest, and qualification digest.
+- **TEST-060-2**: Synthetic, correctness-failing, settlement-failing, reservation-losing, and expired
+  qualifications are rejected without replacing an existing profile.
+- **TEST-060-3**: A failed atomic promotion preserves the prior profile and removes its temporary
+  artifact.
+- **TEST-060-4**: Legacy version-one and stale version-two profiles are rejected on load.
+
+### Related Specs
+- SPEC-058 (verified backend-specific worker generation)
+- SPEC-059 (exact-binding worker profile bootstrap; version-one format superseded here)
+- Issue #21
+
+---
+
+## [SPEC-061] Explicit Worker Optimization Objective Policy
+**Date**: 2026-08-18
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Select one already qualified worker profile through explicit performance, safety, and cost
+priorities without inventing measurements, comparing unlike targets, or hiding tie-breaking policy.
+
+### Requirements
+- Operator priorities MUST be integer percentages from zero through one hundred and MUST total
+  exactly one hundred across performance, safety, and cost.
+- Each candidate MUST pair a `WorkerOptimizationQualification` with externally normalized integer
+  performance, safety, and cost-efficiency indices from zero through one million, where larger is
+  better. Selection MUST NOT produce or infer those indices.
+- A selection MUST contain between one and 256 candidates with unique evidence digests. Every
+  candidate MUST bind the same driver, complete `CapabilityBinding`, and environment digest.
+- Before scoring, every candidate MUST carry current, non-future, real-service evidence with zero
+  correctness, settlement, and reservation-loss findings. Any unsafe candidate MUST fail the
+  complete selection rather than merely receive a lower score.
+- Weighted scoring MUST use integer arithmetic. Equal weighted scores MUST resolve by safety index,
+  then performance index, then cost-efficiency index, then evidence digest so input order cannot
+  change the result.
+- The selection result MUST expose the chosen qualification, weighted score, candidate count, and a
+  lowercase SHA-256 digest committing the priorities, every candidate's exact qualification and
+  runtime values, all objective indices, and the selected evidence identity.
+- This policy MUST NOT run a profiler, authenticate evidence, claim production certification, or
+  expose itself as an operator interface. Those boundaries require separate composition and
+  applicable real-service evidence.
+
+### Tests
+- **TEST-061-1**: Pure performance, safety, and cost priorities each select the corresponding best
+  candidate from the same qualified target.
+- **TEST-061-2**: Selection is input-order independent and resolves an equal weighted score through
+  the documented safety-first tie policy.
+- **TEST-061-3**: The audit digest changes when an exact selected runtime value changes.
+- **TEST-061-4**: Synthetic, future-dated, expired, correctness-failing, settlement-failing, and
+  reservation-losing candidates fail closed before scoring.
+- **TEST-061-5**: Driver, capability-binding, or environment drift prevents comparison.
+- **TEST-061-6**: Priorities and normalized indices reject booleans, out-of-range values, and totals
+  other than one hundred.
+
+### Related Specs
+- SPEC-060 (measured worker qualification recording)
+- SPEC-058 (verified backend-specific worker generation)
+- Issue #21

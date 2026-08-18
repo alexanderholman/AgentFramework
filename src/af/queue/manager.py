@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
 from af.framework.container import ProviderRegistrar, Resolver, Scope
+from af.framework.errors import PlatformReason
 from af.framework.managers import (
     CapabilitySet,
     DriverRegistration,
@@ -21,8 +22,11 @@ from af.framework.managers import (
 from af.framework.unit_of_work import UnitOfWork
 from af.observability.signals import TelemetryPublisher
 from af.queue.contracts import (
+    QueueDeadLetter,
+    QueueDeadLetterReplayReceipt,
     QueueDispatchReceipt,
     QueueJob,
+    QueueOperationError,
     QueueReservation,
     QueueReservationLost,
 )
@@ -39,6 +43,8 @@ class QueueFeature(StrEnum):
     DELAY = "delay"
     PRIORITY = "priority"
     RETRY = "retry"
+    DEAD_LETTER_INSPECTION = "dead-letter-inspection"
+    DEAD_LETTER_REPLAY = "dead-letter-replay"
     TIMEOUT = "timeout"
     UNIQUENESS = "uniqueness"
     FIFO = "fifo"
@@ -76,6 +82,21 @@ class QueueDriver(Protocol):
 @runtime_checkable
 class _QueueRenewalDriver(Protocol):
     def renew(self, reservation: QueueReservation, /) -> QueueReservation: ...
+
+
+@runtime_checkable
+class _QueueDeadLetterInspectionDriver(Protocol):
+    def dead_letters(
+        self,
+        *,
+        lane: str | None = None,
+        limit: int = 100,
+    ) -> tuple[QueueDeadLetter, ...]: ...
+
+
+@runtime_checkable
+class _QueueDeadLetterReplayDriver(Protocol):
+    def replay_dead_letter(self, message_id: str, /) -> QueueDeadLetterReplayReceipt: ...
 
 
 def _capabilities(features: CapabilitySet | Iterable[str | QueueFeature]) -> CapabilitySet:
@@ -257,6 +278,54 @@ class QueueManager(Manager[QueueDriver]):
             reservation,
             available_at=available_at,
         )
+
+    def dead_letters(
+        self,
+        *,
+        lane: str | None = None,
+        limit: int = 100,
+        name: str | None = None,
+    ) -> tuple[QueueDeadLetter, ...]:
+        """Inspect terminal deliveries through a capability-verified connection."""
+
+        driver = self.connection(name, requires=(QueueFeature.DEAD_LETTER_INSPECTION,))
+        if not isinstance(driver, _QueueDeadLetterInspectionDriver):
+            raise QueueOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="queue.dead-letter.inspect",
+            )
+        result = driver.dead_letters(lane=lane, limit=limit)
+        if type(result) is not tuple or any(
+            not isinstance(dead_letter, QueueDeadLetter) for dead_letter in result
+        ):
+            raise QueueOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="queue.dead-letter.inspect",
+            )
+        return result
+
+    def replay_dead_letter(
+        self,
+        message_id: str,
+        /,
+        *,
+        name: str | None = None,
+    ) -> QueueDeadLetterReplayReceipt:
+        """Replay one terminal delivery through a capability-verified connection."""
+
+        driver = self.connection(name, requires=(QueueFeature.DEAD_LETTER_REPLAY,))
+        if not isinstance(driver, _QueueDeadLetterReplayDriver):
+            raise QueueOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="queue.dead-letter.replay",
+            )
+        receipt = driver.replay_dead_letter(message_id)
+        if not isinstance(receipt, QueueDeadLetterReplayReceipt):
+            raise QueueOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="queue.dead-letter.replay",
+            )
+        return receipt
 
     def _settlement_connection(
         self,

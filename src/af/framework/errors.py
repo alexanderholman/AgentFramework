@@ -309,7 +309,7 @@ class LeaseFenceTokenStale(AFError, ValueError):
         self.lease_id = lease_id
         self.expected = expected
         self.provided = provided
-        super().__init__(f"stale fence token: expected >= {expected}, got {provided}")
+        super().__init__(f"stale fence token: expected {expected}, got {provided}")
 
 
 class LeaseAuthorizationExpired(AFError, ValueError):

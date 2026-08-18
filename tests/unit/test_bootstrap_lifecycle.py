@@ -9,7 +9,8 @@ import pytest
 import af.bootstrap as bootstrap
 from af.application.ideons import IdeonService
 from af.bootstrap import create_application, create_application_async
-from af.config import Settings
+from af.config import ResourceLeaseBackend, Settings
+from af.domain.resources import LeaseState, ResourceBudget, ResourceIdentity, ResourceKind
 from af.framework.application import Application, ApplicationState
 from af.framework.container import (
     Container,
@@ -21,6 +22,9 @@ from af.framework.container import (
 from af.framework.errors import ApplicationBootError, AsyncLifecycleRequired, ScopeUnavailable
 from af.framework.pipeline import PipelineAgent
 from af.infrastructure.database import Database
+from af.infrastructure.repositories import InMemoryTaskRepository
+from af.infrastructure.sqlite import SQLiteDriver
+from af.infrastructure.tracing import InMemoryTraceRepository
 
 
 def test_default_sqlite_is_boot_owned_application_state_and_disposed_once(
@@ -79,6 +83,62 @@ def test_default_sqlite_is_boot_owned_application_state_and_disposed_once(
             root.close()
         else:
             lifecycle.shutdown()
+
+
+def test_opt_in_sqlite_resource_leases_are_boot_owned_and_survive_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease_database = tmp_path / "resource-leases.sqlite3"
+    settings = Settings(
+        resource_lease_backend=ResourceLeaseBackend.SQLITE,
+        resource_lease_sqlite_path=str(lease_database),
+    )
+    close_calls: list[SQLiteDriver] = []
+    original_close = SQLiteDriver.close
+
+    def record_close(driver: SQLiteDriver) -> None:
+        close_calls.append(driver)
+        original_close(driver)
+
+    monkeypatch.setattr(SQLiteDriver, "close", record_close)
+    budget = ResourceBudget(
+        identity=ResourceIdentity(
+            kind=ResourceKind.CONCURRENCY,
+            host_id="host.local",
+            instance_id="worker.slots",
+        ),
+        max_quantity=1,
+        max_duration=None,
+        max_concurrent=1,
+    )
+    first = create_application(
+        settings=settings,
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    created = first.leases.create_lease(
+        "lease-bootstrap-persistent",
+        budget,
+        1,
+        {"queue": "default"},
+        "worker-policy",
+        "authorization-v1",
+    )
+    first.shutdown()
+
+    second = create_application(
+        settings=settings,
+        task_repository=InMemoryTaskRepository(),
+        trace_repository=InMemoryTraceRepository(),
+    )
+    try:
+        assert second.leases.get_lease(created.id) == created
+        assert second.leases.get_lease(created.id).state is LeaseState.RESERVED
+    finally:
+        second.shutdown()
+
+    assert len(close_calls) == 2
 
 
 def test_default_ideon_runtime_is_constructed_during_boot(

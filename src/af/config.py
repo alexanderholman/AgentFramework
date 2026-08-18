@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from itertools import islice
+from math import isfinite
 from typing import cast
 
 from af.framework.errors import InvalidProviderConfiguration, PlatformError, PlatformReason
@@ -15,6 +16,7 @@ from af.framework.types import parse_probability
 
 _SCALAR_MAX_LENGTH = 2_048
 _COLLECTION_MAX_ITEMS = 256
+_MAX_MAINTENANCE_INTERVAL_SECONDS = 86_400.0
 _UNSAFE_SINGLE_LINE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
@@ -22,6 +24,11 @@ class ConfigurationProfile(StrEnum):
     LOCAL = "local"
     TEST = "test"
     PRODUCTION = "production"
+
+
+class ResourceLeaseBackend(StrEnum):
+    MEMORY = "memory"
+    SQLITE = "sqlite"
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -55,8 +62,19 @@ class Settings:
     allowed_origins: tuple[str, ...] = ()
     allow_remote_inference: bool = False
     selector_confidence_threshold: float = 0.8
+    resource_lease_backend: ResourceLeaseBackend = ResourceLeaseBackend.MEMORY
+    resource_lease_sqlite_path: str = "storage/af-resource-leases.sqlite3"
+    resource_lease_maintenance_host_id: str | None = None
+    resource_lease_maintenance_interval_seconds: float = 30.0
+    worker_queue_sqlite_path: str | None = None
+    worker_optimization_profile_path: str | None = None
 
     def __post_init__(self) -> None:
+        try:
+            backend = ResourceLeaseBackend(self.resource_lease_backend)
+        except (TypeError, ValueError):
+            raise ValueError("resource lease backend is invalid") from None
+        object.__setattr__(self, "resource_lease_backend", backend)
         object.__setattr__(
             self, "allowed_hosts", _bounded_string_tuple(self.allowed_hosts, "allowed_hosts")
         )
@@ -143,6 +161,14 @@ _ENV_NAMES = {
     "AF_ALLOWED_ORIGINS": "allowed_origins",
     "AF_ALLOW_REMOTE_INFERENCE": "allow_remote_inference",
     "AF_SELECTOR_CONFIDENCE_THRESHOLD": "selector_confidence_threshold",
+    "AF_RESOURCE_LEASE_BACKEND": "resource_lease_backend",
+    "AF_RESOURCE_LEASE_SQLITE_PATH": "resource_lease_sqlite_path",
+    "AF_RESOURCE_LEASE_MAINTENANCE_HOST_ID": "resource_lease_maintenance_host_id",
+    "AF_RESOURCE_LEASE_MAINTENANCE_INTERVAL_SECONDS": (
+        "resource_lease_maintenance_interval_seconds"
+    ),
+    "AF_WORKER_QUEUE_SQLITE_PATH": "worker_queue_sqlite_path",
+    "AF_WORKER_OPTIMIZATION_PROFILE_PATH": "worker_optimization_profile_path",
 }
 _NON_CONFIG_ENV_NAMES = frozenset(
     {
@@ -281,7 +307,10 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
         if type(value) is not int:
             raise ValueError("port must be an integer")
         return value
-    if name == "selector_confidence_threshold":
+    if name in {
+        "selector_confidence_threshold",
+        "resource_lease_maintenance_interval_seconds",
+    }:
         if textual and isinstance(value, str):
             if re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", value) is None:
                 raise ValueError("threshold is invalid")
@@ -289,6 +318,16 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("threshold must be numeric")
         return float(value)
+    if (
+        name
+        in {
+            "resource_lease_maintenance_host_id",
+            "worker_queue_sqlite_path",
+            "worker_optimization_profile_path",
+        }
+        and value is None
+    ):
+        return None
     if name == "allow_remote_inference":
         if textual and isinstance(value, str):
             normalized = value.lower()
@@ -323,15 +362,48 @@ def _validate_settings(settings: Settings) -> None:
         raise InvalidProviderConfiguration(
             "selector confidence threshold must be a finite probability in [0, 1]"
         )
+    maintenance_interval = settings.resource_lease_maintenance_interval_seconds
+    if (
+        not isfinite(maintenance_interval)
+        or maintenance_interval <= 0
+        or maintenance_interval > _MAX_MAINTENANCE_INTERVAL_SECONDS
+    ):
+        raise ValueError("resource lease maintenance interval is outside its supported range")
     for name in (
         "app_name",
         "database_url",
         "host",
         "mcp_transport",
         "session_cookie_signing_key",
+        "resource_lease_sqlite_path",
     ):
         value = getattr(settings, name)
         _validate_single_line(value, name)
+    if (
+        settings.resource_lease_backend is ResourceLeaseBackend.SQLITE
+        and settings.resource_lease_sqlite_path == ":memory:"
+    ):
+        raise ValueError("durable SQLite resource leases require a filesystem path")
+    if settings.resource_lease_maintenance_host_id is not None:
+        _validate_single_line(
+            settings.resource_lease_maintenance_host_id,
+            "resource_lease_maintenance_host_id",
+        )
+    worker_paths = (
+        settings.worker_queue_sqlite_path,
+        settings.worker_optimization_profile_path,
+    )
+    if (worker_paths[0] is None) != (worker_paths[1] is None):
+        raise ValueError("worker queue and optimization profile must be configured together")
+    for name, value in zip(
+        ("worker_queue_sqlite_path", "worker_optimization_profile_path"),
+        worker_paths,
+        strict=True,
+    ):
+        if value is not None:
+            _validate_single_line(value, name)
+    if settings.worker_queue_sqlite_path == ":memory:":
+        raise ValueError("worker SQLite queue requires a filesystem path")
     for name in ("allowed_hosts", "allowed_origins"):
         values = getattr(settings, name)
         if len(values) > _COLLECTION_MAX_ITEMS:

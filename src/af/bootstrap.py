@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -33,7 +34,15 @@ from af.application.operations import (
 from af.application.resource_leases import ResourceLeaseService
 from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
-from af.config import ConfigSnapshot, EnvironmentConfigSource, Settings, load_settings
+from af.application.worker_generation import WorkerGenerationFactory
+from af.application.worker_supervision import WorkerSupervisorFactory
+from af.config import (
+    ConfigSnapshot,
+    EnvironmentConfigSource,
+    ResourceLeaseBackend,
+    Settings,
+    load_settings,
+)
 from af.domain.agent_routing import DeterministicAgentRouter
 from af.domain.classifiers import (
     CharacterCountClassifier,
@@ -81,7 +90,15 @@ from af.infrastructure.db_setup import (
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.resource_leases import InMemoryLeaseRepository
+from af.infrastructure.sqlite import SQLiteDriver
+from af.infrastructure.sqlite_resource_leases import SQLiteLeaseRepository
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
+from af.infrastructure.worker_optimization import (
+    load_worker_optimization_profile,
+    worker_queue_storage_identity,
+)
+from af.queue.database_manager import database_queue_registration
+from af.queue.manager import QueueManager
 from af.search.embedded_manager import embedded_search_registration
 from af.search.manager import SearchManager, bind_search_manager
 
@@ -126,6 +143,17 @@ class _PersistenceProvider(ServiceProvider):
                 scope=Scope.APPLICATION,
                 owned=False,
             )
+        elif self._settings.resource_lease_backend is ResourceLeaseBackend.SQLITE:
+            container.bind(
+                SQLiteDriver,
+                lambda _: SQLiteDriver(Path(self._settings.resource_lease_sqlite_path)),
+                scope=Scope.APPLICATION,
+            )
+            container.bind(
+                LeaseRepository,
+                lambda current: SQLiteLeaseRepository(current.resolve(SQLiteDriver)),
+                scope=Scope.APPLICATION,
+            )
         else:
             container.bind(
                 LeaseRepository,
@@ -163,6 +191,11 @@ class _PersistenceProvider(ServiceProvider):
         resources: ProviderResourceRegistry,
     ) -> None:
         del resources
+        if (
+            self._lease_repository is None
+            and self._settings.resource_lease_backend is ResourceLeaseBackend.SQLITE
+        ):
+            container.resolve_token(LeaseRepository)
         if self._task_repository is None or self._trace_repository is None:
             container.resolve(Database)
 
@@ -414,6 +447,86 @@ class _ApplicationProvider(ServiceProvider):
             lambda current: ResourceLeaseService(current.resolve_token(LeaseRepository)),
             scope=Scope.APPLICATION,
         )
+        container.bind(
+            WorkerSupervisorFactory,
+            lambda current: WorkerSupervisorFactory(
+                current.resolve(ResourceLeaseService),
+                host_id=current.resolve(Settings).resource_lease_maintenance_host_id,
+                maintenance_interval=timedelta(
+                    seconds=current.resolve(Settings).resource_lease_maintenance_interval_seconds
+                ),
+            ),
+            scope=Scope.APPLICATION,
+        )
+
+
+class _QueueWorkerProvider(ServiceProvider):
+    provider_id = "af.queue-workers"
+    dependencies = ("af.application",)
+
+    def __init__(self, settings: Settings, *, profile: str) -> None:
+        self._settings = settings
+        self._profile = profile
+
+    def register(self, container: ProviderRegistrar) -> None:
+        if self._settings.worker_queue_sqlite_path is None:
+            return
+        container.bind(
+            WorkerGenerationFactory,
+            lambda _: self._create_factory(),
+            scope=Scope.APPLICATION,
+        )
+
+    def boot(
+        self,
+        container: Container,
+        resources: ProviderResourceRegistry,
+    ) -> None:
+        del resources
+        if self._settings.worker_queue_sqlite_path is not None:
+            container.resolve(WorkerGenerationFactory)
+
+    def _create_factory(self) -> WorkerGenerationFactory:
+        queue_path = self._settings.worker_queue_sqlite_path
+        profile_path = self._settings.worker_optimization_profile_path
+        if queue_path is None or profile_path is None:
+            raise InvalidProviderConfiguration("worker queue configuration is incomplete")
+        storage_identity = worker_queue_storage_identity(queue_path)
+        registration = database_queue_registration(
+            database_factory=lambda: SQLiteDriver(Path(queue_path)),
+            storage_identity=storage_identity,
+        )
+
+        def create_manager() -> QueueManager:
+            manager = QueueManager(
+                connections={
+                    "primary": {
+                        "driver": "database",
+                        "storage_identity": storage_identity,
+                    }
+                },
+                default="primary",
+                deployment_profile=self._profile,
+                policy_version="af-worker-v1",
+            )
+            manager.install(registration)
+            return manager
+
+        optimizer = load_worker_optimization_profile(profile_path)
+        probe = create_manager()
+        try:
+            reference = probe.reference()
+            binding = probe.binding()
+        finally:
+            probe.close()
+        if optimizer.driver_name != reference.driver_name or optimizer.binding != binding:
+            raise InvalidProviderConfiguration(
+                "worker optimization profile does not match the configured backend"
+            )
+        return WorkerGenerationFactory(
+            create_manager,
+            optimizers={optimizer.driver_name: optimizer},
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,6 +540,7 @@ class AFApplication:
     search: SearchController
     traces: TraceRepository
     leases: ResourceLeaseService
+    worker_supervisors: WorkerSupervisorFactory
     verifier: DeterministicVerifier
     agent_routes: AgentRoutingController
     ideons: IdeonController
@@ -574,6 +688,12 @@ def _prepare_application(
             ephemeral=task_repository is not None or trace_repository is not None,
         ),
         _ApplicationProvider(),
+        _QueueWorkerProvider(
+            resolved_settings,
+            profile=(
+                resolved_config.profile.value if resolved_config.profile is not None else "local"
+            ),
+        ),
         *tuple(providers),
     )
     lifecycle = Application(root, application_providers)
@@ -620,6 +740,7 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         search=container.resolve(SearchController),
         traces=container.resolve_token(TraceRepository),
         leases=container.resolve(ResourceLeaseService),
+        worker_supervisors=container.resolve(WorkerSupervisorFactory),
         verifier=container.resolve(DeterministicVerifier),
         agent_routes=endpoints.agent_routes,
         ideons=endpoints.ideons,

@@ -10,6 +10,7 @@ from af.config import (
     ConfigurationProfile,
     EnvironmentConfigSource,
     MappingConfigSource,
+    ResourceLeaseBackend,
     SecretRef,
     Settings,
     load_settings,
@@ -70,6 +71,92 @@ def test_environment_source_preserves_existing_settings_parsing() -> None:
 
     disabled = load_settings(EnvironmentConfigSource({"AF_ALLOW_REMOTE_INFERENCE": "off"}))
     assert disabled.settings.allow_remote_inference is False
+
+
+def test_resource_lease_storage_requires_an_explicit_typed_opt_in() -> None:
+    assert Settings().resource_lease_backend is ResourceLeaseBackend.MEMORY
+
+    snapshot = load_settings(
+        EnvironmentConfigSource(
+            {
+                "AF_RESOURCE_LEASE_BACKEND": "sqlite",
+                "AF_RESOURCE_LEASE_SQLITE_PATH": "/var/lib/af/resource-leases.sqlite3",
+            }
+        )
+    )
+
+    assert snapshot.settings.resource_lease_backend is ResourceLeaseBackend.SQLITE
+    assert snapshot.settings.resource_lease_sqlite_path == ("/var/lib/af/resource-leases.sqlite3")
+
+    with pytest.raises(PlatformError) as invalid_backend:
+        load_settings(EnvironmentConfigSource({"AF_RESOURCE_LEASE_BACKEND": "automatic"}))
+    assert invalid_backend.value.reason is PlatformReason.CONFIGURATION_INVALID
+
+    with pytest.raises(PlatformError) as ephemeral_durable_store:
+        load_settings(
+            EnvironmentConfigSource(
+                {
+                    "AF_RESOURCE_LEASE_BACKEND": "sqlite",
+                    "AF_RESOURCE_LEASE_SQLITE_PATH": ":memory:",
+                }
+            )
+        )
+    assert ephemeral_durable_store.value.reason is PlatformReason.CONFIGURATION_INVALID
+
+
+def test_resource_lease_maintenance_has_typed_host_scope_and_bounded_cadence() -> None:
+    defaults = Settings()
+    assert defaults.resource_lease_maintenance_host_id is None
+    assert defaults.resource_lease_maintenance_interval_seconds == 30.0
+
+    snapshot = load_settings(
+        EnvironmentConfigSource(
+            {
+                "AF_RESOURCE_LEASE_MAINTENANCE_HOST_ID": "worker-a.example",
+                "AF_RESOURCE_LEASE_MAINTENANCE_INTERVAL_SECONDS": "2.5",
+            }
+        )
+    )
+
+    assert snapshot.settings.resource_lease_maintenance_host_id == "worker-a.example"
+    assert snapshot.settings.resource_lease_maintenance_interval_seconds == 2.5
+
+    for invalid in ("0", "nan", "86400.1"):
+        with pytest.raises(PlatformError) as invalid_cadence:
+            load_settings(
+                EnvironmentConfigSource({"AF_RESOURCE_LEASE_MAINTENANCE_INTERVAL_SECONDS": invalid})
+            )
+        assert invalid_cadence.value.reason is PlatformReason.CONFIGURATION_INVALID
+
+
+def test_worker_queue_bootstrap_requires_explicit_backend_and_profile_artifacts() -> None:
+    defaults = Settings()
+    assert defaults.worker_queue_sqlite_path is None
+    assert defaults.worker_optimization_profile_path is None
+
+    snapshot = load_settings(
+        EnvironmentConfigSource(
+            {
+                "AF_WORKER_QUEUE_SQLITE_PATH": "/var/lib/af/worker-queue.sqlite3",
+                "AF_WORKER_OPTIMIZATION_PROFILE_PATH": "/etc/af/worker-profile.json",
+            }
+        )
+    )
+
+    assert snapshot.settings.worker_queue_sqlite_path == "/var/lib/af/worker-queue.sqlite3"
+    assert snapshot.settings.worker_optimization_profile_path == "/etc/af/worker-profile.json"
+
+    for incomplete in (
+        {"AF_WORKER_QUEUE_SQLITE_PATH": "/var/lib/af/worker-queue.sqlite3"},
+        {"AF_WORKER_OPTIMIZATION_PROFILE_PATH": "/etc/af/worker-profile.json"},
+        {
+            "AF_WORKER_QUEUE_SQLITE_PATH": ":memory:",
+            "AF_WORKER_OPTIMIZATION_PROFILE_PATH": "/etc/af/worker-profile.json",
+        },
+    ):
+        with pytest.raises(PlatformError) as invalid:
+            load_settings(EnvironmentConfigSource(incomplete))
+        assert invalid.value.reason is PlatformReason.CONFIGURATION_INVALID
 
 
 @pytest.mark.parametrize(

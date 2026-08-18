@@ -21,18 +21,27 @@ from af.framework.managers import (
 )
 from af.framework.relational import DatabaseStatement, DatabaseTransaction
 from af.infrastructure.sqlite import SQLiteDriver
-from af.messaging import EnvelopeKind, JsonEnvelopeCodec, MessageEnvelope, MessageMetadata
+from af.messaging import (
+    EnvelopeKind,
+    FrozenJsonObject,
+    JsonEnvelopeCodec,
+    MessageEnvelope,
+    MessageMetadata,
+    PolicyContext,
+)
 from af.queue import (
     DatabaseQueueDriver,
     QueueDispatchDisposition,
     QueueFeature,
     QueueJob,
+    QueueJobTags,
     QueueManager,
     QueueReservation,
     QueueReservationLost,
     SyncQueueDriver,
     UnsupportedQueueFeature,
     database_queue_registration,
+    sync_queue_registration,
 )
 from af.queue import database as database_module
 from af.testing import ConformanceEvidence, FakeClock, QueueDriverConformanceSuite
@@ -90,6 +99,75 @@ def test_sync_driver_preserves_direct_dispatch_order() -> None:
     driver.dispatch(_job("job-second"))
 
     assert observed == ["job-first", "job-second"]
+
+
+def test_queue_job_tags_are_context_bound_and_redacted() -> None:
+    tenant_ref = f"sha256:{'a' * 64}"
+    envelope = MessageEnvelope.create(
+        metadata=MessageMetadata(
+            message_id="job-tagged",
+            message_type="jobs.example",
+            schema_version=1,
+            kind=EnvelopeKind.JOB,
+            occurred_at=_NOW,
+            correlation_id="correlation-secret",
+            policy=PolicyContext(
+                policy_version="policy-v1",
+                decision_digest="b" * 64,
+                effective_scope="worker",
+                tenant_ref=tenant_ref,
+            ),
+        ),
+        payload={"secret": "queue-payload"},
+    )
+    tags = QueueJobTags.from_envelope(
+        envelope,
+        agent_id="agent.builder",
+        task_id="task.compile",
+        capability_id="capability.python",
+    )
+
+    job = QueueJob(envelope=envelope, tags=tags)
+
+    assert job.tags == tags
+    assert tags.correlation_id == "correlation-secret"
+    assert tags.tenant_ref == tenant_ref
+    assert "correlation-secret" not in repr(tags)
+    assert tenant_ref not in repr(tags)
+
+    with pytest.raises(ValueError, match="correlation context"):
+        QueueJob(
+            envelope=envelope,
+            tags=replace(tags, correlation_id="different-correlation"),
+        )
+    with pytest.raises(ValueError, match="tenant context"):
+        QueueJob(
+            envelope=envelope,
+            tags=replace(tags, tenant_ref=f"sha256:{'c' * 64}"),
+        )
+
+
+def test_database_queue_persists_job_tags_across_restart(tmp_path: Path) -> None:
+    database = tmp_path / "queue-tags.sqlite3"
+    tagged = _job(
+        "job-tags-persist",
+        tags=QueueJobTags(
+            agent_id="agent.builder",
+            task_id="task.compile",
+            capability_id="capability.python",
+        ),
+    )
+    first = DatabaseQueueDriver(SQLiteDriver(database), clock=FakeClock(_NOW))
+    first.dispatch(tagged)
+    first.close()
+
+    reopened = DatabaseQueueDriver(SQLiteDriver(database), clock=FakeClock(_NOW))
+    reservation = reopened.reserve()
+
+    assert reservation is not None
+    assert reservation.job.tags == tagged.tags
+    reopened.ack(reservation)
+    reopened.close()
 
 
 def test_database_queue_passes_shared_conformance_suite(tmp_path: Path) -> None:
@@ -685,6 +763,85 @@ def test_database_queue_dead_letters_expired_final_attempt(tmp_path: Path) -> No
     reopened.close()
 
 
+def test_database_queue_inspects_dead_letters_without_exposing_payload_in_repr(
+    tmp_path: Path,
+) -> None:
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-dead-letter-inspect.sqlite3"),
+        clock=FakeClock(_NOW),
+    )
+    driver.dispatch(_job("job-dead-inspect"))
+    reservation = driver.reserve()
+    assert reservation is not None
+    driver.reject(reservation)
+
+    failures = driver.dead_letters()
+
+    assert len(failures) == 1
+    assert failures[0].message_id == "job-dead-inspect"
+    assert failures[0].lane == "default"
+    assert failures[0].attempts == 1
+    assert failures[0].dead_lettered_at == _NOW
+    payload = failures[0].job.envelope.payload
+    assert isinstance(payload, FrozenJsonObject)
+    assert payload.items == (
+        ("message_id", "job-dead-inspect"),
+        ("secret", "queue-payload"),
+    )
+    assert "queue-payload" not in repr(failures[0])
+    driver.close()
+
+
+def test_database_queue_replays_dead_letter_as_fresh_fenced_delivery(tmp_path: Path) -> None:
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-dead-letter-replay.sqlite3"),
+        clock=clock,
+    )
+    driver.dispatch(_job("job-dead-replay", max_attempts=2))
+    original = driver.reserve()
+    assert original is not None
+    driver.reject(original)
+    clock.advance(timedelta(minutes=1))
+
+    replayed = driver.replay_dead_letter("job-dead-replay")
+
+    assert replayed.message_id == "job-dead-replay"
+    assert replayed.previous_attempts == 1
+    assert replayed.replayed_at == _NOW + timedelta(minutes=1)
+    assert driver.dead_letters() == ()
+    replacement = driver.reserve()
+    assert replacement is not None
+    assert replacement.attempt == 1
+    assert replacement.fencing_token == 2
+    assert replacement.reservation_id != original.reservation_id
+    driver.ack(replacement)
+    driver.close()
+
+
+def test_database_queue_dead_letter_replay_fails_closed_for_missing_or_live_job(
+    tmp_path: Path,
+) -> None:
+    driver = DatabaseQueueDriver(
+        SQLiteDriver(tmp_path / "queue-dead-letter-replay-missing.sqlite3"),
+        clock=FakeClock(_NOW),
+    )
+    driver.dispatch(_job("job-live"))
+
+    with pytest.raises(Exception) as live:
+        driver.replay_dead_letter("job-live")
+    assert getattr(live.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+    with pytest.raises(Exception) as missing:
+        driver.replay_dead_letter("job-missing")
+    assert getattr(missing.value, "reason", None) is PlatformReason.INTEGRITY_FAILURE
+
+    reservation = driver.reserve()
+    assert reservation is not None
+    assert reservation.job.envelope.metadata.message_id == "job-live"
+    driver.ack(reservation)
+    driver.close()
+
+
 @pytest.mark.parametrize("operation", ["ack", "reject", "release", "retry"])
 def test_database_queue_fences_settlement_at_exact_expiry_before_takeover(
     tmp_path: Path,
@@ -867,6 +1024,8 @@ def test_database_queue_registration_binds_runtime_identity_and_evidence(tmp_pat
         assert evidence.observed_at == observed_at
         assert evidence.capabilities == CapabilitySet(
             (
+                QueueFeature.DEAD_LETTER_INSPECTION.value,
+                QueueFeature.DEAD_LETTER_REPLAY.value,
                 QueueFeature.RESERVATION.value,
                 QueueFeature.RESERVATION_RENEWAL.value,
                 QueueFeature.RETRY.value,
@@ -892,6 +1051,22 @@ def test_database_queue_registration_rejects_invalid_inputs_and_configuration() 
         database_queue_registration(
             database_factory=lambda: SQLiteDriver(":memory:"),
             reservation_lease=timedelta(0),
+        )
+    with pytest.raises(ValueError, match="storage identity"):
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(":memory:"),
+            storage_identity="not-a-digest",
+        )
+
+    storage_identity = "d" * 64
+    storage_bound = database_queue_registration(
+        database_factory=lambda: SQLiteDriver(":memory:"),
+        storage_identity=storage_identity,
+    )
+    with pytest.raises(ValueError, match="configuration"):
+        storage_bound.factory(
+            ConnectionRef("queue", "primary", "database"),
+            {"driver": "database", "storage_identity": "e" * 64},
         )
 
     manager = QueueManager(
@@ -957,6 +1132,74 @@ def test_queue_manager_routes_database_driver_retry_and_dead_letter(tmp_path: Pa
     manager.retry(second, available_at=second.reserved_at)
 
     assert manager.reserve() is None
+    manager.close()
+
+
+def test_queue_manager_inspects_and_replays_dead_letters_through_verified_connection(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(_NOW)
+    manager = QueueManager(
+        connections={"primary": {"driver": "database"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=clock,
+    )
+    manager.install(
+        database_queue_registration(
+            database_factory=lambda: SQLiteDriver(tmp_path / "queue-control-plane.sqlite3"),
+            clock=clock,
+        )
+    )
+    manager.dispatch(_job("job-failed-default"))
+    manager.dispatch(_job("job-failed-critical", lane="critical"))
+    default = manager.reserve(lane="default")
+    critical = manager.reserve(lane="critical")
+    assert default is not None
+    assert critical is not None
+    manager.reject(default)
+    manager.reject(critical)
+
+    failures = manager.dead_letters(lane="critical", limit=1)
+
+    assert tuple(failure.message_id for failure in failures) == ("job-failed-critical",)
+    assert failures[0].attempts == 1
+    assert "queue-payload" not in repr(failures[0])
+    clock.advance(timedelta(minutes=1))
+
+    replayed = manager.replay_dead_letter("job-failed-critical")
+
+    assert replayed.message_id == "job-failed-critical"
+    assert replayed.previous_attempts == 1
+    assert replayed.replayed_at == _NOW + timedelta(minutes=1)
+    assert tuple(failure.message_id for failure in manager.dead_letters()) == (
+        "job-failed-default",
+    )
+    replacement = manager.reserve(lane="critical")
+    assert replacement is not None
+    assert replacement.attempt == 1
+    assert replacement.reservation_id != critical.reservation_id
+    manager.ack(replacement)
+    manager.close()
+
+
+def test_queue_manager_fails_closed_when_dead_letter_control_is_unverified() -> None:
+    manager = QueueManager(
+        connections={"primary": {"driver": "sync"}},
+        default="primary",
+        deployment_profile="test",
+        policy_version="policy-v1",
+        clock=lambda: _NOW,
+    )
+    manager.install(sync_queue_registration(consumer=lambda _job: None, clock=lambda: _NOW))
+
+    with pytest.raises(CapabilityValidationError) as inspection:
+        manager.dead_letters()
+    assert inspection.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+    with pytest.raises(CapabilityValidationError) as replay:
+        manager.replay_dead_letter("job-failed")
+    assert replay.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
     manager.close()
 
 

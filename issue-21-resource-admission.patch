@@ -1,0 +1,380 @@
+--- a/src/af/queue/worker.py
++++ b/src/af/queue/worker.py
+@@ -135,6 +135,18 @@
+ JobScopeFactory = Callable[[QueueJob], AbstractContextManager[None]]
+ 
+ 
++class WorkerAdmissionGate(Protocol):
++    """Fail-closed host-resource admission before a queue reservation is acquired."""
++
++    def __call__(
++        self,
++        *,
++        lane: str | None,
++        active_jobs: int,
++        max_concurrency: int,
++    ) -> bool: ...
++
++
+ class _SettledJobFailure(Exception):
+     """Handler exception that was already settled (retried/rejected)."""
+ 
+@@ -387,6 +399,7 @@
+         max_idle_time: timedelta | None = None,
+         idempotency: IdempotencyStore | None = None,
+         scope_factory: JobScopeFactory | None = None,
++        admission_gate: WorkerAdmissionGate | None = None,
+         telemetry: TelemetryPublisher | None = None,
+         queue_wait_alert_after: timedelta | None = None,
+         renewal_min_interval: timedelta = timedelta(milliseconds=100),
+@@ -406,6 +419,8 @@
+             raise TypeError("worker idempotency store requires callable claim")
+         if scope_factory is not None and not callable(scope_factory):
+             raise TypeError("worker scope factory must be callable")
++        if admission_gate is not None and not callable(admission_gate):
++            raise TypeError("worker resource admission gate must be callable")
+         if telemetry is not None and not isinstance(telemetry, TelemetryPublisher):
+             raise TypeError("worker telemetry publisher is invalid")
+         if queue_wait_alert_after is not None and queue_wait_alert_after <= timedelta(0):
+@@ -423,6 +438,7 @@
+         self._max_idle_time = max_idle_time
+         self._idempotency = idempotency
+         self._scope_factory = scope_factory or (lambda job: nullcontext())
++        self._admission_gate = admission_gate
+         self._telemetry = telemetry
+         self._queue_wait_alert_after = queue_wait_alert_after
+         self._renewal_min_interval = renewal_min_interval
+@@ -785,6 +801,7 @@
+                     return
+ 
+     def _admit(self, *, lane: str | None) -> QueueReservation | None:
++        active_jobs = 0
+         with self._condition:
+             if self._closed:
+                 raise QueueOperationError(
+@@ -796,7 +813,28 @@
+             self._update_heartbeat(now)
+             if self._draining or len(self._active_jobs) >= self._max_concurrency:
+                 return None
++            active_jobs = len(self._active_jobs)
+ 
++        admission_gate = self._admission_gate
++        if admission_gate is not None:
++            admitted = admission_gate(
++                lane=lane,
++                active_jobs=active_jobs,
++                max_concurrency=self._max_concurrency,
++            )
++            if type(admitted) is not bool:
++                raise TypeError("worker resource admission gate must return bool")
++            if not admitted:
++                return None
++
++        with self._condition:
++            if self._closed:
++                raise QueueOperationError(
++                    reason=PlatformReason.SHUTDOWN_FAILED,
++                    stage="queue.worker.admission",
++                )
++            if self._draining or len(self._active_jobs) >= self._max_concurrency:
++                return None
+             reservation = self._driver.reserve(lane=lane)
+             if reservation is None:
+                 return None
+@@ -971,4 +1009,3 @@
+                 idle_timeouts=self._stats.idle_timeouts + 1,
+             )
+             self._last_activity = now
+-
+--- a/src/af/queue/__init__.py
++++ b/src/af/queue/__init__.py
+@@ -26,6 +26,7 @@
+     IdempotencyStore,
+     InMemoryIdempotencyStore,
+     JobScopeFactory,
++    WorkerAdmissionGate,
+     WorkerKernel,
+     WorkerState,
+     WorkerStats,
+@@ -50,6 +51,7 @@
+     "QueueReservationLost",
+     "SyncQueueDriver",
+     "UnsupportedQueueFeature",
++    "WorkerAdmissionGate",
+     "WorkerKernel",
+     "WorkerRuntime",
+     "WorkerRuntimeKernel",
+@@ -60,4 +62,3 @@
+     "database_queue_registration",
+     "sync_queue_registration",
+ )
+-
+--- a/tests/unit/test_queue_worker.py
++++ b/tests/unit/test_queue_worker.py
+@@ -42,6 +42,7 @@
+         IdempotencyStore,
+         InMemoryIdempotencyStore,
+         JobScopeFactory,
++        WorkerAdmissionGate,
+     )
+ 
+     assert IdempotencyClaim is not None
+@@ -49,6 +50,116 @@
+     assert IdempotencyStore is not None
+     assert InMemoryIdempotencyStore is not None
+     assert JobScopeFactory is not None
++    assert WorkerAdmissionGate is not None
++
++
++def test_worker_kernel_resource_admission_denial_reserves_no_job() -> None:
++    driver = _make_driver()
++    driver.dispatch(_job("job-resource-denied"))
++    allowed = False
++    observations: list[tuple[str | None, int, int]] = []
++
++    def admission_gate(
++        *,
++        lane: str | None,
++        active_jobs: int,
++        max_concurrency: int,
++    ) -> bool:
++        observations.append((lane, active_jobs, max_concurrency))
++        return allowed
++
++    kernel = WorkerKernel(
++        driver,
++        max_concurrency=2,
++        admission_gate=admission_gate,
++        clock=lambda: _NOW,
++    )
++    processed: list[str] = []
++
++    assert (
++        kernel.run_once(
++            consumer=lambda job: processed.append(job.envelope.metadata.message_id),
++            lane="priority",
++        )
++        is None
++    )
++    assert observations == [("priority", 0, 2)]
++    assert processed == []
++    assert driver.queued_message_ids == ["job-resource-denied"]
++    assert driver._attempts == {}
++
++    allowed = True
++    assert (
++        kernel.run_once(consumer=lambda job: processed.append(job.envelope.metadata.message_id))
++        is not None
++    )
++    assert processed == ["job-resource-denied"]
++
++
++def test_worker_kernel_resource_admission_failure_is_fail_closed() -> None:
++    driver = _make_driver()
++    driver.dispatch(_job("job-resource-gate-failed"))
++
++    def admission_gate(**_: object) -> bool:
++        raise RuntimeError("resource admission unavailable")
++
++    kernel = WorkerKernel(driver, admission_gate=admission_gate, clock=lambda: _NOW)
++
++    with pytest.raises(RuntimeError, match="resource admission unavailable"):
++        kernel.run_once(consumer=lambda job: None)
++
++    assert driver.queued_message_ids == ["job-resource-gate-failed"]
++    assert driver._attempts == {}
++
++
++def test_worker_kernel_rechecks_drain_after_resource_admission() -> None:
++    driver = _make_driver()
++    driver.dispatch(_job("job-resource-drain-race"))
++    gate_entered = Event()
++    release_gate = Event()
++
++    def admission_gate(**_: object) -> bool:
++        gate_entered.set()
++        assert release_gate.wait(timeout=2)
++        return True
++
++    kernel = WorkerKernel(driver, admission_gate=admission_gate, clock=lambda: _NOW)
++    worker = Thread(target=kernel.run_once, args=(lambda job: None,))
++    worker.start()
++    assert gate_entered.wait(timeout=2)
++
++    kernel.start_draining()
++    release_gate.set()
++    worker.join(timeout=2)
++
++    assert not worker.is_alive()
++    assert driver.queued_message_ids == ["job-resource-drain-race"]
++    assert driver._attempts == {}
++
++
++def test_worker_kernel_resource_admission_requires_boolean_decision() -> None:
++    driver = _make_driver()
++    driver.dispatch(_job("job-resource-invalid-decision"))
++    kernel = WorkerKernel(
++        driver,
++        admission_gate=lambda **_: 1,  # type: ignore[return-value]
++        clock=lambda: _NOW,
++    )
++
++    with pytest.raises(TypeError, match="resource admission gate must return bool"):
++        kernel.run_once(consumer=lambda job: None)
++
++    assert driver.queued_message_ids == ["job-resource-invalid-decision"]
++    assert driver._attempts == {}
++
++
++def test_worker_kernel_rejects_non_callable_resource_admission_gate() -> None:
++    with pytest.raises(TypeError, match="resource admission gate must be callable"):
++        WorkerKernel(
++            _make_driver(),
++            admission_gate=object(),  # type: ignore[arg-type]
++            clock=lambda: _NOW,
++        )
+ 
+ 
+ def _job(message_id: str, **overrides: object) -> QueueJob:
+@@ -2138,4 +2249,3 @@
+             expires_at=datetime.now(UTC) + self.lease,
+             reservation_id=self.latest_reservation_id,
+         )
+-
+--- a/specs.md
++++ b/specs.md
+@@ -1989,3 +1989,34 @@
+ - SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+ - Issues #27, #29, #33, and #178
+ 
++---
++
++## [SPEC-039] Fail-Closed Queue Worker Resource Admission Boundary
++**Date**: 2026-08-17
++**Status**: Implemented
++**Priority**: MUST
++
++### Description
++Require the synchronous queue worker kernel to consult an injected host-resource admission gate
++before acquiring a queue reservation. The gate is a policy and capacity boundary; it is not a
++resource allocator, lease repository, or authorization source.
++
++### Requirements
++- MUST invoke the gate before `QueueDriver.reserve` and before incrementing a delivery attempt.
++- MUST expose the requested lane, current active-job count, and configured maximum concurrency.
++- MUST accept only the literal boolean decisions `True` and `False`.
++- MUST treat denial, gate failure, and malformed decisions as zero-reservation outcomes.
++- MUST recheck closed, draining, and concurrency state after an allowed decision so a concurrent
++  lifecycle transition cannot admit new work.
++- MUST NOT let the gate widen scope, authorize work, execute a handler, or mutate a queued job.
++
++### Tests
++- **TEST-039-1**: Denial leaves the job queued, consumes no attempt, and executes no handler.
++- **TEST-039-2**: Gate failure and non-boolean output fail closed before reservation.
++- **TEST-039-3**: A drain that begins while the gate is evaluating prevents later reservation.
++- **TEST-039-4**: A later allowed decision can process the untouched queued job normally.
++
++### Related Specs
++- SPEC-037 (Queue Capability Boundaries and Deterministic Ordering Declarations)
++- Issue #21
++- Issue #46
+--- a/decisions.md
++++ b/decisions.md
+@@ -3024,8 +3024,6 @@
+ - Added: `scripts/verify_epic_worker_policy.py`
+ - Tested by: `tests/unit/test_epic_worker.py`, `tests/unit/test_epic_worker_policy.py`
+ 
+----
+-
+ ## [DEC-053] Admit Only Credentialless Loopback Models to Epic Checkpoints
+ **Date**: 2026-08-05
+ **Status**: Accepted
+@@ -3051,3 +3049,42 @@
+ - Updated: `scripts/af_epic_worker`, `scripts/verify_epic_worker_policy.py`, `README.md`
+ - Tested by: `tests/unit/test_epic_worker.py`, `tests/unit/test_epic_worker_policy.py`
+ 
++---
++
++## [DEC-054] Separate Host Resource Admission from Queue Reservation
++**Date**: 2026-08-17
++**Status**: Accepted
++**Decision Maker**: Codex under direct operator instruction
++
++### Context
++The queue worker already bounded concurrency and queue reservations, while issue #46 supplied a
++separate host-resource lease lifecycle. Issue #21 still required an explicit resource-admission
++boundary. Reserving a job before determining host capacity would consume a delivery attempt and
++could create renewal and settlement work for a job that was never eligible to execute.
++
++### Decision
++1. Add a narrow `WorkerAdmissionGate` protocol to the queue worker kernel.
++2. Evaluate the gate outside the worker condition lock and before calling the queue driver.
++3. Pass only bounded scheduling facts: lane, active-job count, and maximum concurrency.
++4. Require an exact boolean result and fail closed on exceptions or malformed values.
++5. Reacquire the worker condition and recheck shutdown, drain, and concurrency before reserving.
++6. Keep lease creation, authorization, persistence, renewal, and reconciliation outside the queue
++   kernel; adapters may project their current admissibility into this gate without making the
++   worker a second resource manager.
++
++### Consequences
++**Positive:**
++- Capacity denial does not consume an attempt or temporarily remove a job from its queue.
++- Resource policy can be injected without coupling queue contracts to one lease backend.
++- Concurrent drain and shutdown decisions remain authoritative after a gate allows admission.
++
++**Negative:**
++- The gate sees a snapshot and cannot itself reserve capacity atomically; a production adapter
++  must use its own fenced lease or admission primitive.
++- Denial currently shares the worker's ordinary no-work polling path and does not yet expose a
++  distinct operator metric.
++
++### Output References
++- Updated: `src/af/queue/worker.py`, `src/af/queue/__init__.py`
++- Tested by: `tests/unit/test_queue_worker.py`
++- Related: issues #21 and #46
+--- a/agent_runs.md
++++ b/agent_runs.md
+@@ -2036,3 +2036,42 @@
+ - Closed issue #22.
+ - 3 pre-existing test failures unrelated to this change (test_dev_scripts, test_graphql_interface, test_release_gates).
+ 
++---
++
++## Run #038 - Queue Worker Resource Admission Boundary
++**Date**: 2026-08-17
++**Agent**: Codex
++**Status**: Bounded slice completed; issue #21 remains open
++
++### Inputs
++- Direct operator instruction to correct current state and close only fully evidenced work
++- Issue #21 worker resource-admission requirement
++- Closed issue #46 host-resource lease foundation
++- Reconstructed live `master` after merged PR #205
++
++### Outputs
++- Added public `WorkerAdmissionGate` protocol
++- Added pre-reservation fail-closed admission to `WorkerKernel`
++- Preserved queued jobs and delivery attempts on denial, failure, and malformed decisions
++- Rechecked drain, shutdown, and concurrency after an allowed decision
++- Added denial, failure, invalid-result, recovery, public-export, and drain-race specifications
++
++### Verified Results
++- Locked Ruff format and lint passed for the queue package and focused test module
++- Strict mypy passed for `src/af/queue`
++- 72 zero-fixture WorkerKernel behavioural specifications executed directly and passed, including
++  all six new resource-admission specifications
++- Production declaration validation passed
++
++### Incomplete or Unavailable Evidence
++- The full locked environment could not be recreated because PyMongo was absent from the sandbox's
++  offline dependency cache.
++- The surviving prebuilt pytest environment terminated with SIGBUS even for `pytest --help`;
++  therefore no pytest result is claimed for this run.
++- Issue #21 remains open: process isolation/supervision, durable adapter evidence, full aggregate
++  gates, and criterion-level closure review remain outside this bounded slice.
++
++### Related References
++- SPEC-039
++- DEC-054
++- Issues #21 and #46
+

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import re
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,8 @@ __all__ = ("database_queue_registration",)
 
 _CAPABILITIES = CapabilitySet(
     (
+        QueueFeature.DEAD_LETTER_INSPECTION.value,
+        QueueFeature.DEAD_LETTER_REPLAY.value,
         QueueFeature.RESERVATION.value,
         QueueFeature.RESERVATION_RENEWAL.value,
         QueueFeature.RETRY.value,
@@ -35,6 +38,7 @@ _ARTIFACT_DIGEST = hashlib.sha256(Path(__file__).with_name("database.py").read_b
 _DEPENDENCY_DIGEST = hashlib.sha256(
     f"{platform.python_implementation()}:{platform.python_version()}".encode()
 ).hexdigest()
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _evidence_digest(
@@ -62,6 +66,7 @@ def database_queue_registration(
     database_factory: Callable[[], DatabaseDriver],
     clock: Callable[[], datetime] | None = None,
     reservation_lease: timedelta = timedelta(minutes=5),
+    storage_identity: str | None = None,
 ) -> DriverRegistration[QueueDriver]:
     """Return an inert durable queue declaration backed by a relational driver."""
 
@@ -69,6 +74,10 @@ def database_queue_registration(
         raise TypeError("database queue factory must be callable")
     if clock is not None and not callable(clock):
         raise TypeError("database queue clock must be callable")
+    if storage_identity is not None and (
+        type(storage_identity) is not str or _DIGEST.fullmatch(storage_identity) is None
+    ):
+        raise ValueError("database queue storage identity must be lowercase SHA-256")
     if (
         not isinstance(reservation_lease, timedelta)
         or reservation_lease <= timedelta(0)
@@ -78,7 +87,7 @@ def database_queue_registration(
     evidence_clock = clock if clock is not None else (lambda: datetime.now(UTC))
     manifest = DriverManifest(
         driver_name="database",
-        version="1.3.0",
+        version="1.5.0",
         artifact_digest=_ARTIFACT_DIGEST,
         dependency_graph_digest=_DEPENDENCY_DIGEST,
         capabilities=_CAPABILITIES,
@@ -87,7 +96,10 @@ def database_queue_registration(
     def factory(ref: ConnectionRef, config: Mapping[str, object]) -> QueueDriver:
         if ref.manager_id != "queue" or ref.driver_name != "database":
             raise ValueError("database queue registration received an invalid identity")
-        if set(config) != {"driver"} or config.get("driver") != "database":
+        expected_config: dict[str, object] = {"driver": "database"}
+        if storage_identity is not None:
+            expected_config["storage_identity"] = storage_identity
+        if dict(config) != expected_config:
             raise ValueError("database queue connection configuration is invalid")
         return DatabaseQueueDriver(
             database_factory(),
@@ -112,6 +124,8 @@ def database_queue_registration(
         observed_at = observed_at.astimezone(UTC)
         if driver.features != frozenset(
             {
+                QueueFeature.DEAD_LETTER_INSPECTION,
+                QueueFeature.DEAD_LETTER_REPLAY,
                 QueueFeature.RESERVATION,
                 QueueFeature.RESERVATION_RENEWAL,
                 QueueFeature.RETRY,

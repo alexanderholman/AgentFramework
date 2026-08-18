@@ -18,9 +18,15 @@ from af.queue.worker import JobHandler
 
 __all__ = (
     "ContainerJobHandlerFactory",
+    "OwnedManagerConnectionRecycler",
+    "PurgeableConnectionManager",
     "WorkerRuntime",
     "WorkerRuntimeKernel",
     "WorkerRuntimeState",
+    "WorkerStopSignal",
+    "WorkerSupervisor",
+    "WorkerSupervisorMaintenance",
+    "WorkerSupervisorState",
 )
 
 _HandlerT = TypeVar("_HandlerT")
@@ -32,6 +38,15 @@ class WorkerRuntimeState(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     DRAINING = "draining"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+class WorkerSupervisorState(StrEnum):
+    """Lifecycle states for a blocking worker-generation supervisor."""
+
+    IDLE = "idle"
+    RUNNING = "running"
     STOPPED = "stopped"
     FAILED = "failed"
 
@@ -55,6 +70,71 @@ class WorkerRuntimeKernel(Protocol):
     def start_draining(self) -> None: ...
 
     def close(self, *, timeout: timedelta | None = None) -> None: ...
+
+
+@runtime_checkable
+class WorkerStopSignal(Protocol):
+    """Cross-thread or cross-process stop signal accepted by a supervisor."""
+
+    def is_set(self) -> bool: ...
+
+    def set(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> bool: ...
+
+
+@runtime_checkable
+class WorkerSupervisorMaintenance(Protocol):
+    """Synchronous maintenance owned by the worker supervisor cadence."""
+
+    def run(self) -> None: ...
+
+
+class PurgeableConnectionManager(Protocol):
+    """Synchronous manager whose cached connections can be recycled."""
+
+    def purge(self) -> None: ...
+
+
+class OwnedManagerConnectionRecycler:
+    """Recycle connections held by managers owned exclusively by one worker kernel."""
+
+    def __init__(self, *managers: PurgeableConnectionManager) -> None:
+        if not managers:
+            raise ValueError("worker connection recycler requires at least one manager")
+        if len({id(manager) for manager in managers}) != len(managers):
+            raise ValueError("worker connection recycler managers must be unique")
+        for manager in managers:
+            purge = getattr(manager, "purge", None)
+            if not callable(purge):
+                raise TypeError("worker connection recycler manager requires callable purge")
+            if inspect.iscoroutinefunction(purge) or inspect.isasyncgenfunction(purge):
+                raise TypeError("worker connection recycler manager purge must be synchronous")
+        self._managers = managers
+
+    def recycle(self) -> None:
+        failures: list[BaseException] = []
+        for manager in self._managers:
+            try:
+                purge = cast(Callable[[], object], manager.purge)
+                result = purge()
+                if inspect.iscoroutine(result):
+                    result.close()
+                    raise TypeError("worker connection manager returned an asynchronous result")
+                if inspect.isawaitable(result) or inspect.isasyncgen(result):
+                    raise TypeError("worker connection manager returned an asynchronous result")
+                if result is not None:
+                    raise TypeError("worker connection manager purge must return None")
+            except BaseException as error:
+                failures.append(error)
+        if len(failures) == 1:
+            failure = failures[0]
+            raise failure.with_traceback(failure.__traceback__)
+        if failures:
+            raise BaseExceptionGroup(
+                "worker connection manager purges failed",
+                tuple(failures),
+            ) from None
 
 
 @runtime_checkable
@@ -211,9 +291,32 @@ class WorkerRuntime:
             return self._state
 
     @property
+    def worker_count(self) -> int:
+        return self._worker_count
+
+    @property
+    def max_concurrency(self) -> int:
+        return self._kernel.max_concurrency
+
+    @property
+    def lane(self) -> str | None:
+        return self._lane
+
+    @property
+    def poll_interval(self) -> timedelta:
+        return self._poll_interval
+
+    @property
     def failure(self) -> BaseException | None:
         with self._condition:
             return self._failure
+
+    @property
+    def closed(self) -> bool:
+        """Return whether the owned kernel completed its close lifecycle."""
+
+        with self._condition:
+            return self._closed
 
     def start(self) -> None:
         start_failure: BaseException | None = None
@@ -361,6 +464,11 @@ class WorkerRuntime:
                 poll_interval=self._poll_interval,
                 stop_event=self._stop,
             )
+            if not self._stop.is_set():
+                raise QueueOperationError(
+                    reason=PlatformReason.SHUTDOWN_FAILED,
+                    stage="queue.runtime.worker-exit",
+                )
         except BaseException as error:
             with self._condition:
                 first = self._failure is None
@@ -488,3 +596,220 @@ class WorkerRuntime:
             reason=PlatformReason.SHUTDOWN_FAILED,
             stage="queue.runtime.shutdown",
         )
+
+
+class WorkerSupervisor:
+    """Run and replace failed worker-runtime generations within a fixed budget.
+
+    ``run`` intentionally blocks so a deployment entrypoint can keep supervision in
+    code while an external signal adapter owns the supplied stop event. Each restart
+    receives a fresh runtime and therefore a fresh kernel from ``runtime_factory``.
+    """
+
+    def __init__(
+        self,
+        runtime_factory: Callable[[], WorkerRuntime],
+        *,
+        max_restarts: int = 0,
+        restart_delay: timedelta = timedelta(0),
+        watch_interval: timedelta = timedelta(milliseconds=100),
+        shutdown_timeout: timedelta = timedelta(seconds=30),
+        maintenance: WorkerSupervisorMaintenance | None = None,
+        maintenance_interval: timedelta = timedelta(seconds=30),
+    ) -> None:
+        if not callable(runtime_factory):
+            raise TypeError("worker supervisor runtime factory must be callable")
+        if type(max_restarts) is not int or max_restarts < 0:
+            raise ValueError("worker supervisor restart budget must be non-negative")
+        if restart_delay < timedelta(0):
+            raise ValueError("worker supervisor restart delay must be non-negative")
+        if watch_interval <= timedelta(0):
+            raise ValueError("worker supervisor watch interval must be positive")
+        if shutdown_timeout <= timedelta(0):
+            raise ValueError("worker supervisor shutdown timeout must be positive")
+        if maintenance_interval <= timedelta(0):
+            raise ValueError("worker supervisor maintenance interval must be positive")
+        if maintenance is not None:
+            if not isinstance(maintenance, WorkerSupervisorMaintenance):
+                raise TypeError("worker supervisor maintenance requires callable run")
+            run = inspect.getattr_static(maintenance, "run", None)
+            if inspect.iscoroutinefunction(run) or inspect.isasyncgenfunction(run):
+                raise TypeError("worker supervisor maintenance must be synchronous")
+        self._runtime_factory = runtime_factory
+        self._max_restarts = max_restarts
+        self._restart_delay_seconds = restart_delay.total_seconds()
+        self._watch_interval = watch_interval
+        self._shutdown_timeout = shutdown_timeout
+        self._maintenance = maintenance
+        self._maintenance_interval = maintenance_interval
+        self._maintenance_interval_seconds = maintenance_interval.total_seconds()
+        self._maintenance_run_count = 0
+        self._state = WorkerSupervisorState.IDLE
+        self._failure: BaseException | None = None
+        self._failures: list[BaseException] = []
+        self._generation_count = 0
+        self._restart_count = 0
+        self._lock = RLock()
+
+    @property
+    def state(self) -> WorkerSupervisorState:
+        with self._lock:
+            return self._state
+
+    @property
+    def failure(self) -> BaseException | None:
+        with self._lock:
+            return self._failure
+
+    @property
+    def failures(self) -> tuple[BaseException, ...]:
+        with self._lock:
+            return tuple(self._failures)
+
+    @property
+    def generation_count(self) -> int:
+        with self._lock:
+            return self._generation_count
+
+    @property
+    def restart_count(self) -> int:
+        with self._lock:
+            return self._restart_count
+
+    @property
+    def maintenance_interval(self) -> timedelta:
+        return self._maintenance_interval
+
+    @property
+    def maintenance_run_count(self) -> int:
+        with self._lock:
+            return self._maintenance_run_count
+
+    def run(self, *, stop_event: WorkerStopSignal) -> None:
+        if not isinstance(stop_event, WorkerStopSignal):
+            raise TypeError("worker supervisor stop_event must be a WorkerStopSignal")
+        with self._lock:
+            if self._state is not WorkerSupervisorState.IDLE:
+                raise QueueOperationError(
+                    reason=PlatformReason.SHUTDOWN_FAILED,
+                    stage="queue.supervisor.start",
+                )
+            self._state = WorkerSupervisorState.RUNNING
+
+        if stop_event.is_set():
+            self._mark_stopped()
+            return
+
+        while True:
+            runtime: WorkerRuntime | None = None
+            next_maintenance: float | None = None
+            try:
+                if self._maintenance is not None:
+                    self._run_maintenance()
+                    next_maintenance = monotonic() + self._maintenance_interval_seconds
+                candidate = self._runtime_factory()
+                if not isinstance(candidate, WorkerRuntime):
+                    raise TypeError("worker supervisor runtime factory must return a WorkerRuntime")
+                runtime = candidate
+                with self._lock:
+                    self._generation_count += 1
+                runtime.start()
+                while not stop_event.is_set():
+                    if (
+                        next_maintenance is not None
+                        and monotonic() >= next_maintenance
+                        and not stop_event.is_set()
+                    ):
+                        self._run_maintenance()
+                        next_maintenance = monotonic() + self._maintenance_interval_seconds
+                    wait_interval = self._watch_interval
+                    if next_maintenance is not None:
+                        until_maintenance = next_maintenance - monotonic()
+                        if until_maintenance > 0:
+                            wait_interval = min(
+                                wait_interval,
+                                timedelta(seconds=until_maintenance),
+                            )
+                    if runtime.wait(timeout=wait_interval):
+                        break
+
+                runtime_failure = runtime.failure
+                if runtime_failure is not None:
+                    raise runtime_failure.with_traceback(runtime_failure.__traceback__)
+                if not stop_event.is_set():
+                    raise QueueOperationError(
+                        reason=PlatformReason.SHUTDOWN_FAILED,
+                        stage="queue.supervisor.worker-loss",
+                    )
+                runtime.close(timeout=self._shutdown_timeout)
+            except BaseException as error:
+                failure, retired = self._retire_failed_runtime(
+                    runtime,
+                    error,
+                    timeout=self._shutdown_timeout,
+                )
+                with self._lock:
+                    self._failures.append(failure)
+                    exhausted = len(self._failures) > self._max_restarts
+                if not retired or exhausted:
+                    self._fail_closed()
+                if stop_event.wait(self._restart_delay_seconds):
+                    self._mark_stopped()
+                    return
+                with self._lock:
+                    self._restart_count += 1
+                continue
+
+            self._mark_stopped()
+            return
+
+    def _run_maintenance(self) -> None:
+        maintenance = self._maintenance
+        assert maintenance is not None
+        run = cast(Callable[[], object], maintenance.run)
+        result = run()
+        if inspect.iscoroutine(result):
+            result.close()
+            raise TypeError("worker supervisor maintenance returned an asynchronous result")
+        if inspect.isawaitable(result) or inspect.isasyncgen(result):
+            raise TypeError("worker supervisor maintenance returned an asynchronous result")
+        if result is not None:
+            raise TypeError("worker supervisor maintenance must return None")
+        with self._lock:
+            self._maintenance_run_count += 1
+
+    @staticmethod
+    def _retire_failed_runtime(
+        runtime: WorkerRuntime | None,
+        failure: BaseException,
+        *,
+        timeout: timedelta,
+    ) -> tuple[BaseException, bool]:
+        if runtime is None:
+            return failure, True
+        try:
+            runtime.close(timeout=timeout)
+        except BaseException as cleanup_failure:
+            if cleanup_failure is failure:
+                return failure, runtime.closed
+            return cleanup_failure, runtime.closed
+        return failure, runtime.closed
+
+    def _fail_closed(self) -> None:
+        with self._lock:
+            failures = tuple(self._failures)
+            failure: BaseException
+            if len(failures) == 1:
+                failure = failures[0]
+            else:
+                failure = BaseExceptionGroup(
+                    "queue worker restart budget exhausted",
+                    failures,
+                )
+            self._failure = failure
+            self._state = WorkerSupervisorState.FAILED
+        raise failure.with_traceback(failure.__traceback__)
+
+    def _mark_stopped(self) -> None:
+        with self._lock:
+            self._state = WorkerSupervisorState.STOPPED

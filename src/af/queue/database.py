@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -13,9 +14,12 @@ from af.framework.errors import PlatformReason
 from af.framework.relational import DatabaseDriver, DatabaseOperationError, DatabaseStatement
 from af.messaging.envelopes import JsonEnvelopeCodec, MessageEnvelope
 from af.queue.contracts import (
+    QueueDeadLetter,
+    QueueDeadLetterReplayReceipt,
     QueueDispatchDisposition,
     QueueDispatchReceipt,
     QueueJob,
+    QueueJobTags,
     QueueOperationError,
     QueueReservation,
     QueueReservationLost,
@@ -26,7 +30,13 @@ from af.queue.manager import QueueFeature
 __all__ = ("DatabaseQueueDriver",)
 
 _FEATURES = frozenset(
-    {QueueFeature.RESERVATION, QueueFeature.RESERVATION_RENEWAL, QueueFeature.RETRY}
+    {
+        QueueFeature.DEAD_LETTER_INSPECTION,
+        QueueFeature.DEAD_LETTER_REPLAY,
+        QueueFeature.RESERVATION,
+        QueueFeature.RESERVATION_RENEWAL,
+        QueueFeature.RETRY,
+    }
 )
 _TABLE = "af_queue_jobs"
 _IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$")
@@ -161,6 +171,7 @@ class DatabaseQueueDriver:
                             lane,
                             available_at,
                             envelope_text,
+                            tags_text,
                             attempt_count,
                             reservation_generation,
                             max_attempts,
@@ -178,6 +189,7 @@ class DatabaseQueueDriver:
                             :lane,
                             :available_at,
                             :envelope_text,
+                            :tags_text,
                             0,
                             0,
                             :max_attempts,
@@ -196,6 +208,7 @@ class DatabaseQueueDriver:
                             "lane": job.lane,
                             "available_at": _timestamp(available_at),
                             "envelope_text": envelope_text,
+                            "tags_text": self._encode_tags(job.tags),
                             "max_attempts": job.max_attempts,
                             "backoff_seconds": (
                                 None if job.backoff is None else job.backoff.total_seconds()
@@ -245,6 +258,7 @@ class DatabaseQueueDriver:
                             occurred_at,
                             lane,
                             envelope_text,
+                            tags_text,
                             attempt_count,
                             reservation_generation,
                             reserved_at,
@@ -373,7 +387,7 @@ class DatabaseQueueDriver:
             sql=(
                 f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
                 f"reservation_owner_id = NULL, reservation_id = NULL, "
-                f"dead_lettered_at = :terminal_at "
+                f"attempt_count = :attempt, dead_lettered_at = :terminal_at "
                 f"WHERE message_id = :message_id AND attempt_count = :previous_attempt "
                 f"AND reservation_generation = :fencing_token "
                 f"AND reservation_owner_id = :reservation_owner_id "
@@ -511,7 +525,7 @@ class DatabaseQueueDriver:
                 sql=(
                     f"UPDATE {_TABLE} SET reserved_at = NULL, reservation_expires_at = NULL, "
                     f"reservation_owner_id = NULL, reservation_id = NULL, "
-                    f"dead_lettered_at = :terminal_at "
+                    f"attempt_count = :attempt, dead_lettered_at = :terminal_at "
                     f"WHERE message_id = :message_id AND attempt_count = :previous_attempt "
                     f"AND reservation_generation = :fencing_token "
                     f"AND reservation_owner_id = :reservation_owner_id "
@@ -551,6 +565,134 @@ class DatabaseQueueDriver:
             available_at=next_available,
         )
 
+    def dead_letters(
+        self,
+        *,
+        lane: str | None = None,
+        limit: int = 100,
+    ) -> tuple[QueueDeadLetter, ...]:
+        """Inspect terminal deliveries in deterministic failure order."""
+
+        self._assert_open()
+        if lane is not None:
+            _identifier(lane, "lane")
+        if type(limit) is not int or limit < 1 or limit > 1_000:
+            raise ValueError("queue dead-letter inspection limit must be within 1..1000")
+        where = "dead_lettered_at IS NOT NULL"
+        parameters: dict[str, object] = {"limit": limit}
+        if lane is not None:
+            where += " AND lane = :lane"
+            parameters["lane"] = lane
+        try:
+            with self._database.transaction() as transaction:
+                rows = transaction.query(
+                    DatabaseStatement(
+                        f"""SELECT
+                            message_id,
+                            occurred_at,
+                            lane,
+                            envelope_text,
+                            tags_text,
+                            attempt_count,
+                            max_attempts,
+                            backoff_seconds,
+                            dead_lettered_at
+                        FROM {_TABLE}
+                        WHERE {where}
+                        ORDER BY dead_lettered_at ASC, message_id ASC
+                        LIMIT :limit""",
+                        parameters,
+                        read_only=True,
+                    )
+                )
+            return tuple(
+                QueueDeadLetter(
+                    job=self._job_from_row(row),
+                    attempts=self._stored_int(row["attempt_count"]),
+                    dead_lettered_at=_parse_timestamp(
+                        row["dead_lettered_at"],
+                        "dead-letter time",
+                    ),
+                )
+                for row in rows
+            )
+        except QueueOperationError:
+            raise
+        except (DatabaseOperationError, TypeError, ValueError) as error:
+            reason = (
+                error.reason
+                if isinstance(error, DatabaseOperationError)
+                else PlatformReason.INTEGRITY_FAILURE
+            )
+            raise QueueOperationError(
+                reason=reason,
+                stage="queue.dead-letter.inspect",
+                protected_cause=error,
+            ) from None
+
+    def replay_dead_letter(self, message_id: str, /) -> QueueDeadLetterReplayReceipt:
+        """Atomically make one terminal delivery eligible as a fresh attempt series."""
+
+        self._assert_open()
+        resolved_id = _identifier(message_id, "message id")
+        replayed_at = _aware_utc(self._clock(), "replay time")
+        try:
+            with self._database.transaction() as transaction:
+                rows = transaction.query(
+                    DatabaseStatement(
+                        f"""SELECT attempt_count FROM {_TABLE}
+                        WHERE message_id = :message_id AND dead_lettered_at IS NOT NULL""",
+                        {"message_id": resolved_id},
+                        read_only=True,
+                    )
+                )
+                if len(rows) != 1:
+                    raise QueueOperationError(
+                        reason=PlatformReason.INTEGRITY_FAILURE,
+                        stage="queue.dead-letter.replay",
+                    )
+                previous_attempts = self._stored_int(rows[0]["attempt_count"])
+                if previous_attempts < 1:
+                    raise QueueOperationError(
+                        reason=PlatformReason.INTEGRITY_FAILURE,
+                        stage="queue.dead-letter.replay",
+                    )
+                changed = transaction.execute(
+                    DatabaseStatement(
+                        f"""UPDATE {_TABLE}
+                        SET available_at = :available_at,
+                            attempt_count = 0,
+                            reserved_at = NULL,
+                            reservation_expires_at = NULL,
+                            reservation_owner_id = NULL,
+                            reservation_id = NULL,
+                            dead_lettered_at = NULL
+                        WHERE message_id = :message_id AND dead_lettered_at IS NOT NULL""",
+                        {
+                            "message_id": resolved_id,
+                            "available_at": _timestamp(replayed_at),
+                        },
+                    )
+                )
+                if changed != 1:
+                    raise QueueOperationError(
+                        reason=PlatformReason.INTEGRITY_FAILURE,
+                        stage="queue.dead-letter.replay",
+                    )
+        except QueueOperationError:
+            raise
+        except DatabaseOperationError as error:
+            raise QueueOperationError(
+                reason=error.reason,
+                stage="queue.dead-letter.replay",
+                protected_cause=error,
+            ) from None
+        return QueueDeadLetterReplayReceipt(
+            message_id=resolved_id,
+            previous_attempts=previous_attempts,
+            replayed_at=replayed_at,
+        )
+
     def close(self) -> None:
         if self._closed:
             return
@@ -582,6 +724,7 @@ class DatabaseQueueDriver:
                             lane VARCHAR(128) NOT NULL,
                             available_at VARCHAR(32) NOT NULL,
                             envelope_text TEXT NOT NULL,
+                            tags_text TEXT NULL,
                             attempt_count INTEGER NOT NULL DEFAULT 0,
                             reservation_generation INTEGER NOT NULL DEFAULT 0,
                             max_attempts INTEGER NOT NULL,
@@ -598,6 +741,7 @@ class DatabaseQueueDriver:
             self._ensure_reservation_expiry()
             self._ensure_reservation_owner()
             self._ensure_reservation_id()
+            self._ensure_tags()
         except DatabaseOperationError as error:
             raise QueueOperationError(
                 reason=error.reason,
@@ -658,6 +802,26 @@ class DatabaseQueueDriver:
 
     def _ensure_reservation_id(self) -> None:
         self._ensure_nullable_column("reservation_id")
+
+    def _ensure_tags(self) -> None:
+        probe = DatabaseStatement(
+            f"SELECT tags_text FROM {_TABLE} WHERE 1 = 0",
+            read_only=True,
+        )
+        try:
+            with self._database.transaction() as transaction:
+                transaction.query(probe)
+            return
+        except DatabaseOperationError:
+            pass
+        try:
+            with self._database.transaction() as transaction:
+                transaction.execute(
+                    DatabaseStatement(f"ALTER TABLE {_TABLE} ADD COLUMN tags_text TEXT NULL")
+                )
+        except DatabaseOperationError:
+            with self._database.transaction() as transaction:
+                transaction.query(probe)
 
     def _ensure_nullable_column(self, column: str) -> None:
         if column not in {"reservation_owner_id", "reservation_id"}:
@@ -761,6 +925,7 @@ class DatabaseQueueDriver:
                 lane=self._stored_text(row["lane"]),
                 max_attempts=self._stored_int(row["max_attempts"]),
                 backoff=self._stored_backoff(row["backoff_seconds"]),
+                tags=self._decode_tags(row["tags_text"]),
             )
         except Exception as error:
             raise QueueOperationError(
@@ -788,3 +953,37 @@ class DatabaseQueueDriver:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
             raise TypeError("queue stored backoff is invalid")
         return timedelta(seconds=float(value))
+
+    @staticmethod
+    def _encode_tags(tags: QueueJobTags | None) -> str | None:
+        if tags is None:
+            return None
+        return json.dumps(
+            {
+                "agent_id": tags.agent_id,
+                "capability_id": tags.capability_id,
+                "correlation_id": tags.correlation_id,
+                "task_id": tags.task_id,
+                "tenant_ref": tags.tenant_ref,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _decode_tags(value: object) -> QueueJobTags | None:
+        if value is None:
+            return None
+        if type(value) is not str or len(value.encode("utf-8")) > 2_048:
+            raise TypeError("queue stored tags are invalid")
+        decoded = json.loads(value)
+        expected = {
+            "agent_id",
+            "capability_id",
+            "correlation_id",
+            "task_id",
+            "tenant_ref",
+        }
+        if type(decoded) is not dict or set(decoded) != expected:
+            raise TypeError("queue stored tags are invalid")
+        return QueueJobTags(**decoded)

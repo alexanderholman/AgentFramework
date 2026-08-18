@@ -715,6 +715,12 @@ class Manager[T]:
                 )
             return cached.evidence
 
+    def reference(self, name: str | None = None) -> ConnectionRef:
+        """Return the immutable configured identity for one named connection."""
+        with self._lock:
+            self._assert_operational()
+            return self._definition(name).ref
+
     def health(self, name: str | None = None) -> HealthStatus:
         return self.evidence(name).health
 
