@@ -179,6 +179,13 @@ class FencedResourceLeaseAdmissionGate:
             or quantity <= 0
         ):
             raise ValueError("worker resource quantity must be positive")
+        if (
+            not isinstance(budget.max_quantity, (int, float))
+            or isinstance(budget.max_quantity, bool)
+            or not isfinite(budget.max_quantity)
+            or budget.max_quantity <= 0
+        ):
+            raise ValueError("worker resource budget maximum must be finite and positive")
         if quantity > budget.max_quantity:
             raise ValueError("worker resource quantity must not exceed budget maximum")
         if not authorized_by or not authorization_digest:
