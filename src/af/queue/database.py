@@ -25,6 +25,7 @@ from af.queue.contracts import (
     QueueReservationLost,
     UnsupportedQueueFeature,
 )
+from af.queue.control_plane import WorkerJobCoordinates
 from af.queue.manager import QueueFeature
 
 __all__ = ("DatabaseQueueDriver",)
@@ -742,6 +743,7 @@ class DatabaseQueueDriver:
             self._ensure_reservation_owner()
             self._ensure_reservation_id()
             self._ensure_tags()
+            self._backfill_legacy_dead_letter_attempts()
         except DatabaseOperationError as error:
             raise QueueOperationError(
                 reason=error.reason,
@@ -844,6 +846,16 @@ class DatabaseQueueDriver:
         except DatabaseOperationError:
             with self._database.transaction() as transaction:
                 transaction.query(probe)
+
+    def _backfill_legacy_dead_letter_attempts(self) -> None:
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                DatabaseStatement(
+                    f"""UPDATE {_TABLE}
+                    SET attempt_count = 1
+                    WHERE dead_lettered_at IS NOT NULL AND attempt_count = 0"""
+                )
+            )
 
     def _transition_reserved(
         self,
@@ -963,6 +975,16 @@ class DatabaseQueueDriver:
                 "agent_id": tags.agent_id,
                 "capability_id": tags.capability_id,
                 "correlation_id": tags.correlation_id,
+                "coordinates": (
+                    None
+                    if tags.coordinates is None
+                    else {
+                        "checkpoint_id": tags.coordinates.checkpoint_id,
+                        "node_id": tags.coordinates.node_id,
+                        "run_id": tags.coordinates.run_id,
+                        "workflow_id": tags.coordinates.workflow_id,
+                    }
+                ),
                 "task_id": tags.task_id,
                 "tenant_ref": tags.tenant_ref,
             },
@@ -984,6 +1006,11 @@ class DatabaseQueueDriver:
             "task_id",
             "tenant_ref",
         }
-        if type(decoded) is not dict or set(decoded) != expected:
+        if type(decoded) is not dict or set(decoded) not in (expected, expected | {"coordinates"}):
             raise TypeError("queue stored tags are invalid")
+        coordinates = decoded.pop("coordinates", None)
+        if coordinates is not None:
+            if type(coordinates) is not dict:
+                raise TypeError("queue stored job coordinates are invalid")
+            decoded["coordinates"] = WorkerJobCoordinates(**coordinates)
         return QueueJobTags(**decoded)

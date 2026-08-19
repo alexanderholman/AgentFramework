@@ -109,6 +109,26 @@ def test_worker_kernel_resource_admission_denial_reserves_no_job() -> None:
     assert processed == ["job-resource-denied"]
 
 
+def test_worker_kernel_rejects_invalid_lane_before_resource_admission() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-invalid-admission-lane"))
+    admission_calls = 0
+
+    def admission_gate(**_: object) -> bool:
+        nonlocal admission_calls
+        admission_calls += 1
+        return True
+
+    kernel = WorkerKernel(driver, admission_gate=admission_gate, clock=lambda: _NOW)
+
+    with pytest.raises(ValueError, match="queue lane must be a canonical identifier"):
+        kernel.run_once(lambda _job: None, lane="INVALID")
+
+    assert admission_calls == 0
+    assert driver.queued_message_ids == ["job-invalid-admission-lane"]
+    assert driver._attempts == {}
+
+
 def test_worker_kernel_resource_admission_failure_is_fail_closed() -> None:
     driver = _make_driver()
     driver.dispatch(_job("job-resource-gate-failed"))

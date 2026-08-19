@@ -40,6 +40,7 @@ from af.queue import (
     QueueReservationLost,
     SyncQueueDriver,
     UnsupportedQueueFeature,
+    WorkerJobCoordinates,
     database_queue_registration,
     sync_queue_registration,
 )
@@ -155,6 +156,12 @@ def test_database_queue_persists_job_tags_across_restart(tmp_path: Path) -> None
             agent_id="agent.builder",
             task_id="task.compile",
             capability_id="capability.python",
+            coordinates=WorkerJobCoordinates(
+                workflow_id="workflow.acquire",
+                run_id="run.20260819",
+                node_id="node.verify",
+                checkpoint_id="checkpoint.4",
+            ),
         ),
     )
     first = DatabaseQueueDriver(SQLiteDriver(database), clock=FakeClock(_NOW))
@@ -1291,6 +1298,66 @@ def test_database_queue_upgrades_legacy_table_without_losing_queued_work(
     assert reservation.owner_id is not None
     assert reservation.reservation_id is not None
     driver.ack(reservation)
+    driver.close()
+
+
+def test_database_queue_backfills_legacy_dead_letter_attempt_count(tmp_path: Path) -> None:
+    database = SQLiteDriver(tmp_path / "queue-legacy-dead-letter.sqlite3")
+    job = _job("job-legacy-dead-letter")
+    encoded = JsonEnvelopeCodec().encode(job.envelope).decode("utf-8")
+    timestamp = _NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    with database.transaction() as transaction:
+        transaction.execute(
+            DatabaseStatement(
+                """CREATE TABLE af_queue_jobs (
+                    message_id VARCHAR(200) PRIMARY KEY,
+                    message_type VARCHAR(128) NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    occurred_at VARCHAR(32) NOT NULL,
+                    lane VARCHAR(128) NOT NULL,
+                    available_at VARCHAR(32) NOT NULL,
+                    envelope_text TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL,
+                    backoff_seconds REAL NULL,
+                    reserved_at VARCHAR(32) NULL,
+                    dead_lettered_at VARCHAR(32) NULL
+                )"""
+            )
+        )
+        transaction.execute(
+            DatabaseStatement(
+                """INSERT INTO af_queue_jobs (
+                    message_id, message_type, schema_version, occurred_at, lane,
+                    available_at, envelope_text, attempt_count, max_attempts,
+                    backoff_seconds, reserved_at, dead_lettered_at
+                ) VALUES (
+                    :message_id, :message_type, 1, :occurred_at, 'default',
+                    :available_at, :envelope_text, 0, 1, NULL, NULL, :dead_lettered_at
+                )""",
+                {
+                    "message_id": "job-legacy-dead-letter",
+                    "message_type": "jobs.example",
+                    "occurred_at": timestamp,
+                    "available_at": timestamp,
+                    "envelope_text": encoded,
+                    "dead_lettered_at": timestamp,
+                },
+            )
+        )
+
+    driver = DatabaseQueueDriver(database, clock=FakeClock(_NOW))
+
+    failures = driver.dead_letters()
+    replayed = driver.replay_dead_letter("job-legacy-dead-letter")
+
+    assert len(failures) == 1
+    assert failures[0].attempts == 1
+    assert replayed.previous_attempts == 1
+    replacement = driver.reserve()
+    assert replacement is not None
+    assert replacement.attempt == 1
+    driver.ack(replacement)
     driver.close()
 
 

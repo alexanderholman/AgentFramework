@@ -3681,3 +3681,593 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
   `ecb526310788d051f616facf74acde73b184050477ad3294fdfee0b07b0e4c6c`.
 - The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
   issue acceptance, or closure is claimed.
+
+---
+
+## Run #067 - Revoked Permit and Legacy Dead-Letter Recovery
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Blocking review findings repaired locally; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains open and mergeable at published
+  head `4a42d9dc4988a2258858298b1a14da23578a6856`
+- The only unresolved PR findings were externally revoked permit cleanup and legacy dead-letter
+  rows whose zero attempt count made inspection and replay fail
+
+### Outputs
+- Permit cleanup now adopts an externally persisted `REVOKED` lease and reconciles it using the
+  current fence instead of retrying release with a stale active fence
+- Database queue installation now idempotently normalizes legacy terminal rows from zero to one
+  attempt before dead-letter inspection and replay enforce their positive-attempt invariant
+- Added intended-failure regression specifications for both findings
+
+### Verified Results
+- Both new specifications failed before their production fixes and passed afterward
+- Resource-admission, database-queue, and issue-boundary specifications passed 214/214
+- The complete resource-admission and queue-driver suites passed 77/77
+- Focused Ruff format/lint, strict mypy, and `git diff --check` passed
+- The locked aggregate passed from implementation commit `fbbacdf62b5ef8dad3336b20d1590b1c0b0b8a65`:
+  Python passed 2,990 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.08%; Node passed 9/9; governance passed 36/36; package and
+  append-only gates passed
+- Package hashes: sdist SHA-256
+  `1fc58d6df769eccf0be5fe8f9828f98b24223631d9ac2df282a22f5709ade522`; wheel SHA-256
+  `a5a5cbbf0503d1f3e68860376629ccfe743ad0ceb4f5270e4a79beed172ce59c`
+
+### Remaining Work
+- Under direct supervision, publish this accumulated checkpoint, resolve the two repaired review
+  findings with exact-head evidence, obtain a fresh independent review, and merge only if clean
+- Restore GitHub Actions job execution or provide reachable PostgreSQL, MySQL, MariaDB,
+  Elasticsearch, and OpenSearch service URLs, then rerun all five exact-head qualification suites
+- Reconcile all four issue #21 acceptance criteria against immutable merged evidence before closure
+
+### Blockers
+- The 52 service-profile tests remain unqualified because their five required service URLs are not
+  configured locally and the corresponding GitHub Actions runs fail before executing any step
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+- Local implementation commit `fbbacdf62b5ef8dad3336b20d1590b1c0b0b8a65`
+
+---
+
+## Run #068 - Interrupted Lease-Expiry Recovery
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local shutdown-safety repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Permit cleanup adopted persisted release, revocation, and reconciliation states, but not a
+  persisted expiry left behind when expiry committed and reconciliation was interrupted
+
+### Outputs
+- Permit cleanup now adopts the current `EXPIRED` fence instead of retrying release with its stale
+  active fence
+- Persisted expiry is reconciled through the same restart-safe terminal-state path as release and
+  revocation
+- Added an intended-failure regression for interrupted external expiry cleanup
+
+### Verified Results
+- The new specification failed before implementation with `LeaseFenceTokenStale`, proving cleanup
+  retried release using fence 2 after persisted expiry advanced the fence to 3
+- Resource-admission, lease-sweeper, and issue-boundary specifications passed 159/159 after the fix
+- Focused Ruff format/lint, strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, and merge only if clean
+- Complete applicable real-service qualification and criterion-level merged-evidence reconciliation
+  before issue #21 closure
+
+### Blockers
+- PostgreSQL, MySQL, MariaDB, Elasticsearch, and OpenSearch qualification remains unavailable
+  locally, and the corresponding GitHub Actions jobs have failed before executing any step
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean checkpoint
+  `7110ee07fe586c1e5fe9c26e6326284458cd7560`
+- Python passed 2,991 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `3c92c939ba046b8023b012d8e9eab16d80c248c0fdd4e34973ed7cc770987525`; wheel SHA-256
+  `c5162637a6126d99b7846847cbeecd80155d7a55b1f0402ce93f1c3dc817e7cd`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #069 - Fail-Closed Worker Lane Admission
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local safety repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, workflow
+  runs, and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Invalid worker lanes reached resource admission before the queue driver's canonical identifier
+  validation, allowing an avoidable privileged capacity side effect before rejection
+
+### Outputs
+- Worker admission now validates a requested lane before retained-permit cleanup or the resource
+  gate can perform side effects
+- Added an intended-failure regression proving an invalid lane leaves admission, queue contents,
+  and delivery attempts untouched
+
+### Verified Results
+- The new specification failed before implementation because no exception was raised and the
+  admission gate was called
+- The regression passed after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 280/280
+- Focused Ruff and strict mypy passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow has a failed job record but zero steps and no retrievable job log; the
+  local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-066
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `03f9b7fd12eda0411c73d14eb94ba5b5c24091d6`
+- Python passed 2,992 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `596f219d6e5a6006bdf2c58a7a80f0c6500c37b6bf3eb424d5630567c9f1d4eb`; wheel SHA-256
+  `cacb3a4862d0e5a49a2bb87367cbd2ef43474d4a20c010f1154196cd8e8a8f4b`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #070 - Fail-Closed Worker Capacity Facts
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local safety repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, workflow
+  runs, and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- The public fenced-resource admission boundary trusted caller-supplied active-job and concurrency
+  facts, allowing negative or boolean values to reach privileged lease acquisition
+
+### Outputs
+- Fenced resource admission now rejects negative or boolean active-job counts and non-positive or
+  boolean maximum-concurrency values before capacity or lease processing
+- Added intended-failure regressions proving all four malformed fact classes leave the lease
+  repository untouched
+
+### Verified Results
+- All four new cases failed before implementation because no validation error was raised
+- The complete resource-admission unit file passed 25/25 after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 284/284
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- An additional test-module mypy invocation reported two pre-existing annotation errors at
+  `tests/unit/test_worker_resource_admission.py:588` and `:597`; no test-module mypy pass is claimed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow has a failed job record but zero steps and no retrievable job log; the
+  local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-067
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `7e476741507fccf6954f94d398933b9367d10a82`
+- Python passed 2,996 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.08% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `9df080bc10bf4e0260189bf2c6db695c1e4a0121032b553861de3172b38bffb3`; wheel SHA-256
+  `127f62bc1f377d7947fb660dd395c8f73bed8fbd7bde240f4b7e2a1566ac5961`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #071 - Terminal Resource-Permit Release Boundary
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local concurrency repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, workflow
+  runs, and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Permit release excluded the owned renewal coordinator but allowed a concurrent direct `renew()`
+  to advance the fence after terminal cleanup had captured its persisted lease
+
+### Outputs
+- Permit renewal now rejects calls after release begins, before any lease-service transition
+- Added a deterministic intended-failure race proving release retains its fence and reconciles
+  without retaining the permit
+
+### Verified Results
+- The new race failed before implementation because renewal was accepted after release began
+- The complete resource-admission unit file passed 26/26 after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 285/285
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow still has a failed job record with zero executed steps and no job log;
+  the local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-068
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `d4ef28d482fe5b975cb15729b31e776f7595e60e`
+- Python passed 2,997 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.10% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `63ca755440b030ef978b59e6bdc1afa0c6bf737f2b9ce32aecaa2ee6dfe64606`; wheel SHA-256
+  `256558559fb3124dbf19fb869d88bd160b529978d84d3f6132ccf49f428f880a`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #072 - Uncertain Renewal-Coordinator Startup Cleanup
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local lifecycle repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Permit construction propagated `Thread.start()` failure without stopping a renewal coordinator
+  that had actually started before reporting an uncertain result
+
+### Outputs
+- Permit construction now signals stop and joins a renewal thread with an assigned identity before
+  propagating startup failure
+- Simultaneous startup and thread-cleanup errors retain both causes
+- Added a real-thread intended-failure regression proving no coordinator survives the failed
+  admission and the activated lease is reconciled
+
+### Verified Results
+- The new regression failed before implementation because the renewal thread remained alive
+- The complete resource-admission unit file passed 27/27 after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 286/286
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow still has a failed job record with zero executed steps and no job log;
+  the local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-069
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `2e15b64039ef137721ee5855c5554ee748645db8`
+- Python passed 2,998 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `954cbf7f1a3a00eb8fb5a6d5ca0691b7f1b1043ab1b4ef104cfcf77f4f0b504e`; wheel SHA-256
+  `ccdbf775f5848b5b098e5d146a6edbac6e9d6b49c95f94da076406eb4268ea67`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #073 - Uncertain Resource-Lease Activation Cleanup
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local capacity-containment repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR
+- Lease activation cleanup reused the reservation fence after an activation could have committed
+  and advanced the persisted fence before reporting an uncertain failure
+
+### Outputs
+- Failed activation cleanup now reloads the persisted lease and continues from its actual state
+- Added an intended-failure regression proving a committed activation cannot strand active
+  capacity after the activation result becomes uncertain
+
+### Verified Results
+- The regression failed before implementation with a two-cause exception group: the original
+  activation error and `LeaseFenceTokenStale` from cleanup using fence one against fence two
+- The target regression passed after implementation
+- The complete resource-admission unit file passed 28/28
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 287/287
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- The local runtime has none of the five required services or URLs, so the configured real-service
+  profiles cannot presently qualify those integrations
+- The unattended operator hold prohibits autonomous publication, review-thread mutation, merge,
+  and closure
+
+### Related References
+- SPEC-070
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `155c815e5937ae0af43a493a1ad96f3fe7e47733`
+- Python passed 2,999 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `03ae0d5a6c3a5e83953e85a74c9ae5230535a5de03c1be0be7408ebb6511817b`; wheel SHA-256
+  `ca5df8a9b727c7adba5a3f5e6cf7ee1e0bdfa346a51d8b0eebc653115a448b13`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #074 - Operator Revocation and Renewal Race
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local lifecycle repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, open pull-request search,
+  issue-named branches, ownership, and thread-aware review state
+- Issue #177's unattended operator hold remains active; PR #206 remains open and issue #21 remains
+  assigned to the maintainer and Copilot
+- The two unresolved PR review findings are already implemented in the accumulated local branch;
+  their exact regressions passed 2/2
+- All 52 configured real-service profiles were invoked and skipped because none of the five
+  required service URLs, containers, or local service daemons is available
+
+### Outputs
+- Permit cleanup now accepts the stale renewal fence caused specifically by an authoritative
+  operator revocation after reconciling the persisted revoked lease
+- Unrelated renewal failures remain observable after revoked-lease reconciliation
+- Reused one shared dormant-thread test double instead of duplicating coordinator scaffolding
+
+### Verified Results
+- The revocation/renewal regression failed before implementation with `LeaseFenceTokenStale` after
+  the lease had already reconciled, then passed after implementation
+- The fail-closed companion regression failed while unrelated renewal failures were over-broadly
+  suppressed, then passed after suppression was restricted to `LeaseFenceTokenStale`
+- Target regressions passed 2/2; the resource-admission file passed 30/30; worker kernel,
+  resource-admission, and issue-boundary suites passed 289/289
+- Exact implementation checkpoint: `7e389f308b8c3e35706e313740495d1085a2620d`
+- Locked aggregate passed: 3,001 executed Python tests, 52 explicit real-service skips, and 90.06%
+  total branch coverage against the unchanged 90% requirement
+- Node route gate passed 9/9; governance passed 36/36; Ruff format/lint, strict mypy, release
+  validation, package build, and package smoke validation passed
+- Package hashes: sdist SHA-256
+  `c6dcfa57ef61d5c9d5d44fd4bd691e5b475e53acf5fe6e0395c9dc085aaf4935`; wheel SHA-256
+  `2b3d7412f80465ba19bb41ace3e930fae5b7c231e55b8c668b8b87bb6a4bd57b`
+
+### Remaining Work
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Publish the accumulated checkpoint only through the repository's supervised path, reconcile the
+  two stale review findings against the published exact head, and obtain a fresh independent review
+- Merge only a bounded non-closing slice while issue acceptance remains incomplete; close issue #21
+  only after criterion-level merged evidence and applicable qualification exist
+
+### Blockers
+- No PostgreSQL, MySQL, MariaDB, Elasticsearch, or OpenSearch endpoint or daemon is available in
+  this runtime; the 52 profiles therefore remain skips, not passes or failures
+- The unattended operator hold prohibits autonomous publication, review-thread mutation, merge,
+  status mutation, and closure
+
+### Related References
+- SPEC-071
+- Issue #177
+- Issue #21
+- PR #206
+
+---
+
+## Run #075 - Long-Job Control-Plane Evidence
+**Date**: 2026-08-19
+**Agent**: Codex supervised bounded runner
+**Status**: Seven-TODO contract slice implemented; issue #21 remains open
+
+### Inputs
+- Re-read issue #177, issue #21, and all issue #21 comments; the seven TODOs are the seven
+  recommended long-job control-plane additions in issue comment `5052086506`
+- Preserved #49 ownership of durable DAG and checkpoint state; this slice carries and validates
+  worker-side evidence without claiming an authoritative workflow engine
+- Reused the existing admission, cooperative-cancellation, fenced-lease, stale-worker recovery,
+  per-job isolation, and bounded telemetry implementations
+
+### Outputs
+- Added immutable workflow/run/node/checkpoint coordinates and persisted them losslessly through
+  relational queue job tags, while retaining compatibility with legacy tag records
+- Added progress snapshots for units, bytes, active unit, update time, stable blocked reason, and
+  optional evidence-backed ETA ranges
+- Added ETA lower/upper bounds with observed throughput, bounded assumptions, confidence, and
+  freshness; unknown ETA remains `None` and zero-duration estimates fail closed
+- Added exact checkpoint compatibility evidence over schema, runtime, and verified artifact digest
+- Added bounded CPU, RAM, VRAM, storage, queue-wait, runtime, retry, and saturation telemetry
+  projection with fixed cardinality buckets
+
+### Verified Results
+- Tests-only commit: `f6642cf20e2988035499271a3a83b391c5886448`
+- Implementation commit: `ce029e723dd9ceac0a2096b24ad38d07535a083a`
+- Validation-boundary commit: `e6953baeaa8804756886791844a4427ab020ea09`
+- Focused queue/worker regression set passed 259/259; long-job and queue-driver set passed 76/76
+- Exact clean-head locked aggregate passed 3,020 executed Python tests with 52 explicitly
+  configured real-service profiles skipped; total branch coverage passed at 90.07%
+- Node route gate passed 9/9; governance passed 36/36; Ruff format/lint, strict mypy, release
+  validation, package build, and package smoke validation passed
+- Package hashes: sdist SHA-256
+  `d8dbb827600b7a10a214280d620ac353f0b184411f061ef98f834be39720deeb`; wheel SHA-256
+  `c7019c71d2ce8b60c0d8e568b64db4bbd022d2f51dab1881bdc102f7988191aa`
+
+### Remaining Work
+- Obtain a fresh independent review and publish/merge only through the supervised path
+- Restore the five real-service workflows or provide reachable service URLs, then qualify the 52
+  configured profiles on the exact publishable head
+- Keep issue #21 open until every acceptance criterion has merged, criterion-mapped evidence and
+  every material review finding is disposed
+
+### Blockers
+- The 52 PostgreSQL, MySQL, MariaDB, Elasticsearch, and OpenSearch profiles remain environment
+  skips, not passes or failures
+- The unattended operator hold still prohibits autonomous publication, review-thread mutation,
+  merge, status mutation, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+---
+
+## Run #076 - Isolated Long-Job Observation Registry
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local control-plane implementation; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open pull requests, issue-named branches, ownership,
+  and thread-aware review state
+- The unattended hold remains active; PR #206 remains open at published head `4a42d9d`
+- The two unresolved PR findings are already repaired on the accumulated local branch and no new
+  review finding was present
+
+### Outputs
+- Added a bounded thread-safe registry for immutable long-job progress and resource observations
+- Keyed observations by complete workflow, run, node, and checkpoint identity to prevent state
+  leakage between equal nodes in different runs
+- Made progress updates monotonic across observation time, completed units, completed bytes, and
+  declared totals; invalid transitions fail closed
+- Made capacity explicit and fail closed until the caller deliberately forgets a terminal run
+
+### Verified Results
+- Tests-only commit: `6640ef0e06e37ea28ea626933908e4b09e31c7e9`
+- Implementation commit: `1ac538509687eff59a9aafc2041b5526a6e13db8`
+- Focused queue, worker, resource-admission, and long-job suites passed 277/277
+- Exact clean-head locked aggregate passed 3,024 executed Python tests with 52 explicit
+  real-service skips and 90.03% total branch coverage
+- Node route gate passed 9/9; governance passed 36/36; Ruff format/lint, strict mypy, release
+  validation, package build, and package smoke validation passed
+- Package hashes: sdist SHA-256
+  `1c51612dd74f82e6d5ee441457b5ce4c4ce79f1d1959c0d9ea4d03eac1ed4c40`; wheel SHA-256
+  `1cd7ab9e476636fce2f89ca204cd7e926881c0d0cc9c3bedae220d8b11cb548f`
+
+### Remaining Work
+- Publish only through the supervised path, reconcile the two stale review threads against the
+  published exact head, and obtain fresh independent review
+- Restore the five real-service workflows or provide reachable service URLs, then qualify the 52
+  configured profiles
+- Keep issue #21 open until all four criteria have merged criterion-mapped evidence
+
+### Blockers
+- The 52 PostgreSQL, MySQL, MariaDB, Elasticsearch, and OpenSearch profiles remain environment
+  skips, not passes or failures
+- The unattended operator hold prohibits autonomous publication, review-thread mutation, merge,
+  status mutation, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206

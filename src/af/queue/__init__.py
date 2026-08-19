@@ -12,6 +12,15 @@ from af.queue.contracts import (
     QueueReservationLost,
     UnsupportedQueueFeature,
 )
+from af.queue.control_plane import (
+    WorkerCheckpoint,
+    WorkerEtaRange,
+    WorkerJobCoordinates,
+    WorkerObservation,
+    WorkerObservationRegistry,
+    WorkerProgressSnapshot,
+    WorkerResourceSnapshot,
+)
 from af.queue.database import DatabaseQueueDriver
 from af.queue.database_manager import database_queue_registration
 from af.queue.manager import QueueDriver, QueueFeature, QueueManager, bind_queue_manager
@@ -77,11 +86,18 @@ __all__ = (
     "UnsupportedQueueFeature",
     "WorkerAdmissionGate",
     "WorkerAdmissionPermit",
+    "WorkerCheckpoint",
     "WorkerConnectionRecycler",
+    "WorkerEtaRange",
+    "WorkerJobCoordinates",
     "WorkerKernel",
+    "WorkerObservation",
+    "WorkerObservationRegistry",
     "WorkerProcessState",
     "WorkerProcessSupervisor",
     "WorkerProcessSupervisorState",
+    "WorkerProgressSnapshot",
+    "WorkerResourceSnapshot",
     "WorkerRuntime",
     "WorkerRuntimeKernel",
     "WorkerRuntimeState",

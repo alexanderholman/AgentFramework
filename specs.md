@@ -3091,3 +3091,195 @@ cumulative runtime or duration telemetry.
 - SPEC-064 (observable long-running worker heartbeats)
 - SPEC-048 (bounded worker delivery telemetry)
 - Issue #21
+
+---
+
+## [SPEC-066] Fail-Closed Worker Lane Admission
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 repair
+**Priority**: MUST
+
+### Description
+Validate a requested queue lane before resource admission or retained-permit cleanup can perform
+side effects.
+
+### Requirements
+- A non-`None` worker lane MUST satisfy the queue contract's canonical identifier rules before the
+  admission gate is invoked.
+- An invalid lane MUST NOT acquire resource capacity, retry retained permit cleanup, reserve a
+  delivery, consume an attempt, or execute a handler.
+- Valid canonical lanes and the unfiltered `None` lane MUST retain their existing behavior.
+
+### Tests
+- **TEST-066-1**: An invalid lane fails before the resource-admission gate is called and leaves the
+  queued delivery and its attempt count unchanged.
+- **TEST-066-2**: Existing worker, fenced-resource-admission, and issue-boundary suites remain green.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- SPEC-042 (resource permit lifecycle at worker admission)
+- Issue #21
+
+---
+
+## [SPEC-067] Fail-Closed Worker Capacity Facts
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 repair
+**Priority**: MUST
+
+### Description
+Validate caller-supplied worker capacity facts before fenced resource admission can perform a
+privileged lease side effect.
+
+### Requirements
+- The active-job count MUST be a non-negative integer and MUST reject booleans.
+- Maximum concurrency MUST be a positive integer and MUST reject booleans.
+- Invalid capacity facts MUST fail before lease identity allocation, creation, activation, or
+  renewal can occur.
+- Valid capacity facts MUST retain the existing local and aggregate saturation behavior.
+
+### Tests
+- **TEST-067-1**: Negative and boolean active-job counts raise a validation error without creating
+  a lease.
+- **TEST-067-2**: Zero and boolean maximum-concurrency values raise a validation error without
+  creating a lease.
+- **TEST-067-3**: Existing worker kernel, fenced-resource-admission, and issue-boundary suites
+  remain green.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- SPEC-042 (resource permit lifecycle at worker admission)
+- SPEC-066 (fail-closed worker lane admission)
+- Issue #21
+
+---
+
+## [SPEC-068] Terminal Resource-Permit Release Boundary
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 repair
+**Priority**: MUST
+
+### Description
+Make resource-permit release initiation a terminal boundary for explicit renewal so cleanup cannot
+lose ownership of its captured fence.
+
+### Requirements
+- Once permit release begins, a concurrent explicit renewal MUST fail before calling the lease
+  service.
+- A renewal already holding the permit lock before release begins MAY finish; release MUST then use
+  its resulting latest fence.
+- Release MUST still stop and join the owned renewal coordinator before terminal lease cleanup.
+- Rejected renewal MUST NOT advance the fence, prevent reconciliation, or retain the permit.
+
+### Tests
+- **TEST-068-1**: A renewal attempted after release has loaded its persisted lease fails with the
+  releasing state and does not invalidate cleanup's fence.
+- **TEST-068-2**: The release completes without an error and leaves the lease reconciled.
+- **TEST-068-3**: Existing worker kernel, fenced-resource-admission, and issue-boundary suites
+  remain green.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- SPEC-042 (resource permit lifecycle at worker admission)
+- SPEC-067 (fail-closed worker capacity facts)
+- Issue #21
+
+---
+
+## [SPEC-069] Uncertain Renewal-Coordinator Startup Cleanup
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 repair
+**Priority**: MUST
+
+### Description
+Contain renewal-coordinator startup failures that occur after the underlying thread has actually
+started, so admission cannot lose ownership of a live daemon thread.
+
+### Requirements
+- Renewal-thread startup failure MUST signal the permit stop event before construction fails.
+- If startup assigned a thread identity, construction MUST join that thread before propagating the
+  startup failure.
+- A simultaneous startup and thread-cleanup failure MUST preserve both failures.
+- The admission gate MUST still release and reconcile the activated lease after contained permit
+  construction failure.
+
+### Tests
+- **TEST-069-1**: A thread that starts and then reports an uncertain failure is stopped and joined
+  before the admission call returns its error.
+- **TEST-069-2**: The corresponding active lease is released and reconciled.
+- **TEST-069-3**: Existing worker kernel, fenced-resource-admission, and issue-boundary suites
+  remain green.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- SPEC-042 (resource permit lifecycle at worker admission)
+- SPEC-068 (terminal resource-permit release boundary)
+- Issue #21
+
+---
+
+## [SPEC-070] Uncertain Resource-Lease Activation Cleanup
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 repair
+**Priority**: MUST
+
+### Description
+Recover resource capacity when lease activation commits but reports an uncertain failure, without
+reusing the stale reservation fence held by the admission call.
+
+### Requirements
+- Activation failure cleanup MUST reload the persisted lease before selecting a terminal
+  transition.
+- A persisted reserved or active lease MUST be expired with its current fence and reconciled.
+- A persisted expired, released, or revoked lease MUST resume directly at reconciliation.
+- An already reconciled lease MUST be accepted as completed cleanup.
+- The original activation failure MUST be propagated after successful cleanup; simultaneous
+  activation and cleanup failures MUST preserve both causes.
+
+### Tests
+- **TEST-070-1**: Activation that commits `ACTIVE` and then raises is recovered with the persisted
+  active fence.
+- **TEST-070-2**: The admission call propagates the original uncertain activation error and leaves
+  the lease reconciled at fence four.
+- **TEST-070-3**: Existing worker kernel, fenced-resource-admission, and issue-boundary suites
+  remain green.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- SPEC-042 (resource permit lifecycle at worker admission)
+- SPEC-069 (uncertain renewal-coordinator startup cleanup)
+- Issue #21
+
+---
+
+## [SPEC-071] Operator Revocation and Permit Renewal Race
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 repair
+**Priority**: MUST
+
+### Description
+Allow an authoritative operator revocation to win a concurrent permit renewal without retaining a
+fully reconciled permit, while preserving renewal failures that are unrelated to the revocation.
+
+### Requirements
+- Permit release MUST reload persisted lease state after stopping the renewal coordinator.
+- A persisted revoked lease MUST be reconciled with its current fence.
+- A stale-fence renewal failure caused by that revocation MUST be treated as completed external
+  cleanup after reconciliation.
+- A renewal failure of any other type MUST remain observable even when the lease is subsequently
+  revoked and reconciled.
+- Successful revocation cleanup MUST leave the permit and persisted lease reconciled.
+
+### Tests
+- **TEST-071-1**: Revocation that advances the fence before renewal produces the intended stale
+  renewal result, then permit release completes without retaining the reconciled permit.
+- **TEST-071-2**: An unrelated renewal transport failure remains the exact propagated failure after
+  revoked-lease reconciliation.
+- **TEST-071-3**: Existing worker kernel, fenced-resource-admission, and issue-boundary suites
+  remain green.
+
+### Related Specs
+- SPEC-039 (fail-closed queue worker resource admission)
+- SPEC-042 (resource permit lifecycle at worker admission)
+- SPEC-068 (terminal resource-permit release boundary)
+- Issue #21

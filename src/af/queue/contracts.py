@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from af.framework.errors import PlatformError, PlatformReason
 from af.messaging.envelopes import EnvelopeKind, MessageEnvelope
+from af.queue.control_plane import WorkerJobCoordinates
 
 __all__ = (
     "QueueDeadLetter",
@@ -73,6 +74,7 @@ class QueueJobTags:
     agent_id: str | None = None
     task_id: str | None = None
     capability_id: str | None = None
+    coordinates: WorkerJobCoordinates | None = None
 
     def __post_init__(self) -> None:
         if self.correlation_id is not None:
@@ -88,6 +90,8 @@ class QueueJobTags:
         ):
             if value is not None:
                 _identifier(value, field)
+        if self.coordinates is not None and not isinstance(self.coordinates, WorkerJobCoordinates):
+            raise ValueError("queue job coordinates are invalid")
 
     @classmethod
     def from_envelope(
@@ -97,6 +101,7 @@ class QueueJobTags:
         agent_id: str | None = None,
         task_id: str | None = None,
         capability_id: str | None = None,
+        coordinates: WorkerJobCoordinates | None = None,
     ) -> QueueJobTags:
         """Copy security context from an envelope without inspecting its payload."""
 
@@ -117,6 +122,7 @@ class QueueJobTags:
             agent_id=agent_id,
             task_id=task_id,
             capability_id=capability_id,
+            coordinates=coordinates,
         )
 
     def __repr__(self) -> str:

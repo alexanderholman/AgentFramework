@@ -10,7 +10,11 @@ from threading import Condition, Event, RLock, Thread
 
 from af.application.resource_leases import ResourceLeaseService
 from af.domain.resources import Lease, LeaseState, ResourceBudget
-from af.framework.errors import LeaseBudgetExceeded, LeaseConcurrencyExceeded
+from af.framework.errors import (
+    LeaseBudgetExceeded,
+    LeaseConcurrencyExceeded,
+    LeaseFenceTokenStale,
+)
 
 __all__ = ("FencedResourceLeaseAdmissionGate", "FencedResourceLeasePermit")
 
@@ -22,6 +26,25 @@ def _release_and_reconcile(service: ResourceLeaseService, lease: Lease) -> Lease
     released_token = released.fence_token
     assert released_token is not None
     return service.reconcile_lease(released.id, released_token)
+
+
+def _reconcile_failed_activation(service: ResourceLeaseService, lease_id: str) -> Lease:
+    lease = service.get_lease(lease_id)
+    if lease.state in {LeaseState.RESERVED, LeaseState.ACTIVE}:
+        token = lease.fence_token
+        assert token is not None
+        lease = service.expire_lease(lease.id, token)
+    if lease.state in {
+        LeaseState.EXPIRED,
+        LeaseState.RELEASED,
+        LeaseState.REVOKED,
+    }:
+        token = lease.fence_token
+        assert token is not None
+        lease = service.reconcile_lease(lease.id, token)
+    if lease.state is not LeaseState.RECONCILED:
+        raise RuntimeError("worker resource activation cleanup did not reconcile lease")
+    return lease
 
 
 class FencedResourceLeasePermit:
@@ -63,7 +86,19 @@ class FencedResourceLeasePermit:
                 name="af-worker-resource-renewal",
                 daemon=True,
             )
-            self._thread.start()
+            try:
+                self._thread.start()
+            except BaseException as startup_failure:
+                self._stop.set()
+                try:
+                    if self._thread.ident is not None:
+                        self._thread.join()
+                except BaseException as cleanup_failure:
+                    raise BaseExceptionGroup(
+                        "worker resource renewal startup and cleanup both failed",
+                        (startup_failure, cleanup_failure),
+                    ) from None
+                raise
 
     @property
     def lease(self) -> Lease:
@@ -76,6 +111,8 @@ class FencedResourceLeasePermit:
         with self._lock:
             if self._released:
                 raise RuntimeError("worker resource permit is released")
+            if self._release_in_progress:
+                raise RuntimeError("worker resource permit is releasing")
             if self._failure is not None:
                 raise self._failure
             token = self._lease.fence_token
@@ -99,6 +136,7 @@ class FencedResourceLeasePermit:
             self._release_in_progress = True
         renewal_failure: BaseException | None = None
         release_failure: BaseException | None = None
+        externally_revoked = False
         try:
             self._stop.set()
             thread = self._thread
@@ -108,7 +146,13 @@ class FencedResourceLeasePermit:
                 renewal_failure = self._failure
                 lease = self._lease
             persisted = self._service.get_lease(lease.id)
-            if persisted.state in {LeaseState.RELEASED, LeaseState.RECONCILED}:
+            externally_revoked = persisted.state is LeaseState.REVOKED
+            if persisted.state in {
+                LeaseState.EXPIRED,
+                LeaseState.RELEASED,
+                LeaseState.REVOKED,
+                LeaseState.RECONCILED,
+            }:
                 lease = persisted
                 with self._lock:
                     self._lease = lease
@@ -118,7 +162,11 @@ class FencedResourceLeasePermit:
                 lease = self._service.release_lease(lease.id, token)
                 with self._lock:
                     self._lease = lease
-            if lease.state is LeaseState.RELEASED:
+            if lease.state in {
+                LeaseState.EXPIRED,
+                LeaseState.RELEASED,
+                LeaseState.REVOKED,
+            }:
                 token = lease.fence_token
                 assert token is not None
                 lease = self._service.reconcile_lease(lease.id, token)
@@ -128,6 +176,8 @@ class FencedResourceLeasePermit:
                 raise RuntimeError("worker resource permit cleanup did not reconcile lease")
             with self._lock:
                 self._released = True
+            if externally_revoked and isinstance(renewal_failure, LeaseFenceTokenStale):
+                renewal_failure = None
         except BaseException as error:
             release_failure = error
         finally:
@@ -227,6 +277,10 @@ class FencedResourceLeaseAdmissionGate:
         active_jobs: int,
         max_concurrency: int,
     ) -> bool | FencedResourceLeasePermit:
+        if type(active_jobs) is not int or active_jobs < 0:
+            raise ValueError("worker resource active-job count must be a non-negative integer")
+        if type(max_concurrency) is not int or max_concurrency < 1:
+            raise ValueError("worker maximum concurrency must be a positive integer")
         capacity = self._budget.max_concurrent
         if active_jobs >= max_concurrency or (capacity is not None and active_jobs >= capacity):
             return False
@@ -258,10 +312,7 @@ class FencedResourceLeaseAdmissionGate:
             )
         except BaseException as activation_failure:
             try:
-                expired = self._service.expire_lease(created.id, token)
-                expired_token = expired.fence_token
-                assert expired_token is not None
-                self._service.reconcile_lease(expired.id, expired_token)
+                _reconcile_failed_activation(self._service, created.id)
             except BaseException as cleanup_failure:
                 raise BaseExceptionGroup(
                     "worker resource activation and cleanup both failed",

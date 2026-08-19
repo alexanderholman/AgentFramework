@@ -39,6 +39,14 @@ class _Clock:
         self.now += duration
 
 
+class _DormantThread:
+    def start(self) -> None:
+        return
+
+    def join(self) -> None:
+        return
+
+
 def _budget() -> ResourceBudget:
     return ResourceBudget(
         identity=ResourceIdentity(
@@ -302,6 +310,42 @@ def test_fenced_resource_admission_treats_aggregate_saturation_as_denial(
     assert repository.get("denied-lease") is None
 
 
+@pytest.mark.parametrize(
+    ("active_jobs", "max_concurrency", "message"),
+    [
+        (-1, 2, "active-job count"),
+        (False, 2, "active-job count"),
+        (0, 0, "maximum concurrency"),
+        (0, True, "maximum concurrency"),
+    ],
+)
+def test_fenced_resource_admission_rejects_invalid_worker_capacity_facts(
+    active_jobs: int,
+    max_concurrency: int,
+    message: str,
+) -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "invalid-capacity-lease",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        gate(
+            lane="default",
+            active_jobs=active_jobs,
+            max_concurrency=max_concurrency,
+        )
+
+    assert repository.get("invalid-capacity-lease") is None
+
+
 def test_fenced_resource_admission_rejects_oversized_configured_quantity() -> None:
     service = ResourceLeaseService(InMemoryLeaseRepository(), clock=lambda: _NOW)
 
@@ -354,6 +398,41 @@ def test_fenced_resource_admission_propagates_non_capacity_create_failure(
         gate(lane=None, active_jobs=0, max_concurrency=2)
 
     assert raised.value is failure
+
+
+def test_fenced_resource_admission_recovers_uncertain_persisted_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    activate_lease = service.activate_lease
+
+    def committed_activation_then_fail(
+        lease_id: str,
+        fence_token: FenceToken,
+        authorization_digest: str | None = None,
+    ) -> None:
+        activate_lease(lease_id, fence_token, authorization_digest)
+        raise RuntimeError("uncertain activation result")
+
+    monkeypatch.setattr(service, "activate_lease", committed_activation_then_fail)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-uncertain-activation",
+    )
+
+    with pytest.raises(RuntimeError, match="uncertain activation result"):
+        gate(lane="default", active_jobs=0, max_concurrency=2)
+
+    final = service.get_lease("worker-lease-uncertain-activation")
+    assert final.state is LeaseState.RECONCILED
+    assert final.fence_token is not None
+    assert final.fence_token.value == 4
 
 
 def test_fenced_resource_admission_releases_and_reconciles_after_worker_job() -> None:
@@ -443,6 +522,115 @@ def test_fenced_resource_permit_accepts_externally_reconciled_cleanup() -> None:
     assert permit.lease.state is LeaseState.RECONCILED
 
 
+def test_fenced_resource_permit_reconciles_externally_expired_cleanup() -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-external-expire",
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    active = permit.lease
+    assert active.fence_token is not None
+    expired = service.expire_lease(active.id, active.fence_token)
+
+    permit.release()
+
+    reconciled = service.get_lease(expired.id)
+    assert permit.lease == reconciled
+    assert reconciled.state is LeaseState.RECONCILED
+
+
+def test_fenced_resource_permit_reconciles_externally_revoked_cleanup() -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-external-revoke",
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    active = permit.lease
+    assert active.fence_token is not None
+    revoked = service.revoke_lease(active.id, active.fence_token)
+
+    permit.release()
+
+    reconciled = service.get_lease(revoked.id)
+    assert permit.lease == reconciled
+    assert reconciled.state is LeaseState.RECONCILED
+
+
+def test_fenced_resource_permit_accepts_revocation_winning_renewal_race() -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-revoke-renewal-race",
+        renewal_interval=timedelta(milliseconds=1),
+        thread_factory=lambda **_: _DormantThread(),
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    active = permit.lease
+    assert active.fence_token is not None
+    service.revoke_lease(active.id, active.fence_token)
+
+    permit._renew_loop()
+    permit.release()
+
+    assert permit.lease.state is LeaseState.RECONCILED
+
+
+def test_fenced_resource_permit_preserves_unrelated_failure_after_revocation() -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-revoke-renewal-failure",
+        renewal_interval=timedelta(milliseconds=1),
+        thread_factory=lambda **_: _DormantThread(),
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    active = permit.lease
+    assert active.fence_token is not None
+    service.revoke_lease(active.id, active.fence_token)
+    failure = RuntimeError("renewal transport failed")
+
+    def fail_renewal(*_: object, **__: object) -> None:
+        raise failure
+
+    service.renew_lease = fail_renewal  # type: ignore[method-assign]
+    permit._renew_loop()
+
+    with pytest.raises(RuntimeError, match="renewal transport failed") as raised:
+        permit.release()
+    assert raised.value is failure
+    assert permit.lease.state is LeaseState.RECONCILED
+
+
 def test_fenced_resource_permit_resumes_from_uncertain_persisted_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -480,13 +668,6 @@ def test_fenced_resource_permit_resumes_from_uncertain_persisted_release(
 
 
 def test_fenced_resource_permit_records_renewal_failure_after_concurrent_stop() -> None:
-    class DormantThread:
-        def start(self) -> None:
-            return
-
-        def join(self) -> None:
-            return
-
     repository = InMemoryLeaseRepository()
     service = ResourceLeaseService(repository, clock=lambda: _NOW)
     failure = LeaseFenceTokenStale("worker-lease-renewal-stop-race", 3, 2)
@@ -499,7 +680,7 @@ def test_fenced_resource_permit_records_renewal_failure_after_concurrent_stop() 
         authorization_digest="authorization-v1",
         lease_id_factory=lambda: "worker-lease-renewal-stop-race",
         renewal_interval=timedelta(milliseconds=1),
-        thread_factory=lambda **_: DormantThread(),
+        thread_factory=lambda **_: _DormantThread(),
     )
     permit = gate(lane="default", active_jobs=0, max_concurrency=2)
     assert not isinstance(permit, bool)
@@ -514,6 +695,55 @@ def test_fenced_resource_permit_records_renewal_failure_after_concurrent_stop() 
     with pytest.raises(LeaseFenceTokenStale) as raised:
         permit.release()
     assert raised.value is failure
+
+
+def test_fenced_resource_permit_rejects_renewal_after_release_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-release-renewal-race",
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    release_loaded = Barrier(2)
+    continue_release = Barrier(2)
+    get_lease = service.get_lease
+    release_failures: list[BaseException] = []
+
+    def pause_after_release_load(lease_id: str):  # type: ignore[no-untyped-def]
+        persisted = get_lease(lease_id)
+        release_loaded.wait(timeout=2)
+        continue_release.wait(timeout=2)
+        return persisted
+
+    def release() -> None:
+        try:
+            permit.release()
+        except BaseException as error:
+            release_failures.append(error)
+
+    monkeypatch.setattr(service, "get_lease", pause_after_release_load)
+    release_thread = Thread(target=release)
+    release_thread.start()
+    release_loaded.wait(timeout=2)
+    try:
+        with pytest.raises(RuntimeError, match="permit is releasing"):
+            permit.renew()
+    finally:
+        continue_release.wait(timeout=2)
+        release_thread.join(timeout=2)
+
+    assert not release_thread.is_alive()
+    assert release_failures == []
+    assert permit.lease.state is LeaseState.RECONCILED
 
 
 def test_fenced_resource_permit_cannot_renew_at_heartbeat_expiry() -> None:
@@ -570,3 +800,47 @@ def test_fenced_resource_admission_cleans_up_when_permit_startup_fails() -> None
     assert final.released_at == _NOW
     assert final.fence_token is not None
     assert final.fence_token.value == 4
+
+
+def test_fenced_resource_admission_stops_uncertain_started_renewal_thread() -> None:
+    class UncertainStartThread(Thread):
+        def start(self) -> None:
+            super().start()
+            raise RuntimeError("uncertain renewal thread startup")
+
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    threads: list[UncertainStartThread] = []
+    permit_owners: list[object] = []
+
+    def uncertain_thread_factory(**kwargs: object) -> Thread:
+        target = kwargs["target"]
+        permit_owners.append(target.__self__)  # type: ignore[union-attr]
+        thread = UncertainStartThread(**kwargs)  # type: ignore[arg-type]
+        threads.append(thread)
+        return thread
+
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-uncertain-thread-startup",
+        renewal_interval=timedelta(minutes=1),
+        thread_factory=uncertain_thread_factory,
+    )
+
+    with pytest.raises(RuntimeError, match="uncertain renewal thread startup"):
+        gate(lane="default", active_jobs=0, max_concurrency=2)
+
+    renewal_thread = threads[0]
+    try:
+        assert not renewal_thread.is_alive()
+    finally:
+        permit_owners[0]._stop.set()  # type: ignore[attr-defined]
+        renewal_thread.join(timeout=2)
+
+    final = service.get_lease("worker-lease-uncertain-thread-startup")
+    assert final.state is LeaseState.RECONCILED

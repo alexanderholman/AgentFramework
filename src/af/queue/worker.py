@@ -32,6 +32,7 @@ from af.queue.contracts import (
     QueueOperationError,
     QueueReservation,
     QueueReservationLost,
+    _identifier,
 )
 from af.queue.manager import QueueDriver, QueueFeature
 
@@ -882,6 +883,8 @@ class WorkerKernel:
                 self._pending_permits.pop(0)
 
     def _admit(self, *, lane: str | None) -> _AdmittedDelivery | None:
+        if lane is not None:
+            lane = _identifier(lane, "lane")
         self._retry_pending_permits()
         active_jobs = 0
         with self._condition:
