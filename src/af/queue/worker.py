@@ -497,6 +497,8 @@ class WorkerKernel:
         self._active_jobs: set[str] = set()
         self._active_cancellations: dict[str, CancellationToken] = {}
         self._active_threads: set[int] = set()
+        self._pending_permits: list[WorkerAdmissionPermit] = []
+        self._permit_cleanup_lock = RLock()
         self._last_heartbeat: datetime | None = None
         self._last_activity: datetime | None = None
         self._queue_wait_alert_active = False
@@ -870,7 +872,15 @@ class WorkerKernel:
         finally:
             self._release_heartbeat()
 
+    def _retry_pending_permits(self) -> None:
+        with self._permit_cleanup_lock:
+            while self._pending_permits:
+                permit = self._pending_permits[0]
+                self._release_admission_permit(permit)
+                self._pending_permits.pop(0)
+
     def _admit(self, *, lane: str | None) -> _AdmittedDelivery | None:
+        self._retry_pending_permits()
         active_jobs = 0
         with self._condition:
             if self._closed:
@@ -998,6 +1008,9 @@ class WorkerKernel:
         try:
             self._release_admission_permit(permit)
         except BaseException as release_failure:
+            if permit is not None:
+                with self._permit_cleanup_lock:
+                    self._pending_permits.append(permit)
             cleanup_failures.append(release_failure)
         if not cleanup_failures:
             return
@@ -1139,7 +1152,9 @@ class WorkerKernel:
             if stop is not None:
                 stop.set()
         if thread is not None:
-            thread.join()
+            thread.join(timeout=min(1.0, self._heartbeat_interval.total_seconds()))
+            if thread.is_alive():
+                return
             with self._condition:
                 if self._heartbeat_users != 0 or self._heartbeat_thread is not None:
                     return

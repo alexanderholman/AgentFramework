@@ -34,6 +34,7 @@ from af.queue.contracts import (
 from af.queue.manager import QueueFeature
 from af.queue.worker import (
     InMemoryIdempotencyStore,
+    WorkerAdmissionPermit,
     WorkerKernel,
     WorkerState,
 )
@@ -317,6 +318,34 @@ def test_worker_kernel_preserves_handler_and_permit_release_failures() -> None:
         "lease release failed",
     ]
     assert permit.released == 1
+
+
+def test_worker_kernel_retries_retained_permit_cleanup_before_new_admission() -> None:
+    class TransientPermit(_AdmissionPermit):
+        def release(self) -> None:
+            self.released += 1
+            if self.released == 1:
+                raise RuntimeError("transient lease release failure")
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-retained-permit"))
+    permit = TransientPermit()
+    admission_count = 0
+
+    def admit(**_: object) -> WorkerAdmissionPermit | bool:
+        nonlocal admission_count
+        admission_count += 1
+        return permit if admission_count == 1 else False
+
+    kernel = WorkerKernel(driver, admission_gate=admit, clock=lambda: _NOW)
+
+    with pytest.raises(RuntimeError, match="transient lease release failure"):
+        kernel.run_once(lambda _job: None)
+
+    assert driver.acked == ["job-retained-permit"]
+    assert permit.released == 1
+    assert kernel.run_once(lambda _job: None) is None
+    assert permit.released == 2
 
 
 def test_worker_kernel_recycles_connections_after_settlement_before_permit_release() -> None:
@@ -946,6 +975,38 @@ def test_retired_heartbeat_cannot_stop_a_reacquired_lifecycle() -> None:
     )
 
     kernel._release_heartbeat()
+
+
+def test_stalled_heartbeat_telemetry_cannot_block_polling_loop_teardown() -> None:
+    entered = Event()
+    release = Event()
+
+    class StalledSink:
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            if signal.name == "queue.worker.heartbeat":
+                entered.set()
+                release.wait(timeout=1)
+
+    stop = Event()
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((StalledSink(),)),
+        clock=lambda: datetime.now(UTC),
+    )
+    polling = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": stop},
+    )
+    polling.start()
+    assert entered.wait(timeout=1)
+    stop.set()
+    polling.join(timeout=0.2)
+    try:
+        assert not polling.is_alive()
+    finally:
+        release.set()
 
 
 def test_worker_heartbeat_remains_live_and_reports_saturation_during_long_job() -> None:
