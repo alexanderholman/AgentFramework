@@ -245,6 +245,21 @@ def test_pinned_worker_optimizer_rejects_binding_drift() -> None:
 
     assert provider(context) == _optimization(workers=1)
 
+    current = [_NOW]
+    expiring_provider = PinnedWorkerOptimizationProvider(
+        driver_name="scripted",
+        binding=evidence.binding,
+        profile_digest="d" * 64,
+        qualification_digest="e" * 64,
+        optimization=_optimization(workers=1),
+        expires_at=_NOW + timedelta(seconds=1),
+        clock=lambda: current[0],
+    )
+    assert expiring_provider(context) == _optimization(workers=1)
+    current[0] = _NOW + timedelta(seconds=1)
+    with pytest.raises(ValueError, match="expired"):
+        expiring_provider(context)
+
     wrong_backend = WorkerOptimizationContext(
         reference=ConnectionRef("queue", "primary", "other"),
         evidence=evidence,

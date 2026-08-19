@@ -348,6 +348,26 @@ def test_worker_kernel_retries_retained_permit_cleanup_before_new_admission() ->
     assert permit.released == 2
 
 
+def test_worker_kernel_retries_retained_permit_cleanup_during_shutdown() -> None:
+    class TransientPermit(_AdmissionPermit):
+        def release(self) -> None:
+            self.released += 1
+            if self.released == 1:
+                raise RuntimeError("transient lease release failure")
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-shutdown-permit"))
+    permit = TransientPermit()
+    kernel = WorkerKernel(driver, admission_gate=lambda **_: permit, clock=lambda: _NOW)
+
+    with pytest.raises(RuntimeError, match="transient lease release failure"):
+        kernel.run_once(lambda _job: None)
+
+    kernel.close()
+    assert permit.released == 2
+    assert kernel.state is WorkerState.STOPPED
+
+
 def test_worker_kernel_recycles_connections_after_settlement_before_permit_release() -> None:
     lifecycle: list[str] = []
 

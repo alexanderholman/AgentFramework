@@ -582,6 +582,7 @@ class WorkerKernel:
                 self._condition.wait(timeout=remaining)
             self._closing = True
         try:
+            self._retry_pending_permits()
             result = self._driver_close()
             if inspect.iscoroutine(result):
                 result.close()

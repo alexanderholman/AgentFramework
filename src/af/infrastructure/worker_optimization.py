@@ -363,6 +363,7 @@ def load_worker_optimization_profile(
             profile_digest=hashlib.sha256(raw).hexdigest(),
             qualification_digest=qualification.evidence_digest,
             optimization=optimization,
+            expires_at=qualification.expires_at,
         )
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise InvalidProviderConfiguration("worker optimization profile is invalid") from error

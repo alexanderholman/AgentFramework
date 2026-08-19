@@ -6,7 +6,7 @@ import inspect
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from af.framework.managers import CapabilityBinding, CapabilityEvidence, ConnectionRef
@@ -103,6 +103,8 @@ class PinnedWorkerOptimizationProvider:
         profile_digest: str,
         qualification_digest: str,
         optimization: WorkerRuntimeOptimization,
+        expires_at: datetime | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if type(driver_name) is not str or _IDENTIFIER.fullmatch(driver_name) is None:
             raise ValueError("pinned worker optimization driver must be canonical")
@@ -114,11 +116,19 @@ class PinnedWorkerOptimizationProvider:
             raise ValueError("worker qualification digest must be lowercase SHA-256")
         if not isinstance(optimization, WorkerRuntimeOptimization):
             raise TypeError("pinned worker optimization requires runtime values")
+        if expires_at is not None and (
+            not isinstance(expires_at, datetime) or expires_at.tzinfo is None
+        ):
+            raise ValueError("worker optimization expiry must be timezone-aware")
+        if not callable(clock):
+            raise TypeError("worker optimization clock must be callable")
         self._driver_name = driver_name
         self._binding = binding
         self._profile_digest = profile_digest
         self._qualification_digest = qualification_digest
         self._optimization = optimization
+        self._expires_at = expires_at
+        self._clock = clock
 
     @property
     def profile_digest(self) -> str:
@@ -143,6 +153,8 @@ class PinnedWorkerOptimizationProvider:
             raise ValueError("worker optimization backend identity changed")
         if context.evidence.binding != self._binding:
             raise ValueError("worker optimization capability binding changed")
+        if self._expires_at is not None and self._clock() >= self._expires_at:
+            raise ValueError("worker optimization qualification is expired")
         return self._optimization
 
 
