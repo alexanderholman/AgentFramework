@@ -183,6 +183,11 @@ class QueueManager(Manager[QueueDriver]):
     ) -> QueueDriver:
         return super().connection(name, requires=_capabilities(requires))
 
+    def resolve_name(self, name: str | None = None) -> str:
+        """Resolve the concrete connection identity before protected operations."""
+
+        return self._requested_name(name)
+
     def dispatch(self, job: QueueJob, *, name: str | None = None) -> QueueDispatchReceipt:
         return self.connection(name, requires=_dispatch_capabilities(job)).dispatch(job)
 

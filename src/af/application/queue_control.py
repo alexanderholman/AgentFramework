@@ -27,6 +27,8 @@ __all__ = (
 class QueueControlBackend(Protocol):
     """Capability-routed failed-job operations required from a queue manager."""
 
+    def resolve_name(self, name: str | None = None) -> str: ...
+
     def dead_letters(
         self,
         *,
@@ -134,13 +136,18 @@ class QueueControlService:
     ) -> FailedJobInspection:
         """Return a payload-blind bounded projection after explicit authorization."""
 
+        resolved_name = self._backend.resolve_name(name)
         authorization = self._authorize(
             context,
             action="inspect",
-            protected_resource_id=f"{name or 'default'}:{lane or '*'}",
+            protected_resource_id=f"{resolved_name}:{lane or '*'}",
         )
         try:
-            dead_letters = self._backend.dead_letters(lane=lane, limit=limit, name=name)
+            dead_letters = self._backend.dead_letters(
+                lane=lane,
+                limit=limit,
+                name=resolved_name,
+            )
             if type(dead_letters) is not tuple or any(
                 not isinstance(dead_letter, QueueDeadLetter) for dead_letter in dead_letters
             ):
@@ -188,13 +195,14 @@ class QueueControlService:
     ) -> FailedJobReplay:
         """Replay one terminal delivery after authorization and return redacted evidence."""
 
+        resolved_name = self._backend.resolve_name(name)
         authorization = self._authorize(
             context,
             action="replay",
-            protected_resource_id=f"{name or 'default'}:{message_id}",
+            protected_resource_id=f"{resolved_name}:{message_id}",
         )
         try:
-            receipt = self._backend.replay_dead_letter(message_id, name=name)
+            receipt = self._backend.replay_dead_letter(message_id, name=resolved_name)
             if not isinstance(receipt, QueueDeadLetterReplayReceipt):
                 raise PlatformError(
                     PlatformReason.INTEGRITY_FAILURE,

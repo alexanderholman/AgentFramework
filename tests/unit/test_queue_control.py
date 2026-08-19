@@ -58,6 +58,11 @@ class _Backend:
         self._dead_letters = dead_letters
         self.calls: list[tuple[object, ...]] = []
 
+    def resolve_name(self, name: str | None = None) -> str:
+        resolved = "primary" if name is None else name
+        self.calls.append(("resolve", name, resolved))
+        return resolved
+
     def dead_letters(
         self,
         *,
@@ -106,7 +111,10 @@ def test_queue_control_denies_before_failed_job_access_or_mutation() -> None:
     assert inspection.value.reason is PlatformReason.AUTHORIZATION_DENIED
     assert replay.value.reason is PlatformReason.AUTHORIZATION_DENIED
     assert "job-private" not in str(replay.value)
-    assert backend.calls == []
+    assert backend.calls == [
+        ("resolve", None, "primary"),
+        ("resolve", None, "primary"),
+    ]
 
 
 def test_queue_control_projects_redacted_authorized_results_and_bounded_telemetry() -> None:
@@ -157,14 +165,15 @@ def test_queue_control_projects_redacted_authorized_results_and_bounded_telemetr
     assert replay.replayed_at == _NOW
     assert replay.authorization.effect is GateEffect.ALLOW
     assert backend.calls == [
+        ("resolve", "primary", "primary"),
         ("inspect", "critical", 10, "primary"),
+        ("resolve", "primary", "primary"),
         ("replay", "job-failed-one", "primary"),
     ]
     assert requests == [
         ("inspect", "queue-dead-letter", "primary:critical"),
         ("replay", "queue-dead-letter", "primary:job-failed-one"),
     ]
-
     rendered = repr((inspection, replay, sink.signals))
     assert "payload-for" not in rendered
     assert "operator-1" not in rendered
@@ -184,6 +193,38 @@ def test_queue_control_projects_redacted_authorized_results_and_bounded_telemetr
     }
     assert sink.signals[0].context is not None
     assert sink.signals[0].context.correlation_id == "control-correlation"
+
+
+def test_queue_control_authorizes_and_accesses_the_concrete_default_connection() -> None:
+    requests: list[str | None] = []
+
+    def allow(request, context):  # type: ignore[no-untyped-def]
+        del context
+        requests.append(request.protected_resource_id)
+        return GateDecision(
+            effect=GateEffect.ALLOW,
+            policy_version="policy-v1",
+            reason_code="operator_allowed",
+            effective_scope=AcceptanceScope.OPERATOR_EVALUATION,
+        )
+
+    backend = _Backend((_dead_letter("job-default"),))
+    service = QueueControlService(
+        backend,
+        gate=Gate(policy_version="policy-v1", policies=(allow,)),
+        clock=lambda: _NOW,
+    )
+
+    service.inspect(context=_context(), lane="critical")
+    service.replay("job-default", context=_context())
+
+    assert requests == ["primary:critical", "primary:job-default"]
+    assert backend.calls == [
+        ("resolve", None, "primary"),
+        ("inspect", "critical", 100, "primary"),
+        ("resolve", None, "primary"),
+        ("replay", "job-default", "primary"),
+    ]
 
 
 def test_queue_control_uses_verified_queue_manager_without_exposing_job_payload(

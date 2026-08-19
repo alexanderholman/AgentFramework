@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
@@ -840,6 +841,63 @@ def test_worker_run_loop_emits_fresh_health_heartbeats_until_stopped() -> None:
         "state": "idle",
     }
     assert heartbeats[0].health_state.fresh_until > heartbeats[0].observed_at
+
+
+def test_concurrent_polling_loops_share_one_heartbeat_lifecycle() -> None:
+    sink = _RecordingTelemetrySink()
+    kernel = WorkerKernel(
+        _make_driver(),
+        max_concurrency=2,
+        heartbeat_interval=timedelta(seconds=1),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+    first_stop = Event()
+    second_stop = Event()
+    first = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": first_stop},
+    )
+    second = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": second_stop},
+    )
+
+    first.start()
+    second.start()
+    try:
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and kernel._heartbeat_users != 2:
+            time.sleep(0.001)
+        assert kernel._heartbeat_users == 2
+
+        first_stop.set()
+        first.join(timeout=1)
+        assert not first.is_alive()
+        time.sleep(0.02)
+        assert not any(
+            signal.health_state is not None
+            and signal.health_state.liveness is LivenessState.STOPPED
+            for signal in sink.signals
+            if signal.name == "queue.worker.heartbeat"
+        )
+    finally:
+        first_stop.set()
+        second_stop.set()
+        first.join(timeout=1)
+        second.join(timeout=1)
+
+    assert not second.is_alive()
+    stopped = [
+        signal
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat"
+        and signal.health_state is not None
+        and signal.health_state.liveness is LivenessState.STOPPED
+    ]
+    assert len(stopped) == 1
 
 
 def test_worker_heartbeat_remains_live_and_reports_saturation_during_long_job() -> None:

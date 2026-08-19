@@ -502,6 +502,9 @@ class WorkerKernel:
         self._queue_wait_alert_active = False
         self._stats = WorkerStats()
         self._condition = Condition(RLock())
+        self._heartbeat_users = 0
+        self._heartbeat_stop: Event | None = None
+        self._heartbeat_thread: Thread | None = None
 
     @property
     def state(self) -> WorkerState:
@@ -845,21 +848,7 @@ class WorkerKernel:
         if poll_interval <= timedelta(0):
             raise ValueError("worker poll interval must be positive")
         _validate_handler(consumer)
-        heartbeat_stop = Event()
-        heartbeat_thread: Thread | None = None
-        if self._telemetry is not None:
-            try:
-                candidate = Thread(
-                    target=self._run_heartbeat,
-                    args=(heartbeat_stop,),
-                    name="af-queue-heartbeat",
-                    daemon=True,
-                )
-                candidate.start()
-            except Exception:
-                pass
-            else:
-                heartbeat_thread = candidate
+        self._acquire_heartbeat()
         try:
             while True:
                 if stop_event is not None and stop_event.is_set():
@@ -879,11 +868,7 @@ class WorkerKernel:
                     elif stop_event.wait(timeout=poll_interval.total_seconds()):
                         return
         finally:
-            heartbeat_stop.set()
-            if heartbeat_thread is not None:
-                heartbeat_thread.join()
-                with suppress(Exception):
-                    self._emit_heartbeat(stopped=True)
+            self._release_heartbeat()
 
     def _admit(self, *, lane: str | None) -> _AdmittedDelivery | None:
         active_jobs = 0
@@ -1114,6 +1099,49 @@ class WorkerKernel:
         while not stop.wait(timeout=self._heartbeat_interval.total_seconds()):
             with suppress(Exception):
                 self._emit_heartbeat(stopped=False)
+
+    def _acquire_heartbeat(self) -> None:
+        if self._telemetry is None:
+            return
+        with self._condition:
+            self._heartbeat_users += 1
+            if self._heartbeat_users != 1:
+                return
+            stop = Event()
+            try:
+                candidate = Thread(
+                    target=self._run_heartbeat,
+                    args=(stop,),
+                    name="af-queue-heartbeat",
+                    daemon=True,
+                )
+                candidate.start()
+            except Exception:
+                self._heartbeat_stop = None
+                self._heartbeat_thread = None
+            else:
+                self._heartbeat_stop = stop
+                self._heartbeat_thread = candidate
+
+    def _release_heartbeat(self) -> None:
+        if self._telemetry is None:
+            return
+        thread: Thread | None = None
+        with self._condition:
+            self._heartbeat_users -= 1
+            assert self._heartbeat_users >= 0
+            if self._heartbeat_users != 0:
+                return
+            stop = self._heartbeat_stop
+            thread = self._heartbeat_thread
+            self._heartbeat_stop = None
+            self._heartbeat_thread = None
+            if stop is not None:
+                stop.set()
+        if thread is not None:
+            thread.join()
+            with suppress(Exception):
+                self._emit_heartbeat(stopped=True)
 
     def _emit_heartbeat(self, *, stopped: bool) -> None:
         observed_at = self._clock()
