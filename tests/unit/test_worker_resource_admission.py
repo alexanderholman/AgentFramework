@@ -264,6 +264,66 @@ def test_resource_lease_create_cannot_widen_a_consuming_identity_budget() -> Non
     assert repository.get("lease-widened") is None
 
 
+@pytest.mark.parametrize("capacity_kind", ["quantity", "concurrency"])
+def test_fenced_resource_admission_treats_aggregate_saturation_as_denial(
+    capacity_kind: str,
+) -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    budget = _budget()
+    existing_quantity = 2
+    if capacity_kind == "concurrency":
+        budget = ResourceBudget(
+            identity=budget.identity,
+            max_quantity=2,
+            max_duration=budget.max_duration,
+            max_concurrent=1,
+        )
+        existing_quantity = 1
+    service.create_lease(
+        "existing-lease",
+        budget,
+        existing_quantity,
+        {"queue": "default"},
+        "worker-policy",
+        "authorization-v1",
+    )
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=budget,
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "denied-lease",
+    )
+
+    assert gate(lane="default", active_jobs=0, max_concurrency=2) is False
+    assert repository.get("denied-lease") is None
+
+
+def test_fenced_resource_admission_propagates_non_capacity_create_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ResourceLeaseService(InMemoryLeaseRepository(), clock=lambda: _NOW)
+    failure = RuntimeError("lease repository unavailable")
+    monkeypatch.setattr(service, "create_lease", Mock(side_effect=failure))
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "failed-lease",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        gate(lane=None, active_jobs=0, max_concurrency=2)
+
+    assert raised.value is failure
+
+
 def test_fenced_resource_admission_releases_and_reconciles_after_worker_job() -> None:
     repository = InMemoryLeaseRepository()
     service = ResourceLeaseService(repository, clock=lambda: _NOW)

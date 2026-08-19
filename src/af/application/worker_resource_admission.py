@@ -10,6 +10,7 @@ from threading import Condition, Event, RLock, Thread
 
 from af.application.resource_leases import ResourceLeaseService
 from af.domain.resources import Lease, LeaseState, ResourceBudget
+from af.framework.errors import LeaseBudgetExceeded, LeaseConcurrencyExceeded
 
 __all__ = ("FencedResourceLeaseAdmissionGate", "FencedResourceLeasePermit")
 
@@ -222,14 +223,17 @@ class FencedResourceLeaseAdmissionGate:
                 return False
             scope["queue_lane"] = lane
         lease_id = self._lease_id_factory()
-        created = self._service.create_lease(
-            lease_id,
-            self._budget,
-            self._quantity,
-            scope,
-            self._authorized_by,
-            self._authorization_digest,
-        )
+        try:
+            created = self._service.create_lease(
+                lease_id,
+                self._budget,
+                self._quantity,
+                scope,
+                self._authorized_by,
+                self._authorization_digest,
+            )
+        except (LeaseBudgetExceeded, LeaseConcurrencyExceeded):
+            return False
         token = created.fence_token
         assert token is not None
         try:

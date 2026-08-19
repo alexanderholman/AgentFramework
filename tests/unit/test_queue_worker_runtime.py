@@ -90,8 +90,8 @@ def _running(runtime: WorkerRuntime, *, release: Event | None = None) -> Iterato
 
 
 def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() -> None:
-    observations: list[tuple[int, int, int, object]] = []
-    closed: list[int] = []
+    observations: list[tuple[object, object, int, object]] = []
+    closed: list[object] = []
 
     class Dependency:
         pass
@@ -103,7 +103,7 @@ def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() 
         def __call__(self, job: QueueJob) -> None:
             del job
             context = current_context()
-            observations.append((id(self), id(self._dependency), get_ident(), context))
+            observations.append((self, self._dependency, get_ident(), context))
             assert context.correlation_id == "correlation"
             assert context.causation_id == "cause"
             assert context.deadline == _NOW + timedelta(minutes=1)
@@ -118,7 +118,7 @@ def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() 
             with pytest.raises(PlatformError) as unavailable:
                 current_context()
             assert unavailable.value.reason is PlatformReason.CONTEXT_UNAVAILABLE
-            closed.append(id(self))
+            closed.append(self)
 
     root = Container()
     root.bind(Dependency, lambda _: Dependency(), scope=Scope.INVOCATION)
@@ -144,8 +144,8 @@ def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() 
 
     assert scope_kinds == [InvocationKind.JOB, InvocationKind.JOB]
     assert [observation[2] for observation in observations] == [calling_thread, calling_thread]
-    assert observations[0][0] != observations[1][0]
-    assert observations[0][1] != observations[1][1]
+    assert observations[0][0] is not observations[1][0]
+    assert observations[0][1] is not observations[1][1]
     assert observations[0][3] is not observations[1][3]
     assert closed == [observations[0][0], observations[1][0]]
 
