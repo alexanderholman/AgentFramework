@@ -179,6 +179,8 @@ class FencedResourceLeaseAdmissionGate:
             or quantity <= 0
         ):
             raise ValueError("worker resource quantity must be positive")
+        if quantity > budget.max_quantity:
+            raise ValueError("worker resource quantity must not exceed budget maximum")
         if not authorized_by or not authorization_digest:
             raise ValueError("worker resource gate requires authorization evidence")
         if not callable(lease_id_factory) or not callable(thread_factory):

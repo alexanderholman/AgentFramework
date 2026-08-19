@@ -302,6 +302,20 @@ def test_fenced_resource_admission_treats_aggregate_saturation_as_denial(
     assert repository.get("denied-lease") is None
 
 
+def test_fenced_resource_admission_rejects_oversized_configured_quantity() -> None:
+    service = ResourceLeaseService(InMemoryLeaseRepository(), clock=lambda: _NOW)
+
+    with pytest.raises(ValueError, match="must not exceed budget maximum"):
+        FencedResourceLeaseAdmissionGate(
+            service,
+            budget=_budget(),
+            quantity=3,
+            scope={},
+            authorized_by="worker-policy",
+            authorization_digest="authorization-v1",
+        )
+
+
 def test_fenced_resource_admission_propagates_non_capacity_create_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
