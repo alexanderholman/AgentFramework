@@ -53,6 +53,7 @@ class WorkerProcessState(StrEnum):
     """Lifecycle states for one spawned worker process."""
 
     IDLE = "idle"
+    STARTING = "starting"
     RUNNING = "running"
     STOPPING = "stopping"
     STOPPED = "stopped"
@@ -233,43 +234,43 @@ class SpawnWorkerProcess:
                     reason=PlatformReason.SHUTDOWN_FAILED,
                     stage="queue.process.start",
                 )
-        stop_signal: WorkerStopSignal | None = None
-        try:
-            stop_signal = self._process_context.Event()
-            if not isinstance(stop_signal, WorkerStopSignal):
-                raise TypeError("worker process stop signal factory must return a WorkerStopSignal")
-            process = self._process_context.Process(
-                target=_run_spawned_worker,
-                args=(self._supervisor_factory, stop_signal),
-                name=self._name,
-                daemon=False,
-            )
-            if not isinstance(process, _ProcessHandle):
-                raise TypeError("worker process factory must return a process handle")
-            with self._lock:
+            self._state = WorkerProcessState.STARTING
+            stop_signal: WorkerStopSignal | None = None
+            try:
+                stop_signal = self._process_context.Event()
+                if not isinstance(stop_signal, WorkerStopSignal):
+                    raise TypeError(
+                        "worker process stop signal factory must return a WorkerStopSignal"
+                    )
+                process = self._process_context.Process(
+                    target=_run_spawned_worker,
+                    args=(self._supervisor_factory, stop_signal),
+                    name=self._name,
+                    daemon=False,
+                )
+                if not isinstance(process, _ProcessHandle):
+                    raise TypeError("worker process factory must return a process handle")
                 self._stop_signal = stop_signal
                 self._process = process
-            process.start()
-        except BaseException as start_failure:
-            cleanup_failures: list[BaseException] = []
-            if stop_signal is not None:
-                try:
-                    stop_signal.set()
-                except BaseException as cleanup_failure:
-                    cleanup_failures.append(cleanup_failure)
-            failure = (
-                start_failure
-                if not cleanup_failures
-                else BaseExceptionGroup(
-                    "worker process startup and cleanup failed",
-                    (start_failure, *cleanup_failures),
+                process.start()
+            except BaseException as start_failure:
+                cleanup_failures: list[BaseException] = []
+                if stop_signal is not None:
+                    try:
+                        stop_signal.set()
+                    except BaseException as cleanup_failure:
+                        cleanup_failures.append(cleanup_failure)
+                failure = (
+                    start_failure
+                    if not cleanup_failures
+                    else BaseExceptionGroup(
+                        "worker process startup and cleanup failed",
+                        (start_failure, *cleanup_failures),
+                    )
                 )
-            )
-            with self._lock:
                 self._failure = failure
                 self._state = WorkerProcessState.FAILED
-            raise failure.with_traceback(failure.__traceback__) from None
-        with self._lock:
+                raise failure.with_traceback(failure.__traceback__) from None
             self._started = True
             self._state = WorkerProcessState.RUNNING
 

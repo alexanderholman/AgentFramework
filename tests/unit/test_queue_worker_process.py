@@ -102,6 +102,18 @@ class _ProcessContext:
         return process
 
 
+class _BlockingProcessContext(_ProcessContext):
+    def __init__(self) -> None:
+        super().__init__()
+        self.event_factory_entered = Event()
+        self.release_event_factory = Event()
+
+    def Event(self) -> _StopSignal:
+        self.event_factory_entered.set()
+        assert self.release_event_factory.wait(timeout=1)
+        return super().Event()
+
+
 class _SpawnKernel:
     max_concurrency = 1
 
@@ -182,6 +194,68 @@ def test_spawn_worker_process_composes_supervisor_only_inside_child() -> None:
     signals[0].set()
     process.target(*process.args)
     assert composition_calls == 1
+
+
+def test_spawn_worker_process_allows_only_one_concurrent_start() -> None:
+    context = _BlockingProcessContext()
+    worker = SpawnWorkerProcess(
+        lambda: WorkerSupervisor(lambda: pytest.fail("fake child target not executed")),
+        process_context=context,
+    )
+    failures: list[BaseException] = []
+
+    def start() -> None:
+        try:
+            worker.start()
+        except BaseException as error:
+            failures.append(error)
+
+    first = Thread(target=start)
+    second = Thread(target=start)
+    first.start()
+    assert context.event_factory_entered.wait(timeout=1)
+    second.start()
+    context.release_event_factory.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert len(context.processes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], QueueOperationError)
+    assert worker.state is WorkerProcessState.RUNNING
+
+
+def test_spawn_worker_process_close_waits_for_concurrent_start() -> None:
+    context = _BlockingProcessContext()
+    worker = SpawnWorkerProcess(
+        lambda: WorkerSupervisor(lambda: pytest.fail("fake child target not executed")),
+        process_context=context,
+    )
+    failures: list[BaseException] = []
+
+    def start() -> None:
+        try:
+            worker.start()
+        except BaseException as error:
+            failures.append(error)
+
+    starter = Thread(target=start)
+    closer = Thread(target=lambda: worker.close(timeout=timedelta(seconds=1)))
+    starter.start()
+    assert context.event_factory_entered.wait(timeout=1)
+    closer.start()
+    context.release_event_factory.set()
+    starter.join(timeout=1)
+    closer.join(timeout=1)
+
+    assert not starter.is_alive()
+    assert not closer.is_alive()
+    assert failures == []
+    assert len(context.processes) == 1
+    assert context.signals[0].is_set()
+    assert worker.state is WorkerProcessState.STOPPED
 
 
 def test_spawn_worker_process_close_requests_cooperative_stop_and_joins() -> None:
