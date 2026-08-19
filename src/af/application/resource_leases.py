@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from math import isfinite
 from threading import RLock
 
 from af.domain.resources import (
@@ -442,7 +443,7 @@ class ResourceLeaseService:
         return lease
 
     def _validate_quantity(self, budget: ResourceBudget, quantity: float) -> None:
-        if quantity < 0 or quantity > budget.max_quantity:
+        if not isfinite(quantity) or quantity < 0 or quantity > budget.max_quantity:
             raise LeaseBudgetExceeded(
                 lease_id="pending",
                 requested=quantity,

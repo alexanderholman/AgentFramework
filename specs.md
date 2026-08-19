@@ -2966,3 +2966,128 @@ hand the complete auditable result to an injected synchronous recorder.
 - SPEC-061 (explicit worker optimization objective policy)
 - SPEC-060 (measured worker qualification recording)
 - Issue #21
+
+---
+
+## [SPEC-063] Authenticated Worker Measurement Ingress and Normalization
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Authorize one exact backend/environment evidence target, authenticate raw real-service measurement
+documents from configured issuers, and derive deterministic bounded optimization indices without
+accepting caller-supplied scores.
+
+### Requirements
+- Ingress MUST require operator-evaluation scope through the central default-deny `Gate` before
+  iterating, authenticating, or disclosing any measurement.
+- Authorization MUST bind the canonical driver name and exact environment SHA-256 digest.
+- Each measurement MUST contain a qualification, positive completed-job and elapsed-microsecond
+  counts, a non-negative total cost in integer microunits, a canonical issuer, and a lowercase
+  HMAC-SHA256 signature.
+- Canonical authenticated bytes MUST commit every qualification field except the derived evidence
+  digest, every exact runtime value, the issuer, and all raw measurement counts.
+- A configured issuer key MUST contain at least 256 bits. Unknown issuers, invalid signatures, and
+  evidence-digest drift MUST fail with one non-disclosing authentication error.
+- Accepted evidence MUST match the authorized target, remain current and non-future, declare a
+  real service, contain zero correctness, settlement, and reservation-loss findings, and have a
+  unique evidence digest.
+- Performance MUST be derived from completed jobs per elapsed microsecond, safety confidence from
+  the count of zero-finding samples, and cost efficiency from completed jobs per cost microunit.
+  Each dimension MUST use exact integer/rational arithmetic relative to the best authenticated
+  measurement and produce an integer from zero through one million.
+- A zero-cost authenticated measurement MUST receive maximum cost efficiency while non-zero-cost
+  measurements receive zero whenever such a candidate is present; no division-by-zero or invented
+  cost is permitted.
+- Authenticator coroutine, awaitable, asynchronous-generator, or non-`None` results MUST fail
+  closed; coroutine results MUST be closed.
+
+### Tests
+- **TEST-063-1**: Default denial occurs before a deliberately uninspectable measurement iterable.
+- **TEST-063-2**: Two signed raw observations derive exact performance, safety-confidence, and
+  cost-efficiency indices and record the exact authorization target.
+- **TEST-063-3**: Payload, signature, issuer, evidence digest, and target drift fail closed.
+- **TEST-063-4**: Stale, synthetic, future-dated, and failure-bearing evidence is rejected.
+- **TEST-063-5**: Raw counts, signatures, key strength, composition, and synchronous authenticator
+  boundaries reject malformed input.
+
+### Related Specs
+- SPEC-062 (authorized exact-target worker optimization promotion)
+- SPEC-061 (explicit worker optimization objective policy)
+- SPEC-060 (measured worker qualification recording)
+- Issue #21
+
+---
+
+## [SPEC-064] Observable Long-Running Worker Heartbeats
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Emit bounded health evidence from the long-running worker polling lifecycle so operators can
+distinguish idle, busy, saturated, draining, stopped, and stale workers without inspecting jobs.
+
+### Requirements
+- A long-running worker configured with telemetry MUST emit a health heartbeat immediately and at
+  every configured heartbeat interval until the polling lifecycle stops.
+- Heartbeat production MUST remain independent of handler execution so a blocked or long-running
+  job continues to produce liveness evidence.
+- Each live heartbeat MUST declare a freshness deadline two configured intervals after observation.
+  Consumers MUST treat evidence older than that deadline as stale rather than live.
+- Readiness MUST distinguish ready, busy, saturated, and draining states. A terminal heartbeat MUST
+  declare stopped liveness and not-ready readiness.
+- Attributes MUST remain bounded and low cardinality: worker state, active-job count bucket, and
+  saturation bucket only. Job identities, payloads, tenants, and other sensitive data MUST NOT be
+  included.
+- Heartbeat construction or publication failure MUST NOT change reservation, execution, settlement,
+  or polling semantics.
+
+### Tests
+- **TEST-064-1**: An idle long-running worker emits repeated fresh live health signals and one
+  terminal stopped signal.
+- **TEST-064-2**: A blocked long-running job continues to emit live saturated health evidence.
+- **TEST-064-3**: A partially occupied worker reports busy and then draining readiness.
+- **TEST-064-4**: A failing telemetry sink cannot stop worker polling.
+- **TEST-064-5**: Heartbeat signals contain only bounded state and saturation attributes and do not
+  disclose a job identity.
+
+### Related Specs
+- SPEC-051 (process-isolated queue worker supervision)
+- SPEC-047 (owned worker runtime and cooperative cancellation)
+- Issue #21
+
+---
+
+## [SPEC-065] Monotonic Worker Runtime Measurement
+**Date**: 2026-08-19
+**Status**: Implemented as a bounded issue #21 slice
+**Priority**: MUST
+
+### Description
+Measure worker execution duration with a monotonic clock so wall-clock correction cannot corrupt
+cumulative runtime or duration telemetry.
+
+### Requirements
+- Worker delivery duration MUST be the elapsed monotonic time from admitted execution start through
+  terminal cleanup.
+- UTC wall time MUST remain the observation timestamp for emitted telemetry and MUST NOT determine
+  elapsed duration.
+- Backward and forward wall-clock corrections MUST NOT produce negative, zeroed, or inflated runtime
+  when monotonic elapsed time is unchanged.
+- The same monotonic duration MUST feed both cumulative `WorkerStats.total_runtime` and the bounded
+  terminal-delivery runtime bucket.
+- Queue execution, acknowledgement, retry, release, and cleanup semantics MUST remain unchanged.
+
+### Tests
+- **TEST-065-1**: A one-hour backward wall-clock correction preserves a 250 ms monotonic runtime.
+- **TEST-065-2**: A one-day forward wall-clock correction preserves the same monotonic runtime.
+- **TEST-065-3**: Cumulative statistics and delivery telemetry derive from the same duration.
+- **TEST-065-4**: Existing worker kernel, runtime, process, and stale-worker recovery suites remain
+  green.
+
+### Related Specs
+- SPEC-064 (observable long-running worker heartbeats)
+- SPEC-048 (bounded worker delivery telemetry)
+- Issue #21

@@ -12,11 +12,16 @@ from af.framework.context import CancellationToken
 from af.framework.errors import PlatformReason
 from af.messaging import EnvelopeKind, MessageEnvelope, MessageMetadata
 from af.observability import (
+    CapabilityState,
+    DegradationState,
+    LivenessState,
+    ReadinessState,
     TelemetryContext,
     TelemetryKind,
     TelemetryPublisher,
     TelemetrySignal,
 )
+from af.queue import worker as worker_module
 from af.queue.contracts import (
     QueueDispatchDisposition,
     QueueDispatchReceipt,
@@ -234,6 +239,64 @@ def test_worker_kernel_rejects_malformed_admission_permit_before_reservation() -
         kernel.run_once(lambda _job: None)
 
     assert driver.queued_message_ids == ["job-malformed-permit"]
+
+
+def test_worker_kernel_rejects_async_admission_permit_before_reservation() -> None:
+    class AsyncPermit:
+        async def release(self) -> None:
+            return None
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-async-permit"))
+    kernel = WorkerKernel(
+        driver,
+        admission_gate=lambda **_: AsyncPermit(),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(TypeError, match="admission permit must be synchronous"):
+        kernel.run_once(lambda _job: None)
+
+    assert driver.queued_message_ids == ["job-async-permit"]
+    assert driver._attempts == {}
+
+
+@pytest.mark.parametrize("result_kind", ["coroutine", "awaitable", "value"])
+def test_worker_kernel_rejects_invalid_admission_permit_release_result(
+    result_kind: str,
+) -> None:
+    class AwaitableResult:
+        def __await__(self):  # type: ignore[no-untyped-def]
+            yield
+
+    async def asynchronous_result() -> None:
+        return None
+
+    class InvalidPermit:
+        def release(self) -> object:
+            if result_kind == "coroutine":
+                return asynchronous_result()
+            if result_kind == "awaitable":
+                return AwaitableResult()
+            return "unexpected"
+
+    driver = _make_driver()
+    driver.dispatch(_job(f"job-invalid-release-{result_kind}"))
+    kernel = WorkerKernel(
+        driver,
+        admission_gate=lambda **_: InvalidPermit(),  # type: ignore[return-value]
+        clock=lambda: _NOW,
+    )
+
+    expected = (
+        "admission permit returned an asynchronous result"
+        if result_kind != "value"
+        else "admission permit must return None"
+    )
+    with pytest.raises(TypeError, match=expected):
+        kernel.run_once(lambda _job: None)
+
+    assert driver.queued_message_ids == []
 
 
 def test_worker_kernel_preserves_handler_and_permit_release_failures() -> None:
@@ -627,6 +690,43 @@ def test_worker_kernel_tracks_runtime() -> None:
     assert stats.jobs_processed == 1
 
 
+@pytest.mark.parametrize("wall_jump", [timedelta(hours=-1), timedelta(days=1)])
+def test_worker_runtime_uses_monotonic_duration_across_wall_clock_jumps(
+    monkeypatch: pytest.MonkeyPatch,
+    wall_jump: timedelta,
+) -> None:
+    class MonotonicClock:
+        def __init__(self) -> None:
+            self._ticks = iter((100.0, 100.25))
+
+        def monotonic(self) -> float:
+            return next(self._ticks)
+
+    class RecordingSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+
+    wall_times = iter((_NOW, _NOW + wall_jump, _NOW + wall_jump))
+    monkeypatch.setattr(worker_module, "time", MonotonicClock())
+    driver = _make_driver()
+    sink = RecordingSink()
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: next(wall_times),
+    )
+
+    driver.dispatch(_job("job-monotonic-runtime"))
+    kernel.run_once(consumer=lambda job: None)
+
+    assert kernel.stats.total_runtime == timedelta(milliseconds=250)
+    delivery = next(signal for signal in sink.signals if signal.name == "queue.worker.delivery")
+    assert dict(delivery.attributes)["runtime_bucket"] == "lt_1s"
+
+
 def test_worker_kernel_stats_are_immutable_snapshots() -> None:
     kernel = WorkerKernel(_make_driver(), clock=lambda: _NOW)
 
@@ -669,6 +769,257 @@ def test_worker_kernel_heartbeat_detects_timeout() -> None:
 
     stats = kernel.stats
     assert stats.idle_timeouts == 0
+
+
+def test_worker_run_loop_emits_fresh_health_heartbeats_until_stopped() -> None:
+    class HeartbeatSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+            self.two_live_heartbeats = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+            live_count = sum(
+                item.name == "queue.worker.heartbeat"
+                and item.health_state is not None
+                and item.health_state.liveness is LivenessState.LIVE
+                for item in self.signals
+            )
+            if live_count >= 2:
+                self.two_live_heartbeats.set()
+
+    driver = _make_driver()
+    sink = HeartbeatSink()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        driver,
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                lambda job: None,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert sink.two_live_heartbeats.wait(timeout=1)
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+    heartbeats = [signal for signal in sink.signals if signal.name == "queue.worker.heartbeat"]
+    assert len(heartbeats) >= 3
+    assert all(signal.kind is TelemetryKind.HEALTH for signal in heartbeats)
+    assert all(signal.context is None for signal in heartbeats)
+    assert all(
+        heartbeat.health_state is not None
+        and heartbeat.health_state.degradation is DegradationState.HEALTHY
+        and heartbeat.health_state.capability is CapabilityState.AVAILABLE
+        for heartbeat in heartbeats[:-1]
+    )
+    assert [heartbeat.health_state.liveness for heartbeat in heartbeats[-2:]] == [
+        LivenessState.LIVE,
+        LivenessState.STOPPED,
+    ]
+    assert heartbeats[-1].health_state.readiness is ReadinessState.NOT_READY
+    assert dict(heartbeats[0].attributes) == {
+        "active_jobs_bucket": "zero",
+        "saturation_bucket": "lt_50pct",
+        "state": "idle",
+    }
+    assert heartbeats[0].health_state.fresh_until > heartbeats[0].observed_at
+
+
+def test_worker_heartbeat_remains_live_and_reports_saturation_during_long_job() -> None:
+    class HeartbeatSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+            self.saturated = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+            if (
+                signal.name == "queue.worker.heartbeat"
+                and signal.health_state is not None
+                and signal.health_state.readiness is ReadinessState.SATURATED
+            ):
+                self.saturated.set()
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-long-heartbeat"))
+    sink = HeartbeatSink()
+    release_job = Event()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        driver,
+        max_concurrency=1,
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def handle(job: QueueJob) -> None:
+        del job
+        release_job.wait(timeout=1)
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                handle,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert sink.saturated.wait(timeout=1)
+    finally:
+        release_job.set()
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+    saturated = next(
+        signal
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat"
+        and signal.health_state is not None
+        and signal.health_state.readiness is ReadinessState.SATURATED
+    )
+    assert dict(saturated.attributes) == {
+        "active_jobs_bucket": "one",
+        "saturation_bucket": "full",
+        "state": "processing",
+    }
+    assert "job-long-heartbeat" not in repr(saturated)
+
+
+def test_worker_heartbeat_reports_busy_then_draining_during_long_job() -> None:
+    class HeartbeatSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+            self.busy = Event()
+            self.draining = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+            if signal.name != "queue.worker.heartbeat" or signal.health_state is None:
+                return
+            if signal.health_state.readiness is ReadinessState.BUSY:
+                self.busy.set()
+            if signal.health_state.readiness is ReadinessState.DRAINING:
+                self.draining.set()
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-draining-heartbeat"))
+    sink = HeartbeatSink()
+    release_job = Event()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        driver,
+        max_concurrency=2,
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def handle(job: QueueJob) -> None:
+        del job
+        release_job.wait(timeout=1)
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                handle,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert sink.busy.wait(timeout=1)
+        kernel.start_draining()
+        assert sink.draining.wait(timeout=1)
+    finally:
+        release_job.set()
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+    states = [
+        signal.health_state.readiness
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat" and signal.health_state is not None
+    ]
+    assert ReadinessState.BUSY in states
+    assert ReadinessState.DRAINING in states
+
+
+def test_worker_heartbeat_publisher_failure_cannot_stop_polling() -> None:
+    class FailingSink:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.called_twice = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.calls += 1
+            if self.calls >= 2:
+                self.called_twice.set()
+            raise RuntimeError("telemetry unavailable")
+
+    sink = FailingSink()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                lambda job: None,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+
+    thread.start()
+    try:
+        assert sink.called_twice.wait(timeout=1)
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
 
 
 @pytest.mark.parametrize(

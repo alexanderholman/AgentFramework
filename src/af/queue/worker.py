@@ -17,7 +17,16 @@ from typing import Protocol, cast
 
 from af.framework.context import CancellationToken
 from af.framework.errors import PlatformReason
-from af.observability.signals import TelemetryKind, TelemetryPublisher, TelemetrySignal
+from af.observability.signals import (
+    CapabilityState,
+    DegradationState,
+    HealthState,
+    LivenessState,
+    ReadinessState,
+    TelemetryKind,
+    TelemetryPublisher,
+    TelemetrySignal,
+)
 from af.queue.contracts import (
     QueueJob,
     QueueOperationError,
@@ -633,7 +642,7 @@ class WorkerKernel:
         message_id = reservation.job.envelope.metadata.message_id
         with self._condition:
             cancellation = self._active_cancellations[message_id]
-        started = self._clock()
+        started_monotonic = time.monotonic()
         lag = max(
             timedelta(0),
             reservation.reserved_at - reservation.job.envelope.metadata.occurred_at,
@@ -795,7 +804,7 @@ class WorkerKernel:
             except BaseException as error:
                 finalization_failure = error
             finished_at = self._clock()
-            elapsed = finished_at - started
+            elapsed = timedelta(seconds=time.monotonic() - started_monotonic)
             with self._condition:
                 self._stats = replace(
                     self._stats,
@@ -836,23 +845,40 @@ class WorkerKernel:
         if poll_interval <= timedelta(0):
             raise ValueError("worker poll interval must be positive")
         _validate_handler(consumer)
-        while True:
-            if stop_event is not None and stop_event.is_set():
-                return
-            with self._condition:
-                if self._closed or self._draining:
+        heartbeat_stop = Event()
+        heartbeat_thread: Thread | None = None
+        if self._telemetry is not None:
+            heartbeat_thread = Thread(
+                target=self._run_heartbeat,
+                args=(heartbeat_stop,),
+                name="af-queue-heartbeat",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+        try:
+            while True:
+                if stop_event is not None and stop_event.is_set():
                     return
-            try:
-                reservation = self._run_once(consumer, lane=lane)
-            except _AcknowledgementFailure as failure:
-                raise failure.error.with_traceback(failure.error.__traceback__) from None
-            except _SettledJobFailure:
-                continue
-            if reservation is None:
-                if stop_event is None:
-                    time.sleep(poll_interval.total_seconds())
-                elif stop_event.wait(timeout=poll_interval.total_seconds()):
-                    return
+                with self._condition:
+                    if self._closed or self._draining:
+                        return
+                try:
+                    reservation = self._run_once(consumer, lane=lane)
+                except _AcknowledgementFailure as failure:
+                    raise failure.error.with_traceback(failure.error.__traceback__) from None
+                except _SettledJobFailure:
+                    continue
+                if reservation is None:
+                    if stop_event is None:
+                        time.sleep(poll_interval.total_seconds())
+                    elif stop_event.wait(timeout=poll_interval.total_seconds()):
+                        return
+        finally:
+            heartbeat_stop.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join()
+                with suppress(Exception):
+                    self._emit_heartbeat(stopped=True)
 
     def _admit(self, *, lane: str | None) -> _AdmittedDelivery | None:
         active_jobs = 0
@@ -884,6 +910,8 @@ class WorkerKernel:
                 release = getattr(decision, "release", None)
                 if not callable(release):
                     raise TypeError("worker admission permit requires callable release")
+                if inspect.iscoroutinefunction(release) or inspect.isasyncgenfunction(release):
+                    raise TypeError("worker admission permit must be synchronous")
                 permit = decision
 
         with self._condition:
@@ -939,7 +967,15 @@ class WorkerKernel:
         if permit is None:
             return
         try:
-            permit.release()
+            release = cast(Callable[[], object], permit.release)
+            result = release()
+            if inspect.iscoroutine(result):
+                result.close()
+                raise TypeError("worker admission permit returned an asynchronous result")
+            if inspect.isawaitable(result) or inspect.isasyncgen(result):
+                raise TypeError("worker admission permit returned an asynchronous result")
+            if result is not None:
+                raise TypeError("worker admission permit must return None")
         except BaseException as release_failure:
             if active_failure is not None:
                 raise BaseExceptionGroup(
@@ -1066,6 +1102,57 @@ class WorkerKernel:
         except Exception:
             # Optional telemetry evidence cannot change queue settlement semantics.
             return
+
+    def _run_heartbeat(self, stop: Event) -> None:
+        with suppress(Exception):
+            self._emit_heartbeat(stopped=False)
+        while not stop.wait(timeout=self._heartbeat_interval.total_seconds()):
+            with suppress(Exception):
+                self._emit_heartbeat(stopped=False)
+
+    def _emit_heartbeat(self, *, stopped: bool) -> None:
+        observed_at = self._clock()
+        with self._condition:
+            active_jobs = len(self._active_jobs)
+            saturation = active_jobs / self._max_concurrency
+            if stopped:
+                state = WorkerState.STOPPED
+                readiness = ReadinessState.NOT_READY
+            elif self._draining:
+                state = WorkerState.DRAINING
+                readiness = ReadinessState.DRAINING
+            elif active_jobs >= self._max_concurrency:
+                state = WorkerState.PROCESSING
+                readiness = ReadinessState.SATURATED
+            elif active_jobs:
+                state = WorkerState.PROCESSING
+                readiness = ReadinessState.BUSY
+            else:
+                state = WorkerState.IDLE
+                readiness = ReadinessState.READY
+        self._publish_telemetry(
+            TelemetrySignal.health(
+                name="queue.worker.heartbeat",
+                observed_at=observed_at,
+                attributes={
+                    "active_jobs_bucket": (
+                        "zero" if active_jobs == 0 else "one" if active_jobs == 1 else "multiple"
+                    ),
+                    "saturation_bucket": _saturation_bucket(saturation),
+                    "state": state.value,
+                },
+                state=HealthState(
+                    liveness=(LivenessState.STOPPED if stopped else LivenessState.LIVE),
+                    readiness=readiness,
+                    degradation=DegradationState.HEALTHY,
+                    capability=CapabilityState.AVAILABLE,
+                    reason_code="worker_stopped" if stopped else "worker_alive",
+                    fresh_until=(
+                        observed_at if stopped else observed_at + (self._heartbeat_interval * 2)
+                    ),
+                ),
+            )
+        )
 
     def _release_cancelled(
         self,

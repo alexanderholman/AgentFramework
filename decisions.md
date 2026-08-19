@@ -3989,3 +3989,117 @@ backend environment.
 - Added: `src/af/application/worker_optimization_control.py`
 - Added: `tests/unit/test_worker_optimization_control.py`
 - Related: SPEC-062 and issue #21
+
+---
+
+## [DEC-078] Authenticate Raw Measurements Before Deriving Optimization Indices
+**Date**: 2026-08-19
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner under operator hold
+
+### Context
+The authorized promotion boundary could still only consume candidates containing externally
+supplied normalized indices. It could not prove who produced the underlying measurements or derive
+the indices itself, so exposing that type directly at an operator interface would allow callers to
+substitute arbitrary scores.
+
+### Decision
+1. Add a separate application-layer ingress protected by exact driver/environment authorization
+   before measurement iteration or authentication.
+2. Authenticate canonical measurement documents with configured per-issuer HMAC-SHA256 keys of at
+   least 256 bits and bind the computed payload digest to qualification evidence identity.
+3. Accept only current, zero-finding real-service qualifications matching the authorized target.
+4. Derive performance from completed jobs per elapsed time, safety confidence from the number of
+   zero-finding samples, and cost efficiency from completed jobs per exact cost using rational and
+   integer arithmetic only.
+5. Normalize each dimension against the best authenticated observation to the selector's existing
+   zero-to-one-million range; treat authenticated zero cost explicitly rather than inventing a
+   denominator.
+6. Keep service execution, key provisioning and rotation, operator presentation, selection,
+   recording, and real-service qualification as separate boundaries.
+
+### Consequences
+- Protected interfaces no longer need to trust caller-supplied optimization indices.
+- Tampering with a runtime value, qualification field, issuer, raw count, or evidence identity
+  invalidates authentication before a candidate is returned.
+- This adapter can verify measurement documents produced by applicable service runners, but its
+  unit tests do not themselves establish that any service was contacted or qualified.
+- Issue #21 remains open for actual applicable real-service runs, exact-head independent review,
+  publication, and criterion-level closure reconciliation.
+
+### Output References
+- Added: `src/af/application/worker_evidence_ingress.py`
+- Added: `tests/unit/test_worker_evidence_ingress.py`
+- Related: SPEC-063 and issue #21
+
+---
+
+## [DEC-079] Drive Worker Heartbeats Independently of Job Execution
+**Date**: 2026-08-19
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner under operator hold
+
+### Context
+The worker accepted a heartbeat interval and updated a private timestamp only when attempting
+admission. That value was neither externally observable nor refreshed while a synchronous handler
+was running, so a healthy long-running job and a stalled worker were indistinguishable to the
+control plane.
+
+### Decision
+1. Start one daemon heartbeat coordinator for the lifetime of `WorkerKernel.run_loop` when a
+   telemetry publisher is configured.
+2. Emit structured `HEALTH` signals immediately and on the configured interval from the coordinator,
+   independently of queue polling and handler execution.
+3. Derive liveness/readiness from a lock-protected worker snapshot and expose only bounded active-job,
+   saturation, and lifecycle buckets.
+4. Set live freshness to two heartbeat intervals and emit an explicit stopped/not-ready terminal
+   signal when the polling lifecycle exits.
+5. Preserve telemetry as optional evidence: construction and delivery failures cannot alter worker
+   execution or settlement.
+
+### Consequences
+- Operators can detect stale heartbeat evidence while a legitimate long-running job remains visibly
+  live, busy, or saturated.
+- The signal is adapter-neutral and can be forwarded to existing telemetry sinks without exposing
+  message or tenant identifiers.
+- This slice does not provide a durable remote heartbeat store or real-service qualification and
+  does not by itself complete issue #21.
+
+### Output References
+- Updated: `src/af/queue/worker.py`
+- Updated: `tests/unit/test_queue_worker.py`
+- Related: SPEC-064 and issue #21
+
+---
+
+## [DEC-080] Separate Worker Duration From Wall Time
+**Date**: 2026-08-19
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner under operator hold
+
+### Context
+Worker runtime was calculated by subtracting two UTC wall-clock readings. NTP correction, manual
+clock changes, or virtualization drift could therefore make a successful job appear to have a
+negative, zero, or greatly inflated duration, corrupting both cumulative metrics and optimization
+measurements.
+
+### Decision
+1. Measure delivery duration with Python's monotonic clock around the admitted execution,
+   settlement, and cleanup lifecycle.
+2. Continue using the injected aware UTC clock for observation timestamps, queue lag, idle policy,
+   and evidence identity where civil time is required.
+3. Feed one monotonic elapsed value to cumulative runtime statistics and bounded delivery telemetry.
+4. Preserve every existing settlement and cleanup path without making metric publication
+   authoritative over queue correctness.
+
+### Consequences
+- Runtime remains stable across backward and forward civil-time corrections.
+- Qualification and optimization adapters receive trustworthy duration inputs when sourced from
+  worker statistics.
+- This slice does not create real-service evidence or complete issue #21 publication and closure
+  gates.
+
+### Output References
+- Updated: `src/af/queue/worker.py`
+- Updated: `tests/unit/test_queue_worker.py`
+- Related: SPEC-065 and issue #21

@@ -5,7 +5,8 @@ from __future__ import annotations
 import secrets
 from collections.abc import Callable, Mapping
 from datetime import timedelta
-from threading import Event, RLock, Thread
+from math import isfinite
+from threading import Condition, Event, RLock, Thread
 
 from af.application.resource_leases import ResourceLeaseService
 from af.domain.resources import Lease, LeaseState, ResourceBudget
@@ -50,8 +51,10 @@ class FencedResourceLeasePermit:
         self._renewal_interval = renewal_interval
         self._stop = Event()
         self._lock = RLock()
+        self._release_condition = Condition(self._lock)
         self._failure: BaseException | None = None
         self._released = False
+        self._release_in_progress = False
         self._thread: Thread | None = None
         if renewal_interval is not None:
             self._thread = thread_factory(
@@ -87,24 +90,44 @@ class FencedResourceLeasePermit:
     def release(self) -> None:
         """Stop renewal, release the latest fence, and reconcile exactly once."""
 
-        with self._lock:
+        with self._release_condition:
+            while self._release_in_progress:
+                self._release_condition.wait()
             if self._released:
                 return
-            self._released = True
-        self._stop.set()
-        thread = self._thread
-        if thread is not None:
-            thread.join()
-        with self._lock:
-            renewal_failure = self._failure
-            lease = self._lease
+            self._release_in_progress = True
+        renewal_failure: BaseException | None = None
         release_failure: BaseException | None = None
         try:
-            reconciled = _release_and_reconcile(self._service, lease)
+            self._stop.set()
+            thread = self._thread
+            if thread is not None:
+                thread.join()
             with self._lock:
-                self._lease = reconciled
+                renewal_failure = self._failure
+                lease = self._lease
+            if lease.state is LeaseState.ACTIVE:
+                token = lease.fence_token
+                assert token is not None
+                lease = self._service.release_lease(lease.id, token)
+                with self._lock:
+                    self._lease = lease
+            if lease.state is LeaseState.RELEASED:
+                token = lease.fence_token
+                assert token is not None
+                lease = self._service.reconcile_lease(lease.id, token)
+                with self._lock:
+                    self._lease = lease
+            if lease.state is not LeaseState.RECONCILED:
+                raise RuntimeError("worker resource permit cleanup did not reconcile lease")
+            with self._lock:
+                self._released = True
         except BaseException as error:
             release_failure = error
+        finally:
+            with self._release_condition:
+                self._release_in_progress = False
+                self._release_condition.notify_all()
         if renewal_failure is not None and release_failure is not None:
             raise BaseExceptionGroup(
                 "worker resource renewal and release both failed",
@@ -148,7 +171,12 @@ class FencedResourceLeaseAdmissionGate:
             raise TypeError("worker resource gate requires ResourceLeaseService")
         if not isinstance(budget, ResourceBudget):
             raise TypeError("worker resource gate requires ResourceBudget")
-        if not isinstance(quantity, (int, float)) or isinstance(quantity, bool) or quantity <= 0:
+        if (
+            not isinstance(quantity, (int, float))
+            or isinstance(quantity, bool)
+            or not isfinite(quantity)
+            or quantity <= 0
+        ):
             raise ValueError("worker resource quantity must be positive")
         if not authorized_by or not authorization_digest:
             raise ValueError("worker resource gate requires authorization evidence")

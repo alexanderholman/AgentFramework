@@ -3445,3 +3445,239 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - After committing the repair and its append-only record, direct governance passed 36/36 from a
   clean head; this supersedes the interim 35/36 result without rewriting it
 - The clean package gate passed again with the same sdist and wheel digests recorded above
+
+---
+
+## Run #063 - Exact-Head Resource-Permit Review Repair
+**Date**: 2026-08-18
+**Agent**: Codex unattended bounded runner
+**Status**: Review findings repaired in a local checkpoint; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177 and PR #206 at published head
+  `8d694b11b4d823bf9a5e26aa700bd90f60489332`
+- Fresh independent review reported three unresolved findings: retriable failed lease release,
+  non-finite admission quantities, and unchecked asynchronous or malformed permit release results
+- The unattended operator hold remains active; this run did not push, merge, reply, resolve review
+  threads, mutate issue state, or claim issue acceptance
+
+### Outputs
+- Kept failed permit cleanup retryable and retained the latest lease transition so a failed
+  reconciliation can resume without replaying a completed release
+- Serialized concurrent release attempts and marked a permit complete only after reconciliation
+- Rejected NaN and infinite quantities at both worker admission and the resource-lease service
+- Rejected asynchronous permit release methods before queue reservation
+- Closed coroutine results and rejected all awaitable, asynchronous-generator, and non-`None`
+  release results instead of silently treating cleanup as successful
+- Added focused regressions for each reviewed behavior
+
+### Verified Results
+- Intended failures reproduced all three review findings before production changes
+- The four focused modules passed 279/279 after implementation
+- Focused Ruff format/lint and strict mypy passed
+- At clean code commit `c6c9c485b1d21c6fba49ed4981243857a3b2a670`, the locked aggregate passed:
+  2,935 tests passed, 52 explicitly configured real-service profiles skipped, branch coverage was
+  90.04%, Node route authorization passed 9/9, and governance passed 36/36
+- The clean package gate passed: sdist SHA-256
+  `680a5c516ceb28afec03ccceed4303419a2b53261631a9c3fcf3007e97f27620`; wheel SHA-256
+  `e8093c4a23bc3df66abe37c4e88842068ace0c4dbdd9e73cfdcf6d57a8a8b907`
+- The 52 service-profile skips are not represented as passes or real-service qualification
+
+### Remaining Work
+- Re-run the locked aggregate on the final clean checkpoint containing this append-only record
+- Under direct supervision, publish the repair, reply with exact-head evidence, resolve only the
+  three addressed threads, request a fresh exact-head independent review, and merge only if clean
+- Keep issue #21 open for applicable real-service qualification, authenticated measurement and
+  normalization ingress, and criterion-level closure reconciliation
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+---
+
+## Run #064 - Authenticated Worker Measurement Ingress
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, open PRs, issue-named branches,
+  assignments, and thread-aware review state
+- PR #206 remains the only open pull request, issue #21 remains the active assigned frontier, and
+  three published-head review findings remain unresolved although their repairs are preserved in
+  local checkpoint `b83b5f8572bb989f4e574a593a475a621f209eed`
+- Issue #177's unattended operator hold remains active; no GitHub mutation, publication, merge,
+  thread resolution, issue mutation, or acceptance claim was authorized
+- PR #206 explicitly identifies authenticated measurement/normalization ingress as remaining
+  production work
+
+### Outputs
+- Added exact-target operator authorization before measurement iteration or authentication
+- Added canonical measurement documents committing qualifications, runtime values, issuer, raw
+  completed-job, elapsed-time, and cost counts
+- Added per-issuer HMAC-SHA256 authentication, minimum 256-bit keys, evidence-digest binding, and
+  defensive key-map copying
+- Added deterministic rational/integer normalization for throughput, zero-finding sample confidence,
+  and cost efficiency without accepting externally supplied indices
+- Rejected target drift, stale/synthetic/failure-bearing evidence, duplicate evidence, malformed
+  raw units, tampering, unknown issuers, and asynchronous or value-returning authenticators
+
+### Verified Results
+- Intended test collection failed because the ingress module did not exist
+- The asynchronous/value-returning authenticator regressions then failed against the initial
+  implementation and passed after synchronous-result enforcement
+- The final focused ingress suite passed 14/14
+- Qualification, selection, promotion, issue-boundary, and ingress composition passed 201/201
+- Focused Ruff format/lint and strict mypy passed
+- No real service was contacted and no production qualification, publication, merge, issue
+  acceptance, or closure is claimed by these local results
+
+### Remaining Work
+- Commit the bounded checkpoint and run the locked aggregate, direct governance, and package gates
+  from its exact clean head
+- Under direct supervision, publish the accumulated repair and ingress checkpoint, resolve only
+  findings supported at the published head, and obtain fresh independent review
+- Run applicable real-service profiles and reconcile every issue #21 acceptance criterion against
+  immutable merged evidence before closure
+
+### Related References
+- SPEC-063
+- DEC-078
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The first locked aggregate executed all tests but stopped at the coverage gate: 2,949 passed,
+  52 explicitly configured real-service profiles skipped, and total branch coverage was 89.99%
+  against the unchanged 90% requirement. Package and governance stages therefore did not run, and
+  no aggregate pass was claimed.
+- Added boundary coverage for authenticated evidence-digest drift, duplicate evidence, zero-cost
+  normalization, key-set validation, composition, time, target, and bounded-input contracts.
+- The expanded ingress suite passed 20/20 with 92.67% module branch coverage; focused Ruff and
+  strict mypy continued to pass. The aggregate threshold was not weakened.
+- The second locked aggregate completed from exact clean code/test head `4e3e05a`: Python passed
+  2,955/2,955 executed tests with 52 explicitly configured real-service profiles skipped; total
+  branch coverage passed at 90.04%; Node passed 9/9; and governance passed 36/36 including the
+  append-only check.
+- The clean package gate passed: sdist SHA-256
+  `e8909a0717f293b9eacfd15ffa20b42bb0c71885c2904acd70a797db026b3f93`; wheel SHA-256
+  `eb2cbc89115ef9b0fdbe44cb5d899b301dcc17eb1bfc3988817e7a0c2f9ae702`.
+- These results qualify the bounded local slice only. The 52 service-profile skips remain skips;
+  no real-service qualification, publication, merge, issue acceptance, or closure is claimed.
+
+---
+
+## Run #065 - Observable Long-Running Worker Heartbeats
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, assignments, reviews,
+  and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains at published head `8d694b11b4`, and
+  its three latest review findings remain unresolved although repaired in the accumulated local
+  checkpoint
+- Issue #21 requires heartbeat and observable worker state; the current heartbeat interval only
+  updated a private timestamp during admission and produced no evidence during a long-running job
+
+### Outputs
+- Added interval-driven structured worker health signals for the long-running polling lifecycle
+- Kept heartbeat production independent of handler execution
+- Added ready, busy, saturated, draining, and terminal stopped readiness/liveness evidence
+- Bounded attributes to lifecycle and occupancy buckets with no job or tenant identity
+- Preserved polling and settlement when optional telemetry delivery fails
+
+### Verified Results
+- Intended heartbeat specifications failed because no `queue.worker.heartbeat` signals existed
+- Focused heartbeat specifications passed 6/6 after implementation
+- Worker kernel, runtime, process-supervision, and stale-worker recovery specifications passed
+  167/167
+- Focused Ruff and strict mypy passed
+- The locked aggregate, package, and governance gates remain to be run from the final clean
+  checkpoint; no aggregate pass is claimed yet
+
+### Remaining Work
+- Run the exact-head locked aggregate, package, and governance gates
+- Under direct supervision, publish the accumulated checkpoint, reply to and resolve only repaired
+  review findings, obtain a fresh exact-head independent review, and merge only if clean
+- Run applicable real-service qualification and reconcile all four issue #21 acceptance criteria
+  against immutable merged evidence before closure
+
+### Related References
+- SPEC-064
+- DEC-079
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from exact clean implementation head `ed836f9`.
+- Python passed 2,959/2,959 executed tests with 52 explicitly configured real-service profiles
+  skipped; total branch coverage passed at 90.07% against the unchanged 90% requirement.
+- Node passed 9/9; governance passed 36/36 including the append-only check; package validation
+  passed.
+- Package hashes: sdist SHA-256
+  `e21ed9673a4b504335d5e91f296c4dcd3a2e1b87918f4010fbfb919eb8803880`; wheel SHA-256
+  `461b62d7cd1e7650d01113ef5e92f180615d78b7e0d625d5f7f95cd634f215d6`.
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed.
+
+---
+
+## Run #066 - Monotonic Worker Runtime Measurement
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, reviews, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `8d694b11b4`, with three unresolved findings already repaired in the accumulated local checkpoint
+- Issue #21 requires observable runtime; current production code derived elapsed duration from UTC
+  wall-clock subtraction
+
+### Outputs
+- Replaced wall-clock duration subtraction with monotonic elapsed measurement
+- Retained UTC wall time for telemetry observation timestamps
+- Bound cumulative runtime and delivery telemetry to the same elapsed value
+- Added backward and forward clock-correction regression specifications
+
+### Verified Results
+- Intended regressions failed because both clock-correction cases reported zero instead of 250 ms
+- Focused monotonic runtime specifications passed 3/3 after implementation
+- Worker kernel, runtime, process-supervision, and stale-worker recovery specifications passed
+  170/170
+- Focused Ruff and strict mypy passed
+- Locked aggregate, package, and governance results remain to be recorded from the final clean
+  checkpoint; no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record exact-head locked aggregate, package, and governance gates
+- Under direct supervision, publish the accumulated checkpoint, resolve only repaired findings with
+  exact-head evidence, obtain independent review, and merge only if clean
+- Complete applicable real-service qualification and criterion-level merged-evidence reconciliation
+  before issue #21 closure
+
+### Related References
+- SPEC-065
+- DEC-080
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from exact clean implementation head `f05aadc`.
+- Python passed 2,961/2,961 executed tests with 52 explicitly configured real-service profiles
+  skipped; total branch coverage passed at 90.07% against the unchanged 90% requirement.
+- Node passed 9/9; governance passed 36/36 including the append-only check; package validation
+  passed.
+- Package hashes: sdist SHA-256
+  `8923fa5d00a142b6262c567536ef3cdf733f42cdece0023c51cf64ee080db83d`; wheel SHA-256
+  `ecb526310788d051f616facf74acde73b184050477ad3294fdfee0b07b0e4c6c`.
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed.

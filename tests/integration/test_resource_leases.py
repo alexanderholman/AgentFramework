@@ -112,6 +112,24 @@ class TestResourceLeaseServiceCreate:
                 authorization_digest="abc123",
             )
 
+    @pytest.mark.parametrize("quantity", [float("nan"), float("inf"), float("-inf")])
+    def test_create_lease_non_finite_quantity_raises(
+        self,
+        application: AFApplication,
+        budget: ResourceBudget,
+        scope: dict[str, str],
+        quantity: float,
+    ) -> None:
+        with pytest.raises(LeaseBudgetExceeded):
+            application.leases.create_lease(
+                lease_id=str(uuid.uuid4()),
+                budget=budget,
+                quantity=quantity,
+                scope=scope,
+                authorized_by="test-pipeline",
+                authorization_digest="abc123",
+            )
+
     def test_create_lease_exact_budget_quantity_succeeds(
         self, application: AFApplication, budget: ResourceBudget, scope: dict[str, str]
     ) -> None:

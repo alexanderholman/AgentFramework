@@ -28,7 +28,13 @@ from af.application.worker_resource_admission import (
     FencedResourceLeasePermit,
 )
 from af.application.worker_supervision import WorkerSupervisorFactory
-from af.domain.resources import LeaseState, ResourceBudget, ResourceIdentity, ResourceKind
+from af.domain.resources import (
+    FenceToken,
+    LeaseState,
+    ResourceBudget,
+    ResourceIdentity,
+    ResourceKind,
+)
 from af.framework.errors import InvalidProviderConfiguration
 from af.framework.managers import (
     CapabilityBinding,
@@ -515,6 +521,9 @@ def test_resource_permit_rejects_invalid_boundaries(
         ({"budget": object()}, TypeError),
         ({"quantity": 0}, ValueError),
         ({"quantity": True}, ValueError),
+        ({"quantity": float("nan")}, ValueError),
+        ({"quantity": float("inf")}, ValueError),
+        ({"quantity": float("-inf")}, ValueError),
         ({"authorized_by": ""}, ValueError),
         ({"authorization_digest": ""}, ValueError),
         ({"lease_id_factory": object()}, TypeError),
@@ -637,6 +646,39 @@ def test_resource_permit_surfaces_release_failure(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(service, "release_lease", Mock(side_effect=RuntimeError("release")))
     with pytest.raises(RuntimeError, match="release"):
         permit.release()
+
+
+def test_resource_permit_retries_release_after_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service()
+    permit = FencedResourceLeasePermit(
+        service,
+        _active_lease(service),
+        authorization_digest="auth",
+        renewal_interval=None,
+    )
+    release_lease = service.release_lease
+    attempts = 0
+
+    def transient_release(lease_id: str, fence_token: FenceToken):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient release failure")
+        return release_lease(lease_id, fence_token)
+
+    monkeypatch.setattr(service, "release_lease", transient_release)
+
+    with pytest.raises(RuntimeError, match="transient release failure"):
+        permit.release()
+    assert permit.lease.state is LeaseState.ACTIVE
+
+    permit.release()
+    permit.release()
+
+    assert attempts == 2
+    assert permit.lease.state is LeaseState.RECONCILED
 
 
 def test_resource_permit_surfaces_stored_renewal_failure_after_release() -> None:
