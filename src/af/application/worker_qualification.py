@@ -8,6 +8,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from itertools import islice
 
 from af.application.worker_generation import WorkerRuntimeOptimization
 from af.framework.errors import InvalidProviderConfiguration
@@ -265,7 +266,7 @@ class WorkerOptimizationSelector:
         if not isinstance(priorities, WorkerOptimizationPriorities):
             raise TypeError("worker optimization priorities are invalid")
         try:
-            available = tuple(candidates)
+            available = tuple(islice(iter(candidates), _MAX_CANDIDATES + 1))
         except TypeError as error:
             raise TypeError("worker optimization candidates are invalid") from error
         if not 1 <= len(available) <= _MAX_CANDIDATES:

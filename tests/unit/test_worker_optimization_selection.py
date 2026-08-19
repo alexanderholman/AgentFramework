@@ -103,6 +103,26 @@ def test_selector_applies_explicit_operator_priorities(
     assert len(selection.selection_digest) == 64
 
 
+def test_selector_stops_reading_after_bounded_candidate_limit() -> None:
+    consumed = 0
+
+    def oversized_candidates():  # type: ignore[no-untyped-def]
+        nonlocal consumed
+        candidate = _candidates()[0]
+        for _ in range(1_000):
+            consumed += 1
+            yield candidate
+
+    with pytest.raises(InvalidProviderConfiguration, match="bounded non-empty"):
+        WorkerOptimizationSelector().select(
+            oversized_candidates(),
+            priorities=WorkerOptimizationPriorities(performance=34, safety=33, cost=33),
+            now=NOW,
+        )
+
+    assert consumed == 257
+
+
 def test_selector_is_order_independent_and_breaks_equal_score_ties_safety_first() -> None:
     performance = WorkerOptimizationCandidate(
         _qualification("4", 4),
