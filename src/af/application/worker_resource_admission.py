@@ -108,7 +108,7 @@ class FencedResourceLeasePermit:
                 renewal_failure = self._failure
                 lease = self._lease
             persisted = self._service.get_lease(lease.id)
-            if persisted.state is LeaseState.RECONCILED:
+            if persisted.state in {LeaseState.RELEASED, LeaseState.RECONCILED}:
                 lease = persisted
                 with self._lock:
                     self._lease = lease

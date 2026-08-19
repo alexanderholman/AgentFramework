@@ -443,6 +443,42 @@ def test_fenced_resource_permit_accepts_externally_reconciled_cleanup() -> None:
     assert permit.lease.state is LeaseState.RECONCILED
 
 
+def test_fenced_resource_permit_resumes_from_uncertain_persisted_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-uncertain-release",
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    release_lease = service.release_lease
+    attempts = 0
+
+    def committed_release_then_fail(lease_id: str, fence_token: FenceToken):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        release_lease(lease_id, fence_token)
+        raise RuntimeError("uncertain release result")
+
+    monkeypatch.setattr(service, "release_lease", committed_release_then_fail)
+    with pytest.raises(RuntimeError, match="uncertain release result"):
+        permit.release()
+    assert service.get_lease(permit.lease.id).state is LeaseState.RELEASED
+
+    permit.release()
+
+    assert attempts == 1
+    assert permit.lease.state is LeaseState.RECONCILED
+
+
 def test_fenced_resource_permit_records_renewal_failure_after_concurrent_stop() -> None:
     class DormantThread:
         def start(self) -> None:
