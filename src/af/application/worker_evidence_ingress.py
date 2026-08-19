@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from fractions import Fraction
+from itertools import islice
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
@@ -273,7 +274,7 @@ class WorkerOptimizationMeasurementIngress:
             )
 
         try:
-            available = tuple(measurements)
+            available = tuple(islice(iter(measurements), _MAX_MEASUREMENTS + 1))
         except TypeError as error:
             raise TypeError("worker optimization measurements are invalid") from error
         if not 1 <= len(available) <= _MAX_MEASUREMENTS:

@@ -848,13 +848,18 @@ class WorkerKernel:
         heartbeat_stop = Event()
         heartbeat_thread: Thread | None = None
         if self._telemetry is not None:
-            heartbeat_thread = Thread(
-                target=self._run_heartbeat,
-                args=(heartbeat_stop,),
-                name="af-queue-heartbeat",
-                daemon=True,
-            )
-            heartbeat_thread.start()
+            try:
+                candidate = Thread(
+                    target=self._run_heartbeat,
+                    args=(heartbeat_stop,),
+                    name="af-queue-heartbeat",
+                    daemon=True,
+                )
+                candidate.start()
+            except Exception:
+                pass
+            else:
+                heartbeat_thread = candidate
         try:
             while True:
                 if stop_event is not None and stop_event.is_set():

@@ -139,6 +139,26 @@ def test_ingress_denies_before_measurement_iteration_or_authentication() -> None
     assert denied.value.reason is PlatformReason.AUTHORIZATION_DENIED
 
 
+def test_ingress_stops_reading_after_bounded_measurement_limit() -> None:
+    consumed = 0
+
+    def oversized_measurements():  # type: ignore[no-untyped-def]
+        nonlocal consumed
+        for _ in range(1_000):
+            consumed += 1
+            yield _measurement()
+
+    with pytest.raises(InvalidProviderConfiguration, match="bounded non-empty"):
+        _service([]).authenticate_and_normalize(
+            oversized_measurements(),
+            context=_context(),
+            driver_name="database",
+            environment_digest="e" * 64,
+        )
+
+    assert consumed == 257
+
+
 def test_ingress_authenticates_and_derives_indices_from_exact_raw_units() -> None:
     requests: list[tuple[str, str, str | None]] = []
     service = _service(requests)

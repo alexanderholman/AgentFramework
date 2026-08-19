@@ -1022,6 +1022,37 @@ def test_worker_heartbeat_publisher_failure_cannot_stop_polling() -> None:
     assert failures == []
 
 
+def test_worker_heartbeat_thread_start_failure_cannot_stop_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingThread:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread capacity exhausted")
+
+    monkeypatch.setattr(worker_module, "Thread", FailingThread)
+    driver = _make_driver()
+    driver.dispatch(_job("job-heartbeat-start-failure"))
+    stop = Event()
+    processed: list[str] = []
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((_RecordingTelemetrySink(),)),
+        clock=lambda: _NOW,
+    )
+
+    def handle(job: QueueJob) -> None:
+        processed.append(job.envelope.metadata.message_id)
+        stop.set()
+
+    kernel.run_loop(handle, poll_interval=timedelta(milliseconds=1), stop_event=stop)
+
+    assert processed == ["job-heartbeat-start-failure"]
+    assert driver.acked == ["job-heartbeat-start-failure"]
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
