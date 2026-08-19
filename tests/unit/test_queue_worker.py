@@ -1029,6 +1029,43 @@ def test_stalled_heartbeat_telemetry_cannot_block_polling_loop_teardown() -> Non
         release.set()
 
 
+def test_stalled_terminal_heartbeat_cannot_block_polling_loop_teardown() -> None:
+    terminal_entered = Event()
+    release = Event()
+
+    class TerminalStalledSink:
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            if (
+                signal.name == "queue.worker.heartbeat"
+                and signal.health_state is not None
+                and signal.health_state.liveness is LivenessState.STOPPED
+            ):
+                terminal_entered.set()
+                release.wait(timeout=1)
+
+    stop = Event()
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((TerminalStalledSink(),)),
+        clock=lambda: datetime.now(UTC),
+    )
+    polling = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": stop},
+    )
+    polling.start()
+    time.sleep(0.02)
+    stop.set()
+    assert terminal_entered.wait(timeout=1)
+    polling.join(timeout=0.2)
+    try:
+        assert not polling.is_alive()
+    finally:
+        release.set()
+
+
 def test_worker_heartbeat_remains_live_and_reports_saturation_during_long_job() -> None:
     class HeartbeatSink:
         def __init__(self) -> None:

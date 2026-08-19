@@ -107,6 +107,11 @@ class FencedResourceLeasePermit:
             with self._lock:
                 renewal_failure = self._failure
                 lease = self._lease
+            persisted = self._service.get_lease(lease.id)
+            if persisted.state is LeaseState.RECONCILED:
+                lease = persisted
+                with self._lock:
+                    self._lease = lease
             if lease.state is LeaseState.ACTIVE:
                 token = lease.fence_token
                 assert token is not None

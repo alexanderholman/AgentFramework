@@ -507,6 +507,7 @@ class WorkerKernel:
         self._heartbeat_users = 0
         self._heartbeat_stop: Event | None = None
         self._heartbeat_thread: Thread | None = None
+        self._heartbeat_publish_lock = RLock()
 
     @property
     def state(self) -> WorkerState:
@@ -1156,11 +1157,32 @@ class WorkerKernel:
             thread.join(timeout=min(1.0, self._heartbeat_interval.total_seconds()))
             if thread.is_alive():
                 return
+            completed: Event | None = None
             with self._condition:
                 if self._heartbeat_users != 0 or self._heartbeat_thread is not None:
                     return
-                with suppress(Exception):
+                completed = self._start_terminal_heartbeat()
+            completed.wait(timeout=min(1.0, self._heartbeat_interval.total_seconds()))
+
+    def _start_terminal_heartbeat(self) -> Event:
+        serialized = Event()
+        completed = Event()
+
+        def publish() -> None:
+            try:
+                with self._heartbeat_publish_lock, suppress(Exception):
+                    serialized.set()
                     self._emit_heartbeat(stopped=True)
+            finally:
+                completed.set()
+
+        Thread(
+            target=publish,
+            name="af-queue-terminal-heartbeat",
+            daemon=True,
+        ).start()
+        serialized.wait(timeout=min(1.0, self._heartbeat_interval.total_seconds()))
+        return completed
 
     def _emit_heartbeat(self, *, stopped: bool) -> None:
         observed_at = self._clock()
@@ -1182,29 +1204,32 @@ class WorkerKernel:
             else:
                 state = WorkerState.IDLE
                 readiness = ReadinessState.READY
-        self._publish_telemetry(
-            TelemetrySignal.health(
-                name="queue.worker.heartbeat",
-                observed_at=observed_at,
-                attributes={
-                    "active_jobs_bucket": (
-                        "zero" if active_jobs == 0 else "one" if active_jobs == 1 else "multiple"
-                    ),
-                    "saturation_bucket": _saturation_bucket(saturation),
-                    "state": state.value,
-                },
-                state=HealthState(
-                    liveness=(LivenessState.STOPPED if stopped else LivenessState.LIVE),
-                    readiness=readiness,
-                    degradation=DegradationState.HEALTHY,
-                    capability=CapabilityState.AVAILABLE,
-                    reason_code="worker_stopped" if stopped else "worker_alive",
-                    fresh_until=(
-                        observed_at if stopped else observed_at + (self._heartbeat_interval * 2)
-                    ),
+        signal = TelemetrySignal.health(
+            name="queue.worker.heartbeat",
+            observed_at=observed_at,
+            attributes={
+                "active_jobs_bucket": (
+                    "zero" if active_jobs == 0 else "one" if active_jobs == 1 else "multiple"
                 ),
-            )
+                "saturation_bucket": _saturation_bucket(saturation),
+                "state": state.value,
+            },
+            state=HealthState(
+                liveness=(LivenessState.STOPPED if stopped else LivenessState.LIVE),
+                readiness=readiness,
+                degradation=DegradationState.HEALTHY,
+                capability=CapabilityState.AVAILABLE,
+                reason_code="worker_stopped" if stopped else "worker_alive",
+                fresh_until=(
+                    observed_at if stopped else observed_at + (self._heartbeat_interval * 2)
+                ),
+            ),
         )
+        if stopped:
+            self._publish_telemetry(signal)
+        else:
+            with self._heartbeat_publish_lock:
+                self._publish_telemetry(signal)
 
     def _release_cancelled(
         self,

@@ -417,6 +417,32 @@ def test_fenced_resource_permit_renews_with_authorization_and_latest_fence() -> 
     assert final.fence_token.value == 5
 
 
+def test_fenced_resource_permit_accepts_externally_reconciled_cleanup() -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-external-reconcile",
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    active = permit.lease
+    assert active.fence_token is not None
+    expired = service.expire_lease(active.id, active.fence_token)
+    assert expired.fence_token is not None
+    reconciled = service.reconcile_lease(expired.id, expired.fence_token)
+
+    permit.release()
+
+    assert permit.lease == reconciled
+    assert permit.lease.state is LeaseState.RECONCILED
+
+
 def test_fenced_resource_permit_cannot_renew_at_heartbeat_expiry() -> None:
     repository = InMemoryLeaseRepository()
     clock = _Clock()
