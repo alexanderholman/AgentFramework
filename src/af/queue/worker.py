@@ -1140,8 +1140,11 @@ class WorkerKernel:
                 stop.set()
         if thread is not None:
             thread.join()
-            with suppress(Exception):
-                self._emit_heartbeat(stopped=True)
+            with self._condition:
+                if self._heartbeat_users != 0 or self._heartbeat_thread is not None:
+                    return
+                with suppress(Exception):
+                    self._emit_heartbeat(stopped=True)
 
     def _emit_heartbeat(self, *, stopped: bool) -> None:
         observed_at = self._clock()

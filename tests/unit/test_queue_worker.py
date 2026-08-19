@@ -900,6 +900,54 @@ def test_concurrent_polling_loops_share_one_heartbeat_lifecycle() -> None:
     assert len(stopped) == 1
 
 
+def test_retired_heartbeat_cannot_stop_a_reacquired_lifecycle() -> None:
+    sink = _RecordingTelemetrySink()
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(seconds=1),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+    retired_stop = Event()
+    retired_started = Event()
+    retired_release = Event()
+
+    def retired_heartbeat() -> None:
+        retired_started.set()
+        retired_release.wait(timeout=1)
+
+    retired_thread = Thread(target=retired_heartbeat)
+    retired_thread.start()
+    assert retired_started.wait(timeout=1)
+    with kernel._condition:
+        kernel._heartbeat_users = 1
+        kernel._heartbeat_stop = retired_stop
+        kernel._heartbeat_thread = retired_thread
+
+    releaser = Thread(target=kernel._release_heartbeat)
+    releaser.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        with kernel._condition:
+            if kernel._heartbeat_users == 0 and kernel._heartbeat_thread is None:
+                break
+        time.sleep(0.001)
+    else:
+        pytest.fail("retired heartbeat did not begin teardown")
+
+    kernel._acquire_heartbeat()
+    retired_release.set()
+    releaser.join(timeout=1)
+    assert not releaser.is_alive()
+    assert not any(
+        signal.health_state is not None and signal.health_state.liveness is LivenessState.STOPPED
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat"
+    )
+
+    kernel._release_heartbeat()
+
+
 def test_worker_heartbeat_remains_live_and_reports_saturation_during_long_job() -> None:
     class HeartbeatSink:
         def __init__(self) -> None:

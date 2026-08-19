@@ -443,7 +443,12 @@ class ResourceLeaseService:
         return lease
 
     def _validate_quantity(self, budget: ResourceBudget, quantity: float) -> None:
-        if not isfinite(quantity) or quantity < 0 or quantity > budget.max_quantity:
+        if (
+            not isfinite(budget.max_quantity)
+            or not isfinite(quantity)
+            or quantity < 0
+            or quantity > budget.max_quantity
+        ):
             raise LeaseBudgetExceeded(
                 lease_id="pending",
                 requested=quantity,

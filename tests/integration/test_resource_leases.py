@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -125,6 +125,26 @@ class TestResourceLeaseServiceCreate:
                 lease_id=str(uuid.uuid4()),
                 budget=budget,
                 quantity=quantity,
+                scope=scope,
+                authorized_by="test-pipeline",
+                authorization_digest="abc123",
+            )
+
+    @pytest.mark.parametrize("maximum", [float("nan"), float("inf"), float("-inf")])
+    def test_create_lease_non_finite_budget_maximum_raises(
+        self,
+        application: AFApplication,
+        budget: ResourceBudget,
+        scope: dict[str, str],
+        maximum: float,
+    ) -> None:
+        invalid_budget = replace(budget, max_quantity=maximum)
+
+        with pytest.raises(LeaseBudgetExceeded):
+            application.leases.create_lease(
+                lease_id=str(uuid.uuid4()),
+                budget=invalid_budget,
+                quantity=1.0,
                 scope=scope,
                 authorized_by="test-pipeline",
                 authorization_digest="abc123",
