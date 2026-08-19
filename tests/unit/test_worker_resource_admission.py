@@ -443,6 +443,43 @@ def test_fenced_resource_permit_accepts_externally_reconciled_cleanup() -> None:
     assert permit.lease.state is LeaseState.RECONCILED
 
 
+def test_fenced_resource_permit_records_renewal_failure_after_concurrent_stop() -> None:
+    class DormantThread:
+        def start(self) -> None:
+            return
+
+        def join(self) -> None:
+            return
+
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    failure = LeaseFenceTokenStale("worker-lease-renewal-stop-race", 3, 2)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-renewal-stop-race",
+        renewal_interval=timedelta(milliseconds=1),
+        thread_factory=lambda **_: DormantThread(),
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+
+    def fail_after_stop(*_: object, **__: object) -> None:
+        permit._stop.set()
+        raise failure
+
+    service.renew_lease = fail_after_stop  # type: ignore[method-assign]
+    permit._renew_loop()
+
+    with pytest.raises(LeaseFenceTokenStale) as raised:
+        permit.release()
+    assert raised.value is failure
+
+
 def test_fenced_resource_permit_cannot_renew_at_heartbeat_expiry() -> None:
     repository = InMemoryLeaseRepository()
     clock = _Clock()

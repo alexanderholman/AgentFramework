@@ -147,11 +147,11 @@ class FencedResourceLeasePermit:
     def _renew_loop(self) -> None:
         assert self._renewal_interval is not None
         while not self._stop.wait(self._renewal_interval.total_seconds()):
+            if self._stop.is_set():
+                return
             try:
                 self.renew()
             except BaseException as error:
-                if self._stop.is_set():
-                    return
                 with self._lock:
                     self._failure = error
                 return

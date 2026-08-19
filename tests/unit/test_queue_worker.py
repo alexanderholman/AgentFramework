@@ -1066,6 +1066,52 @@ def test_stalled_terminal_heartbeat_cannot_block_polling_loop_teardown() -> None
         release.set()
 
 
+def test_stopped_blocked_heartbeat_producer_cannot_publish_live() -> None:
+    sink = _RecordingTelemetrySink()
+    kernel = WorkerKernel(
+        _make_driver(),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+    stop = Event()
+    stop.set()
+
+    kernel._run_heartbeat(stop)
+
+    assert not any(signal.name == "queue.worker.heartbeat" for signal in sink.signals)
+
+
+def test_terminal_heartbeat_thread_start_failure_is_fail_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RetiredThread:
+        def join(self, timeout: float | None = None) -> None:
+            return
+
+        def is_alive(self) -> bool:
+            return False
+
+    class FailingThread:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread capacity exhausted")
+
+    kernel = WorkerKernel(
+        _make_driver(),
+        telemetry=TelemetryPublisher((_RecordingTelemetrySink(),)),
+        clock=lambda: _NOW,
+    )
+    with kernel._condition:
+        kernel._heartbeat_users = 1
+        kernel._heartbeat_stop = Event()
+        kernel._heartbeat_thread = RetiredThread()  # type: ignore[assignment]
+    monkeypatch.setattr(worker_module, "Thread", FailingThread)
+
+    kernel._release_heartbeat()
+
+
 def test_worker_heartbeat_remains_live_and_reports_saturation_during_long_job() -> None:
     class HeartbeatSink:
         def __init__(self) -> None:

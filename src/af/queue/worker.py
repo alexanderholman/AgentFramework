@@ -1109,10 +1109,14 @@ class WorkerKernel:
             return
 
     def _run_heartbeat(self, stop: Event) -> None:
-        with suppress(Exception):
+        with self._heartbeat_publish_lock, suppress(Exception):
+            if stop.is_set():
+                return
             self._emit_heartbeat(stopped=False)
         while not stop.wait(timeout=self._heartbeat_interval.total_seconds()):
-            with suppress(Exception):
+            with self._heartbeat_publish_lock, suppress(Exception):
+                if stop.is_set():
+                    return
                 self._emit_heartbeat(stopped=False)
 
     def _acquire_heartbeat(self) -> None:
@@ -1176,11 +1180,16 @@ class WorkerKernel:
             finally:
                 completed.set()
 
-        Thread(
-            target=publish,
-            name="af-queue-terminal-heartbeat",
-            daemon=True,
-        ).start()
+        try:
+            Thread(
+                target=publish,
+                name="af-queue-terminal-heartbeat",
+                daemon=True,
+            ).start()
+        except Exception:
+            serialized.set()
+            completed.set()
+            return completed
         serialized.wait(timeout=min(1.0, self._heartbeat_interval.total_seconds()))
         return completed
 
