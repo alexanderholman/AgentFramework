@@ -134,23 +134,25 @@ class ProgramJobHandler:
             raise ValueError("program job payload is invalid")
         argv = payload.get("argv")
         cwd = payload.get("working_directory")
-        timeout = payload.get("timeout_seconds")
-        max_output = payload.get("max_output_bytes")
+        timeout_value = payload.get("timeout_seconds")
+        max_output_value = payload.get("max_output_bytes")
         if (
             not isinstance(argv, list)
             or any(type(value) is not str for value in argv)
             or type(cwd) is not str
-            or type(timeout) not in {int, float}
-            or type(max_output) is not int
+            or type(timeout_value) not in {int, float}
+            or type(max_output_value) is not int
             or set(payload) != _PROGRAM_PAYLOAD_FIELDS
         ):
             raise ValueError("program job payload is invalid")
+        timeout_seconds = float(timeout_value)
+        max_output_bytes = max_output_value
         request = ProgramRequest(
             argv=tuple(argv),
             working_directory=Path(cwd),
             budget=ProgramBudget(
-                timeout=timedelta(seconds=timeout),
-                max_output_bytes=max_output,
+                timeout=timedelta(seconds=timeout_seconds),
+                max_output_bytes=max_output_bytes,
             ),
         )
         self._events.append(job_id, JobState.RUNNING, stage="program.execute")
