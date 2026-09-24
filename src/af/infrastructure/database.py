@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Boolean, DateTime, String, Text, create_engine
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -49,6 +49,18 @@ class TraceRow(Base):
     status: Mapped[str] = mapped_column(String(32))
     events_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class JobEventRow(Base):
+    __tablename__ = "af_job_events"
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    progress: Mapped[float | None] = mapped_column(nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class Database:
