@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, timedelta
 
 from sqlalchemy import select
 
-from af.application.program_jobs import ProgramJobResult
+from af.framework.jobs import ProgramJobResult
 from af.framework.programs import ProgramResult, ProgramState
 from af.infrastructure.database import Database, ProgramJobResultRow
 
@@ -43,8 +43,6 @@ class SqlAlchemyProgramJobResultRepository:
                 if row.finished_at.tzinfo is None
                 else row.finished_at
             )
-            from datetime import timedelta
-
             return ProgramJobResult(
                 job_id=row.job_id,
                 result=ProgramResult(
