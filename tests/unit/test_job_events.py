@@ -34,13 +34,29 @@ def test_persisted_job_events_are_ordered_and_reconnectable(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("sequence", "limit"),
+    [(-1, 100), (0, 0), (0, 1_001)],
+)
+def test_event_replay_rejects_invalid_window(tmp_path, sequence: int, limit: int) -> None:
+    database = Database(f"sqlite:///{tmp_path / 'invalid-window.sqlite3'}")
+    repository = SqlAlchemyJobEventRepository(database)
+
+    with pytest.raises(ValueError):
+        repository.list_after(str(uuid4()), sequence=sequence, limit=limit)
+
+    database.close()
+
+
+@pytest.mark.parametrize(
     "values",
     [
         {"job_id": "bad"},
         {"sequence": 0},
+        {"state": "running"},
         {"progress": 1.1},
         {"stage": "not a stage"},
         {"created_at": datetime.now()},
+        {"detail": "bad\x00detail"},
     ],
 )
 def test_job_event_rejects_invalid_contract(values: dict[str, object]) -> None:
