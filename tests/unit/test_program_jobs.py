@@ -142,7 +142,6 @@ def test_timed_out_program_job_reports_budget_exhausted(tmp_path: Path) -> None:
     database.close()
 
 
-
 def test_program_job_rejects_environment_overrides(tmp_path: Path) -> None:
     database, events, results = _dependencies(tmp_path)
     service = ProgramJobService(RecordingQueue(), events, results)
