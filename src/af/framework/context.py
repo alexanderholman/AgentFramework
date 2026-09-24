@@ -136,7 +136,7 @@ class CancellationToken:
         loop = asyncio.get_running_loop()
         waiter = loop.create_future()
         with self._lock:
-            if self._cancelled:
+            if self._cancelled or self._completed:
                 return
             self._waiters.add(waiter)
         try:
