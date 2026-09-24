@@ -30,7 +30,8 @@ def test_replay_ledger_persists_consumed_measurements_across_instances(
     second = SqlAlchemyWorkerMeasurementReplayLedger(second_db)
     try:
         assert not second.consume_batch(
-            ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW
+            ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),),
+            now=_NOW,
         )
     finally:
         second_db.close()
