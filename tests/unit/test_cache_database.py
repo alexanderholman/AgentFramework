@@ -248,6 +248,33 @@ def test_database_lock_is_owner_fenced_across_driver_instances(tmp_path: Path) -
     second.close()
 
 
+def test_database_lock_release_preserves_monotonic_fencing_tokens(tmp_path: Path) -> None:
+    clock = Clock()
+    cache = DatabaseCacheDriver(url=_url(tmp_path / "cache.sqlite3"), clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:released")
+    first = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-a"),
+        ttl=timedelta(seconds=5),
+    )
+    assert first is not None
+    assert cache.release_lock(namespace, key, first)
+
+    second = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-b"),
+        ttl=timedelta(seconds=5),
+    )
+    assert second is not None
+    assert second.fencing_token > first.fencing_token
+    assert not cache.release_lock(namespace, key, first)
+    assert cache.release_lock(namespace, key, second)
+    cache.close()
+
+
 def test_database_cache_registration_routes_through_verified_manager(tmp_path: Path) -> None:
     clock = Clock()
     manager = CacheManager(
@@ -337,6 +364,8 @@ def test_database_cache_rejects_invalid_runtime_inputs_and_lock_validation(
 def test_database_cache_validates_url_and_fails_closed_after_shutdown(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         DatabaseCacheDriver(url="", clock=Clock())
+    with pytest.raises(ValueError, match="supports SQLite URLs only"):
+        DatabaseCacheDriver(url="mysql+pymysql://user:pass@localhost/af", clock=Clock())
 
     cache = DatabaseCacheDriver(url=_url(tmp_path / "cache.sqlite3"), clock=Clock())
     namespace = _namespace()
