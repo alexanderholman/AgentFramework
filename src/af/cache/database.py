@@ -74,14 +74,16 @@ class DatabaseCacheDriver:
         if type(url) is not str or not url:
             raise ValueError("database cache URL must be a non-empty string")
         parsed = make_url(url)
-        engine_options: dict[str, object] = {}
-        if parsed.get_backend_name() == "sqlite":
-            engine_options["connect_args"] = {"check_same_thread": False}
-            database_name = parsed.database
-            if database_name in (None, "", ":memory:"):
-                engine_options["poolclass"] = StaticPool
-            elif database_name is not None:
-                Path(database_name).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
+        if parsed.get_backend_name() != "sqlite":
+            raise ValueError("database cache supports SQLite URLs only")
+        engine_options: dict[str, object] = {
+            "connect_args": {"check_same_thread": False},
+        }
+        database_name = parsed.database
+        if database_name in (None, "", ":memory:"):
+            engine_options["poolclass"] = StaticPool
+        elif database_name is not None:
+            Path(database_name).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
         self._engine: Engine = create_engine(url, **engine_options)
         self._clock = clock if clock is not None else (lambda: datetime.now(UTC))
         if not callable(self._clock):
@@ -485,14 +487,15 @@ class DatabaseCacheDriver:
                 return False
             try:
                 with self._engine.begin() as connection:
-                    deleted = connection.execute(
+                    released = connection.execute(
                         text(
-                            "DELETE FROM af_cache_locks WHERE application_id = :application_id "
-                            "AND tenant_id = :tenant_id AND namespace = :namespace AND key = :key "
-                            "AND owner = :owner AND fencing_token = :fencing_token "
-                            "AND expires_at = :expires_at"
+                            "UPDATE af_cache_locks SET expires_at = :released_at "
+                            "WHERE application_id = :application_id AND tenant_id = :tenant_id "
+                            "AND namespace = :namespace AND key = :key AND owner = :owner "
+                            "AND fencing_token = :fencing_token AND expires_at = :expires_at"
                         ),
                         {
+                            "released_at": now.isoformat(),
                             "application_id": namespace.application_id,
                             "tenant_id": namespace.tenant_id,
                             "namespace": namespace.name,
@@ -502,7 +505,7 @@ class DatabaseCacheDriver:
                             "expires_at": lease.expires_at.isoformat(),
                         },
                     )
-                    return deleted.rowcount > 0
+                    return released.rowcount > 0
             except SQLAlchemyError as error:
                 raise _failure(error, stage="cache.database.lock.release") from None
 
