@@ -86,7 +86,7 @@ def test_representative_source_fixtures_enter_the_canonical_search_api(tmp_path:
     fixtures = (
         (
             ResourceKind.MARKDOWN,
-            "# Interface notes\\nEnergy interface fixture",
+            "# Interface notes\nEnergy interface fixture",
             {"format": "markdown", "heading": "interface-notes"},
         ),
         (
