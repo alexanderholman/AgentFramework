@@ -46,17 +46,18 @@ def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None
     queue = RecordingQueue()
     service = ProgramJobService(queue, events, results)
     request = ProgramRequest(
-        argv=(sys.executable, "-c", "print('job-output')"),
+        argv=(sys.executable, "-c", "from pathlib import Path; Path('job-runs.txt').open('a').write('x'); print('job-output')"),
         working_directory=tmp_path,
         budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
     )
 
     job_id = service.submit(request, correlation_id="phone-request-1")
     assert queue.jobs[0].envelope.metadata.correlation_id == "phone-request-1"
-    ProgramJobHandler(AsyncSubprocessExecutor(), events, results).invoke(
-        queue.jobs[0], cancellation=CancellationToken()
-    )
+    handler = ProgramJobHandler(AsyncSubprocessExecutor(), events, results)
+    handler.invoke(queue.jobs[0], cancellation=CancellationToken())
+    handler.invoke(queue.jobs[0], cancellation=CancellationToken())
 
+    assert (tmp_path / "job-runs.txt").read_text() == "x"
     saved = service.result(job_id)
     assert saved is not None
     assert saved.result.state is ProgramState.COMPLETED
@@ -98,6 +99,27 @@ def test_program_job_rejects_malformed_timeout_payload(tmp_path: Path) -> None:
         )
 
     assert [event.state for event in service.events_after(job_id)] == [JobState.QUEUED]
+    database.close()
+
+
+
+def test_timed_out_program_job_reports_budget_exhausted(tmp_path: Path) -> None:
+    database, events, results = _dependencies(tmp_path)
+    queue = RecordingQueue()
+    service = ProgramJobService(queue, events, results)
+    job_id = service.submit(
+        ProgramRequest(
+            argv=(sys.executable, "-c", "import time; time.sleep(30)"),
+            working_directory=tmp_path,
+            budget=ProgramBudget(timeout=timedelta(milliseconds=50), max_output_bytes=256),
+        )
+    )
+
+    ProgramJobHandler(AsyncSubprocessExecutor(), events, results).invoke(
+        queue.jobs[0], cancellation=CancellationToken()
+    )
+
+    assert [event.state for event in service.events_after(job_id)][-1] is JobState.BUDGET_EXHAUSTED
     database.close()
 
 
