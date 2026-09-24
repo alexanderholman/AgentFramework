@@ -3283,3 +3283,62 @@ fully reconciled permit, while preserving renewal failures that are unrelated to
 - SPEC-042 (resource permit lifecycle at worker admission)
 - SPEC-068 (terminal resource-permit release boundary)
 - Issue #21
+
+## [SPEC-039] Lovelace Multi-Node AgentFramework v1 Runtime
+**Date**: 2026-09-24
+**Status**: Accepted — implementation pending
+**Priority**: MUST
+
+### Description
+Provide an installable Python AgentFramework runtime for a central Lovelace access point that
+is also a compute node, with authenticated agents on Alien and Bender and a later macOS node.
+The runtime executes requested work within configured budgets, routes through verified reuse
+and deterministic/programmatic capabilities before more expensive inference, and persists
+progress and results for long-running multi-agent jobs.
+
+### Requirements
+- MUST use one AF application kernel for all interfaces and agent-node operations.
+- MUST register typed capabilities with identity/version, schemas, modality/domain/intent,
+  effects/risk, locality, lifecycle, verifiers, provenance, measured resources, and invalidation.
+- MUST prefer eligible verified reuse and deterministic functions before specialist/model routes.
+- MUST choose the lowest-cost route that satisfies the request and configured budget, with cost
+  evidence including measured startup, inference, verification, locality, and energy/resource
+  use when available; unknown cost MUST remain unknown.
+- MUST support configured local llama.cpp/OpenAI-compatible adapters without implicit remote
+  fallback, and MUST keep model weights outside the Python distribution and source repository.
+- MUST permit agents to create and execute requested programs/templates, shell commands, local
+  file operations, and installed tools through the node host executor. The active budget is the
+  hard limit for requested work; do not add a per-command confirmation gate.
+- MUST support typed multi-step specialist workflows and provenance-bound returned artifacts.
+- MUST model long work as durable jobs with ordered status/progress events, cancellation,
+  reconnect-safe result retrieval, and deadlines of at least 600 seconds.
+- MUST expose notifications as projections of persisted AF job state; clients MUST NOT be the
+  authoritative source of progress or completion state.
+- MUST retain failed, partial, cancelled, and budget-exhausted work as truthful outcomes and
+  MUST NOT promote it as a verified reusable capability.
+- MUST support cache invalidation and reuse checks based on version, input, audience, provenance,
+  verification, expiry, and budget.
+- MUST qualify Linux nodes first and define cross-platform tests for the later macOS runtime.
+
+### Tests and Release Evidence
+- **TEST-039-1**: Deterministic and verified-cache routes execute with zero model calls.
+- **TEST-039-2**: A multi-candidate route selects the lowest-cost capable route under budget and
+  reports excessive cost, unknown cost, or no route without executing during feasibility checks.
+- **TEST-039-3**: Local llama.cpp adapter fake-conformance covers warm/cold readiness, malformed
+  responses, cancellation, timeout, and no remote fallback.
+- **TEST-039-4**: A durable task can exceed ten minutes, survive client reconnect, publish ordered
+  progress/terminal events, and produce the same terminal result through supported interfaces.
+- **TEST-039-5**: A typed multi-agent workflow verifies stage inputs/outputs and reports partial
+  completion without fabricating a final result.
+- **TEST-039-6**: Budget exhaustion stops further dispatch, records actual use, settles active
+  work according to the driver contract, and emits a stable reason code.
+- **TEST-039-7**: A self-improvement run stores program/template/test artifacts and promotes only
+  those whose declared verification evidence passes.
+- **TEST-039-8**: Linux install, supervised lifecycle, storage recovery, Tailscale node
+  authentication, and actual-host model-runtime qualification are tied to the release commit.
+
+### Related Specifications
+- SPEC-015 (Application Platform Lifecycle and Extension Contracts)
+- SPEC-038 (Shared Bounded Operations Dashboard Projection)
+- Capability Ladder and Acceptance Scopes
+- Issues #3, #4, #21, #38–#43, #47, #49, and #120

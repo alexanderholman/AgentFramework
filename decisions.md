@@ -4103,3 +4103,53 @@ measurements.
 - Updated: `src/af/queue/worker.py`
 - Updated: `tests/unit/test_queue_worker.py`
 - Related: SPEC-065 and issue #21
+
+## [DEC-054] Adopt the Lovelace Multi-Node AgentFramework v1 Runtime
+**Date**: 2026-09-24
+**Status**: Accepted
+**Decision Maker**: Alexander Holman
+
+### Context
+The v0.1 selector-only runtime does not satisfy the intended mobile-first agent product. The
+intended system has one Lovelace access point that is also a compute node, trusted compute
+nodes on Alien and Bender, and a later macOS node for Charlotte. Agents must perform requested
+work within configured budgets, prefer cached/deterministic/programmatic routes to more costly
+inference, and expose durable progress for work that can take ten minutes or longer.
+
+### Decision
+1. Use `docs/agentframework-v1.md` as the product and runtime acceptance contract for the
+   Lovelace multi-node deployment.
+2. Keep AgentFramework's Python application kernel authoritative across clients and nodes;
+   HTTP, mobile, web, CLI, and MCP are adapters over the shared application boundary.
+3. Permit agents to create and execute programs, templates, shell commands, and other requested
+   work through the node host executor, including local files and installed tools. Enforce the
+   active budget as the hard execution limit without adding per-command confirmation for
+   user-requested work.
+4. Route through eligible verified reuse and deterministic capabilities before specialist
+   agents or models, then minimize measured projected cost among capable model routes.
+5. Treat long-running work as durable jobs with ordered progress, reconnectable results, and
+   client notifications. Support deadlines of at least 600 seconds without keeping a mobile
+   request open for the duration.
+6. Keep model weights outside the AF package and source repository. Catalog aliases, artifact
+   identity, runtime configuration, lifecycle, and measured evidence on the host.
+7. Treat generated and agent-authored changes as unverified until their declared tests and
+   verification steps pass. Preserve exact artifacts and evidence for reuse and later audit.
+
+### Consequences
+**Positive:**
+- The AF implementation is aligned with the central Lovelace router, trusted compute nodes,
+  and the actual cost-conscious operating model.
+- The existing deterministic, typed, cost-aware contracts can be extended without duplicating
+  routing policy in the later mobile and server projects.
+- Long model loads and multi-agent tasks can complete without coupling job lifetime to a phone
+  connection.
+
+**Negative:**
+- The current v0.1 roadmap and production profile are not sufficient evidence for v1; their
+  selector-only and single-node exclusions need explicit reconciliation before release.
+- Node protocol, provider execution, durable progress, and budget accounting need implementation
+  and cross-host qualification before the Lovelace app server can depend on them.
+
+### Output References
+- Added: `docs/agentframework-v1.md`
+- Runtime implementation and release evidence: in progress
