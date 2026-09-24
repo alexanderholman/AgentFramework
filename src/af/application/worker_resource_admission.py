@@ -198,6 +198,8 @@ class FencedResourceLeasePermit:
             with self._release_condition:
                 self._release_in_progress = False
                 self._release_condition.notify_all()
+        if release_failure is renewal_failure:
+            release_failure = None
         if renewal_failure is not None and release_failure is not None:
             raise BaseExceptionGroup(
                 "worker resource renewal and release both failed",
