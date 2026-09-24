@@ -249,7 +249,7 @@
  
 +---
 +
-+## [SPEC-039] Fail-Closed Queue Worker Resource Admission Boundary
++## [SPEC-072] Fail-Closed Queue Worker Resource Admission Boundary
 +**Date**: 2026-08-17
 +**Status**: Implemented
 +**Priority**: MUST
@@ -295,7 +295,7 @@
  
 +---
 +
-+## [DEC-054] Separate Host Resource Admission from Queue Reservation
++## [DEC-055] Separate Host Resource Admission from Queue Reservation
 +**Date**: 2026-08-17
 +**Status**: Accepted
 +**Decision Maker**: Codex under direct operator instruction
@@ -374,7 +374,7 @@
 +  gates, and criterion-level closure review remain outside this bounded slice.
 +
 +### Related References
-+- SPEC-039
-+- DEC-054
++- SPEC-072
++- DEC-055
 +- Issues #21 and #46
 
