@@ -6,8 +6,7 @@ from threading import Barrier, Thread
 
 from sqlalchemy import func, select
 
-from af.infrastructure.database import Database
-from af.infrastructure.database import WorkerMeasurementReplayRow
+from af.infrastructure.database import Database, WorkerMeasurementReplayRow
 from af.infrastructure.worker_evidence_replay import (
     SqlAlchemyWorkerMeasurementReplayLedger,
 )
