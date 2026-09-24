@@ -503,26 +503,24 @@ class MemcachedCacheDriver:
             raise _failure(error, stage="cache.memcached.lock.release") from None
         if current != lease or current.expires_at <= now:
             return False
-        release_ttl = timedelta(minutes=1)
         release_marker = LockLease(
             owner=lease.owner,
             fencing_token=lease.fencing_token,
-            expires_at=now + release_ttl,
+            expires_at=now,
         )
         try:
+            # The CAS makes the lease immediately claimable. Keep a short-lived marker so a
+            # paused releaser never performs a delayed delete against a replacement owner.
             claimed = self._client.cas(
                 lock_key,
                 self._lease_bytes(release_marker),
                 cas_token,
-                expire=self._expire(release_ttl),
+                expire=self._expire(timedelta(minutes=1)),
                 noreply=False,
             )
-            if claimed is not True:
-                return False
-            self._client.delete(lock_key, noreply=False)
         except Exception as error:
             raise _failure(error, stage="cache.memcached.lock.release") from None
-        return True
+        return claimed is True
 
     def close(self) -> None:
         if self._closed:
