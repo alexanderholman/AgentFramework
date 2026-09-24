@@ -128,6 +128,78 @@ def test_timed_out_program_job_reports_budget_exhausted(tmp_path: Path) -> None:
     database.close()
 
 
+
+def test_program_job_rejects_environment_overrides(tmp_path: Path) -> None:
+    database, events, results = _dependencies(tmp_path)
+    service = ProgramJobService(RecordingQueue(), events, results)
+    request = ProgramRequest(
+        argv=(sys.executable, "-c", "pass"),
+        working_directory=tmp_path,
+        budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
+        environment={"TOKEN": "secret"},
+    )
+
+    with pytest.raises(ValueError, match="raw environment overrides"):
+        service.submit(request)
+
+    database.close()
+
+
+def test_program_job_records_dispatch_failure(tmp_path: Path) -> None:
+    database, events, results = _dependencies(tmp_path)
+    class FailingQueue:
+        job: QueueJob | None = None
+
+        def dispatch(self, job: QueueJob, *, name: str | None = None) -> QueueDispatchReceipt:
+            self.job = job
+            raise RuntimeError("queue unavailable")
+
+    queue = FailingQueue()
+    service = ProgramJobService(queue, events, results)
+    request = ProgramRequest(
+        argv=(sys.executable, "-c", "pass"),
+        working_directory=tmp_path,
+        budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        service.submit(request)
+
+    assert queue.job is not None
+    assert [event.state for event in service.events_after(queue.job.envelope.metadata.message_id)] == [
+        JobState.QUEUED,
+        JobState.FAILED,
+    ]
+    database.close()
+
+
+def test_program_job_records_executor_failure(tmp_path: Path) -> None:
+    database, events, results = _dependencies(tmp_path)
+    queue = RecordingQueue()
+    service = ProgramJobService(queue, events, results)
+    job_id = service.submit(
+        ProgramRequest(
+            argv=(sys.executable, "-c", "pass"),
+            working_directory=tmp_path,
+            budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
+        )
+    )
+
+    class FailingExecutor:
+        async def execute(self, request: ProgramRequest) -> None:
+            raise RuntimeError("executor failed")
+
+    handler = ProgramJobHandler(FailingExecutor(), events, results)
+    with pytest.raises(RuntimeError, match="executor failed"):
+        handler.invoke(queue.jobs[0], cancellation=CancellationToken())
+
+    assert [event.state for event in service.events_after(job_id)] == [
+        JobState.QUEUED,
+        JobState.RUNNING,
+        JobState.FAILED,
+    ]
+    assert results.get(job_id) is None
+    database.close()
 def test_cancelling_program_job_stops_process_and_persists_state(tmp_path: Path) -> None:
     database, events, results = _dependencies(tmp_path)
     queue = RecordingQueue()
