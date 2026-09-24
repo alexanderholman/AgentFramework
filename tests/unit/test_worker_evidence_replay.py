@@ -4,7 +4,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier, Thread
 
+from sqlalchemy import func, select
+
 from af.infrastructure.database import Database
+from af.infrastructure.database import WorkerMeasurementReplayRow
 from af.infrastructure.worker_evidence_replay import (
     SqlAlchemyWorkerMeasurementReplayLedger,
 )
@@ -89,5 +92,22 @@ def test_replay_ledger_allows_only_one_concurrent_consumer() -> None:
             worker.join(timeout=2)
         assert all(not worker.is_alive() for worker in workers)
         assert sorted(outcomes) == [False, True]
+    finally:
+        database.close()
+
+
+def test_replay_ledger_prunes_expired_identities_for_unrelated_batches() -> None:
+    database = Database("sqlite://")
+    ledger = SqlAlchemyWorkerMeasurementReplayLedger(database)
+    old = (_ISSUER, _DIGEST, _NOW + timedelta(seconds=1))
+    new = (_ISSUER, "b" * 64, _NOW + timedelta(hours=1))
+    try:
+        assert ledger.consume_batch((old,), now=_NOW)
+        assert ledger.consume_batch((new,), now=_NOW + timedelta(seconds=2))
+        with database.sessions() as session:
+            count = session.scalar(
+                select(func.count()).select_from(WorkerMeasurementReplayRow)
+            )
+        assert count == 1
     finally:
         database.close()
