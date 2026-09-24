@@ -128,7 +128,7 @@ def test_bootstrap_exposes_generation_factory_only_with_exact_bound_profile(
         assert runtime.worker_count == 2
         assert runtime.max_concurrency == 3
         assert runtime.poll_interval == timedelta(milliseconds=25)
-        assert runtime.lane == "priority"
+        assert runtime.lane == "agent"
 
         async def run_worker() -> None:
             await runtime.start()
