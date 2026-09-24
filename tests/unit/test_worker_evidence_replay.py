@@ -67,13 +67,14 @@ def test_replay_ledger_allows_expired_evidence_to_be_consumed_again() -> None:
         database.close()
 
 
-def test_replay_ledger_allows_only_one_concurrent_consumer() -> None:
-    database = Database("sqlite://")
-    ledger = SqlAlchemyWorkerMeasurementReplayLedger(database)
+def test_replay_ledger_allows_only_one_concurrent_consumer(tmp_path: Path) -> None:
+    url = f"sqlite:///{tmp_path / 'concurrent-replays.sqlite3'}"
+    databases = (Database(url), Database(url))
+    ledgers = tuple(SqlAlchemyWorkerMeasurementReplayLedger(db) for db in databases)
     barrier = Barrier(3)
     outcomes: list[bool] = []
 
-    def consume() -> None:
+    def consume(ledger: SqlAlchemyWorkerMeasurementReplayLedger) -> None:
         barrier.wait()
         outcomes.append(
             ledger.consume_batch(
@@ -82,7 +83,7 @@ def test_replay_ledger_allows_only_one_concurrent_consumer() -> None:
             )
         )
 
-    workers = [Thread(target=consume) for _ in range(2)]
+    workers = [Thread(target=consume, args=(ledger,)) for ledger in ledgers]
     try:
         for worker in workers:
             worker.start()
@@ -92,7 +93,8 @@ def test_replay_ledger_allows_only_one_concurrent_consumer() -> None:
         assert all(not worker.is_alive() for worker in workers)
         assert sorted(outcomes) == [False, True]
     finally:
-        database.close()
+        for database in databases:
+            database.close()
 
 
 def test_replay_ledger_prunes_expired_identities_for_unrelated_batches() -> None:
