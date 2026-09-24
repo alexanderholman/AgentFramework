@@ -878,3 +878,39 @@ def test_fenced_resource_permit_does_not_release_lease_after_fence_moves() -> No
     persisted = service.get_lease(owned.id)
     assert persisted.state is LeaseState.ACTIVE
     assert persisted.fence_token == advanced.fence_token
+
+
+def test_fenced_resource_permit_relinquishes_uncertain_advanced_fence() -> None:
+    repository = InMemoryLeaseRepository()
+    service = ResourceLeaseService(repository, clock=lambda: _NOW)
+    gate = FencedResourceLeaseAdmissionGate(
+        service,
+        budget=_budget(),
+        quantity=1,
+        scope={"host": "host.local"},
+        authorized_by="worker-policy",
+        authorization_digest="authorization-v1",
+        lease_id_factory=lambda: "worker-lease-uncertain-advanced-fence",
+        renewal_interval=timedelta(minutes=1),
+        thread_factory=lambda **_: _DormantThread(),
+    )
+    permit = gate(lane="default", active_jobs=0, max_concurrency=2)
+    assert not isinstance(permit, bool)
+    owned = permit.lease
+    assert owned.fence_token is not None
+    advanced = service.renew_lease(
+        owned.id, owned.fence_token, authorization_digest="authorization-v1"
+    )
+    assert advanced.fence_token is not None
+    failure = RuntimeError("renewal committed but response was lost")
+    permit._failure = failure
+
+    with pytest.raises(RuntimeError, match="response was lost") as raised:
+        permit.release()
+
+    assert raised.value is failure
+    persisted = service.get_lease(owned.id)
+    assert persisted.state is LeaseState.ACTIVE
+    assert persisted.fence_token == advanced.fence_token
+    permit.release()
+    assert service.get_lease(owned.id) == persisted
