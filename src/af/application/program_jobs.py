@@ -75,11 +75,22 @@ class ProgramJobService:
         try:
             self._queues.dispatch(job)
         except Exception:
-            self._events.append(job_id, JobState.FAILED, stage="queue.dispatch", detail="dispatch_failed")
+            self._events.append(
+                job_id,
+                JobState.FAILED,
+                stage="queue.dispatch",
+                detail="dispatch_failed",
+            )
             raise
         return job_id
 
-    def events_after(self, job_id: str, *, sequence: int = 0, limit: int = 100) -> list[JobEvent]:
+    def events_after(
+        self,
+        job_id: str,
+        *,
+        sequence: int = 0,
+        limit: int = 100,
+    ) -> list[JobEvent]:
         return self._events.list_after(job_id, sequence=sequence, limit=limit)
 
     def result(self, job_id: str) -> ProgramJobResult | None:
@@ -105,7 +116,10 @@ class ProgramJobHandler:
         self.invoke(job, cancellation=CancellationToken())
 
     def invoke(self, job: QueueJob, /, *, cancellation: CancellationToken) -> None:
-        if not isinstance(job, QueueJob) or job.envelope.metadata.message_type != "af.program.execute":
+        if (
+            not isinstance(job, QueueJob)
+            or job.envelope.metadata.message_type != "af.program.execute"
+        ):
             raise ValueError("unsupported program job")
         asyncio.run(self._execute(job, cancellation))
 
@@ -124,7 +138,8 @@ class ProgramJobHandler:
             or type(cwd) is not str
             or type(timeout) not in {int, float}
             or type(max_output) is not int
-            or set(payload) != {"argv", "working_directory", "timeout_seconds", "max_output_bytes"}
+            or set(payload)
+            != {"argv", "working_directory", "timeout_seconds", "max_output_bytes"}
         ):
             raise ValueError("program job payload is invalid")
         request = ProgramRequest(
