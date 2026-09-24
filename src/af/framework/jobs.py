@@ -10,7 +10,13 @@ from typing import Protocol
 
 from af.framework.programs import ProgramResult
 
-__all__ = ("JobEvent", "JobEventRepository", "JobState", "ProgramJobResult", "ProgramJobResultRepository")
+__all__ = (
+    "JobEvent",
+    "JobEventRepository",
+    "JobState",
+    "ProgramJobResult",
+    "ProgramJobResultRepository",
+)
 
 _IDENTIFIER = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _STAGE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,62}[a-z0-9])?$")
