@@ -81,6 +81,13 @@ class WorkerMeasurementReplayRow(Base):
     consumed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ProgramJobExecutionRow(Base):
+    __tablename__ = "af_program_job_executions"
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ProgramJobResultRow(Base):
     __tablename__ = "af_program_job_results"
 
