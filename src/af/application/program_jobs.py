@@ -172,25 +172,27 @@ class ProgramJobHandler:
                 self._events.append(job_id, JobState.CANCELLED, stage="program.execute")
                 return
             result = run.result()
-            if cancellation.cancelled:
-                self._events.append(job_id, JobState.CANCELLED, stage="program.execute")
-                return
             if result.state is ProgramState.COMPLETED:
                 state = JobState.COMPLETED
             elif result.state in {ProgramState.TIMED_OUT, ProgramState.OUTPUT_LIMIT}:
                 state = JobState.BUDGET_EXHAUSTED
             else:
                 state = JobState.FAILED
-            self._results.save(
-                ProgramJobResult(job_id=job_id, result=result, finished_at=datetime.now(UTC))
-            )
-            self._events.append(
-                job_id,
-                state,
-                stage="program.execute",
-                progress=1.0,
-                detail=result.state.value,
-            )
+
+            def persist_terminal_result() -> None:
+                self._results.save(
+                    ProgramJobResult(job_id=job_id, result=result, finished_at=datetime.now(UTC))
+                )
+                self._events.append(
+                    job_id,
+                    state,
+                    stage="program.execute",
+                    progress=1.0,
+                    detail=result.state.value,
+                )
+
+            if not cancellation.commit_completion(persist_terminal_result):
+                self._events.append(job_id, JobState.CANCELLED, stage="program.execute")
         except Exception:
             self._events.append(
                 job_id, JobState.FAILED, stage="program.execute", detail="execution_failed"
