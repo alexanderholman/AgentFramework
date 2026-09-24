@@ -140,8 +140,10 @@ class ProgramJobHandler:
             not isinstance(argv, list)
             or any(type(value) is not str for value in argv)
             or type(cwd) is not str
-            or type(timeout_value) not in {int, float}
-            or type(max_output_value) is not int
+            or not isinstance(timeout_value, (int, float))
+            or isinstance(timeout_value, bool)
+            or not isinstance(max_output_value, int)
+            or isinstance(max_output_value, bool)
             or set(payload) != _PROGRAM_PAYLOAD_FIELDS
         ):
             raise ValueError("program job payload is invalid")
