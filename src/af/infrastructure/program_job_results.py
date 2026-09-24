@@ -20,17 +20,17 @@ class SqlAlchemyProgramJobResultRepository:
 
     def claim(self, job_id: str) -> bool:
         """Atomically claim a job so redelivery cannot launch it a second time."""
-        with self._database.sessions.begin() as session:
-            session.add(
-                ProgramJobExecutionRow(
-                    job_id=job_id,
-                    claimed_at=datetime.now(UTC),
+        try:
+            with self._database.sessions.begin() as session:
+                session.add(
+                    ProgramJobExecutionRow(
+                        job_id=job_id,
+                        claimed_at=datetime.now(UTC),
+                    )
                 )
-            )
-            try:
                 session.flush()
-            except IntegrityError:
-                return False
+        except IntegrityError:
+            return False
         return True
 
     def save(self, value: ProgramJobResult) -> None:
