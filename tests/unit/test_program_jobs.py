@@ -41,7 +41,7 @@ def _dependencies(tmp_path: Path):
 def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None:
     database, events, results = _dependencies(tmp_path)
     queue = RecordingQueue()
-    service = ProgramJobService(queue, events)
+    service = ProgramJobService(queue, events, results)
     request = ProgramRequest(
         argv=(sys.executable, "-c", "print('job-output')"),
         working_directory=tmp_path,
@@ -54,7 +54,7 @@ def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None
         queue.jobs[0], cancellation=CancellationToken()
     )
 
-    saved = results.get(job_id)
+    saved = service.result(job_id)
     assert saved is not None
     assert saved.result.state is ProgramState.COMPLETED
     assert saved.result.stdout == b"job-output\n"
