@@ -3345,3 +3345,43 @@ fully reconciled permit, while preserving renewal failures that are unrelated to
 - SPEC-075 (resource permit lifecycle at worker admission)
 - SPEC-101 (terminal resource-permit release boundary)
 - Issue #21
+
+---
+
+## [SPEC-105] Cache Driver Scope and Fencing Clarifications
+**Date**: 2026-09-24
+**Status**: Active
+**Priority**: MUST
+
+### Description
+Clarify the relationship between the original cache-only slices and the separately specified
+database/Memcached lock capabilities, and constrain the database driver's supported SQL dialect.
+
+### Requirements
+- SPEC-029's cache-only statement that the database slice does not advertise locks is superseded by
+  SPEC-030 for the merged database driver. SPEC-029 continues to describe cache value, TTL,
+  namespace, and flush behavior.
+- SPEC-031's cache-only statement that the Memcached slice excludes locks is superseded by
+  SPEC-032 for the merged Memcached driver. SPEC-031 continues to describe cache value, TTL, and
+  namespace behavior.
+- DatabaseCacheDriver MUST reject non-SQLite URLs before creating an engine until a dialect-specific
+  schema and conformance profile exists.
+- Database lock release MUST retain the fencing-token row and make only the matching lease expired;
+  a subsequent acquisition MUST advance the token.
+- Memcached lock release MUST make the matching lease immediately claimable with one compare-and-set
+  transition and MUST perform no later delete that could remove a replacement owner's lease.
+- Memcached cache entries and lock state remain subject to eviction and restart loss; fencing
+  monotonicity is bounded by the retained token item and is not a durability guarantee.
+
+### Tests
+- **TEST-105-1**: A non-SQLite database URL is rejected before driver construction.
+- **TEST-105-2**: Database release/reacquire advances the fencing token and stale release is rejected.
+- **TEST-105-3**: A delayed Memcached release cannot delete a replacement lease.
+- **TEST-105-4**: Existing cache, lock, and capability conformance suites remain green.
+
+### Related Specs
+- SPEC-029 (Database Cache Driver Slice)
+- SPEC-030 (Database Lock Driver Slice)
+- SPEC-031 (Memcached Cache Driver Slice)
+- SPEC-032 (Memcached Lock Driver Slice)
+- Issue #19
