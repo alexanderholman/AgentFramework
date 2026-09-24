@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
 from datetime import timedelta
@@ -11,8 +12,8 @@ from af.application.worker_generation import WorkerGenerationFactory
 from af.bootstrap import create_application
 from af.config import Settings
 from af.framework.errors import ApplicationBootError, ServiceNotBound
-from af.framework.programs import ProgramBudget, ProgramRequest
 from af.framework.managers import CapabilityBinding
+from af.framework.programs import ProgramBudget, ProgramRequest
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.sqlite import SQLiteDriver
 from af.infrastructure.tracing import InMemoryTraceRepository
@@ -128,7 +129,21 @@ def test_bootstrap_exposes_generation_factory_only_with_exact_bound_profile(
         assert runtime.max_concurrency == 3
         assert runtime.poll_interval == timedelta(milliseconds=25)
         assert runtime.lane == "priority"
-        runtime.close()
+        async def run_worker() -> None:
+            await runtime.start()
+            try:
+                for _ in range(100):
+                    result = application.program_jobs.result(job_id)
+                    if result is not None:
+                        assert result.result.stdout == b"queued\\n"
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    pytest.fail("configured worker did not execute the program job")
+            finally:
+                await runtime.close()
+
+        asyncio.run(run_worker())
         assert queue_path.is_file()
     finally:
         application.shutdown()
