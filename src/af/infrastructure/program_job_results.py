@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from af.framework.jobs import ProgramJobResult
 from af.framework.programs import ProgramResult, ProgramState
-from af.infrastructure.database import Database, ProgramJobResultRow
+from af.infrastructure.database import Database, ProgramJobExecutionRow, ProgramJobResultRow
 
 __all__ = ("SqlAlchemyProgramJobResultRepository",)
 
@@ -16,6 +17,21 @@ __all__ = ("SqlAlchemyProgramJobResultRepository",)
 class SqlAlchemyProgramJobResultRepository:
     def __init__(self, database: Database) -> None:
         self._database = database
+
+    def claim(self, job_id: str) -> bool:
+        """Atomically claim a job so redelivery cannot launch it a second time."""
+        with self._database.sessions.begin() as session:
+            session.add(
+                ProgramJobExecutionRow(
+                    job_id=job_id,
+                    claimed_at=datetime.now(UTC),
+                )
+            )
+            try:
+                session.flush()
+            except IntegrityError:
+                return False
+        return True
 
     def save(self, value: ProgramJobResult) -> None:
         result = value.result
