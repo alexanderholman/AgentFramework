@@ -49,7 +49,8 @@ def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None
         argv=(
             sys.executable,
             "-c",
-            "from pathlib import Path; Path('job-runs.txt').open('a').write('x'); print('job-output')",
+            "from pathlib import Path; "
+            "Path('job-runs.txt').open('a').write('x'); print('job-output')",
         ),
         working_directory=tmp_path,
         budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
