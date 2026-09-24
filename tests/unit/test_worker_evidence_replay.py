@@ -105,9 +105,7 @@ def test_replay_ledger_prunes_expired_identities_for_unrelated_batches() -> None
         assert ledger.consume_batch((old,), now=_NOW)
         assert ledger.consume_batch((new,), now=_NOW + timedelta(seconds=2))
         with database.sessions() as session:
-            count = session.scalar(
-                select(func.count()).select_from(WorkerMeasurementReplayRow)
-            )
+            count = session.scalar(select(func.count()).select_from(WorkerMeasurementReplayRow))
         assert count == 1
     finally:
         database.close()
