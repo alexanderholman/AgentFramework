@@ -11,6 +11,7 @@ from af.framework.context import CancellationToken
 from af.framework.jobs import JobState
 from af.framework.programs import ProgramBudget, ProgramRequest, ProgramState
 from af.infrastructure.database import Database
+from af.messaging.envelopes import MessageEnvelope
 from af.infrastructure.job_events import SqlAlchemyJobEventRepository
 from af.infrastructure.program_job_results import SqlAlchemyProgramJobResultRepository
 from af.infrastructure.programs import AsyncSubprocessExecutor
@@ -63,6 +64,41 @@ def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None
         JobState.RUNNING,
         JobState.COMPLETED,
     ]
+    database.close()
+
+
+
+def test_program_job_rejects_malformed_timeout_payload(tmp_path: Path) -> None:
+    import pytest
+
+    database, events, results = _dependencies(tmp_path)
+    queue = RecordingQueue()
+    service = ProgramJobService(queue, events, results)
+    job_id = service.submit(
+        ProgramRequest(
+            argv=(sys.executable, "-c", "pass"),
+            working_directory=tmp_path,
+            budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
+        )
+    )
+    original_job = queue.jobs[0]
+    envelope = original_job.envelope
+    payload = envelope.payload_copy()
+    payload["timeout_seconds"] = "3"
+    malformed_envelope = MessageEnvelope.create(metadata=envelope.metadata, payload=payload)
+    malformed_job = QueueJob(
+        envelope=malformed_envelope,
+        lane=original_job.lane,
+        max_attempts=1,
+        timeout=original_job.timeout,
+    )
+
+    with pytest.raises(ValueError, match="payload is invalid"):
+        ProgramJobHandler(AsyncSubprocessExecutor(), events, results).invoke(
+            malformed_job, cancellation=CancellationToken()
+        )
+
+    assert [event.state for event in service.events_after(job_id)] == [JobState.QUEUED]
     database.close()
 
 
