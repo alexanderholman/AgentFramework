@@ -26,12 +26,12 @@ from af.application.database_setup import (
 )
 from af.application.dispatch import build_application_endpoints
 from af.application.ideons import IdeonController, IdeonService
-from af.application.program_jobs import ProgramJobHandler, ProgramJobService
 from af.application.operations import (
     OperationsController,
     OperationsService,
     RepositoryOperationsTaskReader,
 )
+from af.application.program_jobs import ProgramJobHandler, ProgramJobService
 from af.application.resource_leases import ResourceLeaseService
 from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
@@ -554,6 +554,7 @@ class _QueueWorkerProvider(ServiceProvider):
         profile_path = self._settings.worker_optimization_profile_path
         if queue_path is None or profile_path is None:
             raise InvalidProviderConfiguration("worker queue configuration is incomplete")
+
         def create_manager() -> QueueManager:
             return self._create_manager()
 
