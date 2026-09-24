@@ -23,6 +23,10 @@ from af.queue.contracts import QueueDispatchReceipt, QueueJob
 
 __all__ = ("ProgramJobHandler", "ProgramJobService")
 
+_PROGRAM_PAYLOAD_FIELDS = frozenset(
+    {"argv", "working_directory", "timeout_seconds", "max_output_bytes"}
+)
+
 
 class ProgramQueueDispatcher(Protocol):
     def dispatch(self, job: QueueJob, *, name: str | None = None) -> QueueDispatchReceipt: ...
@@ -138,8 +142,7 @@ class ProgramJobHandler:
             or type(cwd) is not str
             or type(timeout) not in {int, float}
             or type(max_output) is not int
-            or set(payload)
-            != {"argv", "working_directory", "timeout_seconds", "max_output_bytes"}
+            or set(payload) != _PROGRAM_PAYLOAD_FIELDS
         ):
             raise ValueError("program job payload is invalid")
         request = ProgramRequest(
