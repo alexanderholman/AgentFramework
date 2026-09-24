@@ -31,6 +31,7 @@ from af.application.operations import (
     OperationsService,
     RepositoryOperationsTaskReader,
 )
+from af.application.program_jobs import ProgramJobHandler, ProgramJobService
 from af.application.resource_leases import ResourceLeaseService
 from af.application.search import SearchController, SearchService
 from af.application.tasks import TaskController, TaskService
@@ -88,6 +89,9 @@ from af.infrastructure.db_setup import (
     MariaDBConnectionVerifier,
 )
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
+from af.infrastructure.job_events import SqlAlchemyJobEventRepository
+from af.infrastructure.program_job_results import SqlAlchemyProgramJobResultRepository
+from af.infrastructure.programs import AsyncSubprocessExecutor
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.resource_leases import InMemoryLeaseRepository
 from af.infrastructure.sqlite import SQLiteDriver
@@ -164,6 +168,7 @@ class _PersistenceProvider(ServiceProvider):
             self._task_repository is not None
             and self._trace_repository is not None
             and self._lease_repository is not None
+            and self._settings.worker_queue_sqlite_path is None
         ):
             return
 
@@ -472,6 +477,39 @@ class _QueueWorkerProvider(ServiceProvider):
         if self._settings.worker_queue_sqlite_path is None:
             return
         container.bind(
+            QueueManager,
+            lambda _: self._create_manager(),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            SqlAlchemyJobEventRepository,
+            lambda resolver: SqlAlchemyJobEventRepository(resolver.resolve(Database)),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            SqlAlchemyProgramJobResultRepository,
+            lambda resolver: SqlAlchemyProgramJobResultRepository(resolver.resolve(Database)),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            ProgramJobService,
+            lambda resolver: ProgramJobService(
+                resolver.resolve(QueueManager),
+                resolver.resolve(SqlAlchemyJobEventRepository),
+                resolver.resolve(SqlAlchemyProgramJobResultRepository),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            ProgramJobHandler,
+            lambda resolver: ProgramJobHandler(
+                AsyncSubprocessExecutor(),
+                resolver.resolve(SqlAlchemyJobEventRepository),
+                resolver.resolve(SqlAlchemyProgramJobResultRepository),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
             WorkerGenerationFactory,
             lambda _: self._create_factory(),
             scope=Scope.APPLICATION,
@@ -484,33 +522,41 @@ class _QueueWorkerProvider(ServiceProvider):
     ) -> None:
         del resources
         if self._settings.worker_queue_sqlite_path is not None:
+            container.resolve(ProgramJobService)
+            container.resolve(ProgramJobHandler)
             container.resolve(WorkerGenerationFactory)
 
-    def _create_factory(self) -> WorkerGenerationFactory:
+    def _create_manager(self) -> QueueManager:
         queue_path = self._settings.worker_queue_sqlite_path
-        profile_path = self._settings.worker_optimization_profile_path
-        if queue_path is None or profile_path is None:
+        if queue_path is None:
             raise InvalidProviderConfiguration("worker queue configuration is incomplete")
         storage_identity = worker_queue_storage_identity(queue_path)
         registration = database_queue_registration(
             database_factory=lambda: SQLiteDriver(Path(queue_path)),
             storage_identity=storage_identity,
         )
+        manager = QueueManager(
+            connections={
+                "primary": {
+                    "driver": "database",
+                    "storage_identity": storage_identity,
+                }
+            },
+            default="primary",
+            deployment_profile=self._profile,
+            policy_version="af-worker-v1",
+        )
+        manager.install(registration)
+        return manager
+
+    def _create_factory(self) -> WorkerGenerationFactory:
+        queue_path = self._settings.worker_queue_sqlite_path
+        profile_path = self._settings.worker_optimization_profile_path
+        if queue_path is None or profile_path is None:
+            raise InvalidProviderConfiguration("worker queue configuration is incomplete")
 
         def create_manager() -> QueueManager:
-            manager = QueueManager(
-                connections={
-                    "primary": {
-                        "driver": "database",
-                        "storage_identity": storage_identity,
-                    }
-                },
-                default="primary",
-                deployment_profile=self._profile,
-                policy_version="af-worker-v1",
-            )
-            manager.install(registration)
-            return manager
+            return self._create_manager()
 
         optimizer = load_worker_optimization_profile(profile_path)
         probe = create_manager()
@@ -545,6 +591,8 @@ class AFApplication:
     agent_routes: AgentRoutingController
     ideons: IdeonController
     operations: OperationsController
+    program_jobs: ProgramJobService | None
+    program_job_handler: ProgramJobHandler | None
     lifecycle: Application
 
     def shutdown(self) -> None:
@@ -745,6 +793,16 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         agent_routes=endpoints.agent_routes,
         ideons=endpoints.ideons,
         operations=cast(OperationsController, endpoints.operations),
+        program_jobs=(
+            container.resolve(ProgramJobService)
+            if build.settings.worker_queue_sqlite_path is not None
+            else None
+        ),
+        program_job_handler=(
+            container.resolve(ProgramJobHandler)
+            if build.settings.worker_queue_sqlite_path is not None
+            else None
+        ),
         lifecycle=build.lifecycle,
     )
 

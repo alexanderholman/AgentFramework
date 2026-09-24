@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
 from datetime import timedelta
@@ -12,6 +13,7 @@ from af.bootstrap import create_application
 from af.config import Settings
 from af.framework.errors import ApplicationBootError, ServiceNotBound
 from af.framework.managers import CapabilityBinding
+from af.framework.programs import ProgramBudget, ProgramRequest
 from af.infrastructure.repositories import InMemoryTaskRepository
 from af.infrastructure.sqlite import SQLiteDriver
 from af.infrastructure.tracing import InMemoryTraceRepository
@@ -109,13 +111,40 @@ def test_bootstrap_exposes_generation_factory_only_with_exact_bound_profile(
     )
 
     try:
+        assert application.program_jobs is not None
+        assert application.program_job_handler is not None
+        job_id = application.program_jobs.submit(
+            ProgramRequest(
+                argv=("python", "-c", "print('queued')"),
+                working_directory=tmp_path,
+                budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
+            )
+        )
+        assert [event.state.value for event in application.program_jobs.events_after(job_id)] == [
+            "queued"
+        ]
         factory = application.container.resolve(WorkerGenerationFactory)
-        runtime = factory.create(lambda job: None, lane="priority")
+        runtime = factory.create(application.program_job_handler, lane="agent")
         assert runtime.worker_count == 2
         assert runtime.max_concurrency == 3
         assert runtime.poll_interval == timedelta(milliseconds=25)
-        assert runtime.lane == "priority"
-        runtime.close()
+        assert runtime.lane == "agent"
+
+        runtime.start()
+
+        async def wait_for_result() -> None:
+            for _ in range(100):
+                result = application.program_jobs.result(job_id)
+                if result is not None:
+                    assert result.result.stdout == b"queued\n"
+                    return
+                await asyncio.sleep(0.01)
+            pytest.fail("configured worker did not execute the program job")
+
+        try:
+            asyncio.run(wait_for_result())
+        finally:
+            runtime.close()
         assert queue_path.is_file()
     finally:
         application.shutdown()

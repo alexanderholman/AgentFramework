@@ -93,6 +93,7 @@ class TraceContext:
 @dataclass(frozen=True, slots=True, repr=False)
 class CancellationToken:
     _cancelled: bool = field(default=False, init=False, compare=False)
+    _completed: bool = field(default=False, init=False, compare=False)
     _lock: Lock = field(default_factory=Lock, init=False, compare=False)
     _waiters: set[asyncio.Future[None]] = field(
         default_factory=set,
@@ -107,7 +108,7 @@ class CancellationToken:
 
     def cancel(self) -> None:
         with self._lock:
-            if self._cancelled:
+            if self._cancelled or self._completed:
                 return
             object.__setattr__(self, "_cancelled", True)
             waiters = tuple(self._waiters)
@@ -120,11 +121,22 @@ class CancellationToken:
                     self._waiters.discard(waiter)
                 continue
 
+    def commit_completion(self, action: Callable[[], None]) -> bool:
+        """Atomically commit a terminal action unless cancellation already won."""
+        if not callable(action):
+            raise TypeError("completion action must be callable")
+        with self._lock:
+            if self._cancelled:
+                return False
+            action()
+            object.__setattr__(self, "_completed", True)
+            return True
+
     async def wait(self) -> None:
         loop = asyncio.get_running_loop()
         waiter = loop.create_future()
         with self._lock:
-            if self._cancelled:
+            if self._cancelled or self._completed:
                 return
             self._waiters.add(waiter)
         try:

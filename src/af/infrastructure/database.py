@@ -5,7 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    create_engine,
+)
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -70,6 +79,25 @@ class WorkerMeasurementReplayRow(Base):
     evidence_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     consumed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ProgramJobExecutionRow(Base):
+    __tablename__ = "af_program_job_executions"
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ProgramJobResultRow(Base):
+    __tablename__ = "af_program_job_results"
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32))
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stdout: Mapped[bytes] = mapped_column(LargeBinary)
+    stderr: Mapped[bytes] = mapped_column(LargeBinary)
+    elapsed_seconds: Mapped[float] = mapped_column(Float)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Database:
