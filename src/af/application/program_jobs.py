@@ -74,7 +74,6 @@ class ProgramJobService:
             envelope=envelope,
             lane="agent",
             max_attempts=1,
-            timeout=request.budget.timeout,
         )
         try:
             self._queues.dispatch(job)
@@ -157,19 +156,31 @@ class ProgramJobHandler:
                 max_output_bytes=max_output_bytes,
             ),
         )
+        if not self._results.claim(job_id):
+            return
         self._events.append(job_id, JobState.RUNNING, stage="program.execute")
+        if cancellation.cancelled:
+            self._events.append(job_id, JobState.CANCELLED, stage="program.execute")
+            return
         run = asyncio.create_task(self._executor.execute(request))
         stop = asyncio.create_task(cancellation.wait())
         try:
             done, _ = await asyncio.wait({run, stop}, return_when=asyncio.FIRST_COMPLETED)
-            if run not in done:
+            if stop in done or cancellation.cancelled:
                 run.cancel()
                 await asyncio.gather(run, return_exceptions=True)
                 self._events.append(job_id, JobState.CANCELLED, stage="program.execute")
                 return
             result = run.result()
-            completed = result.state is ProgramState.COMPLETED
-            state = JobState.COMPLETED if completed else JobState.FAILED
+            if cancellation.cancelled:
+                self._events.append(job_id, JobState.CANCELLED, stage="program.execute")
+                return
+            if result.state is ProgramState.COMPLETED:
+                state = JobState.COMPLETED
+            elif result.state in {ProgramState.TIMED_OUT, ProgramState.OUTPUT_LIMIT}:
+                state = JobState.BUDGET_EXHAUSTED
+            else:
+                state = JobState.FAILED
             self._results.save(
                 ProgramJobResult(job_id=job_id, result=result, finished_at=datetime.now(UTC))
             )
