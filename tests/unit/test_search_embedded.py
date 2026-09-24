@@ -6,11 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 
-import pytest
-
 import af.search.embedded as embedded_module
+import pytest
 from af.framework.errors import PlatformReason
-from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
+from af.search.contracts import (
+    ResourceEnvelope,
+    ResourceKind,
+    SearchFilter,
+    SearchQuery,
+)
 from af.search.embedded import EmbeddedSearchDriver, SearchDriverIneligible
 
 
@@ -75,7 +79,6 @@ def test_embedded_search_indexes_every_canonical_source_and_persists(tmp_path: P
     assert all(hit.tenant_id == "tenant-a" for hit in hits)
     assert all(hit.acl_evidence == ("group:research",) for hit in hits)
     assert all(hit.provenance for hit in hits)
-
 
 
 def test_representative_source_fixtures_enter_the_canonical_search_api(tmp_path: Path) -> None:
