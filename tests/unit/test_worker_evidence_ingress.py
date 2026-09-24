@@ -313,6 +313,7 @@ def test_ingress_rejects_asynchronous_or_value_returning_authenticators(kind: st
         InvalidAuthenticator(),
         gate=_allowing_gate([]),
         clock=lambda: NOW,
+        replay_ledger=_ReplayLedger(),
     )
 
     with pytest.raises(TypeError, match="authenticator"):
