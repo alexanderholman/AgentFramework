@@ -130,21 +130,21 @@ def test_bootstrap_exposes_generation_factory_only_with_exact_bound_profile(
         assert runtime.poll_interval == timedelta(milliseconds=25)
         assert runtime.lane == "agent"
 
-        async def run_worker() -> None:
-            await runtime.start()
-            try:
-                for _ in range(100):
-                    result = application.program_jobs.result(job_id)
-                    if result is not None:
-                        assert result.result.stdout == b"queued\n"
-                        break
-                    await asyncio.sleep(0.01)
-                else:
-                    pytest.fail("configured worker did not execute the program job")
-            finally:
-                await runtime.close()
+        runtime.start()
 
-        asyncio.run(run_worker())
+        async def wait_for_result() -> None:
+            for _ in range(100):
+                result = application.program_jobs.result(job_id)
+                if result is not None:
+                    assert result.result.stdout == b"queued\n"
+                    return
+                await asyncio.sleep(0.01)
+            pytest.fail("configured worker did not execute the program job")
+
+        try:
+            asyncio.run(wait_for_result())
+        finally:
+            runtime.close()
         assert queue_path.is_file()
     finally:
         application.shutdown()
