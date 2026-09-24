@@ -188,3 +188,4 @@ jobs:
           steps.integration.outcome == 'failure' ||
           steps.canonical.outcome == 'failure'
         run: exit 1
+

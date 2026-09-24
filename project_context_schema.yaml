@@ -61,3 +61,4 @@ fields:
     required: false
     type: array
     item_type: string
+

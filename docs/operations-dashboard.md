@@ -40,3 +40,4 @@ bind this dashboard to an untrusted network or place sensitive fields into dashb
 The terminal view is intentionally a stable, headless-friendly first view. A stateful terminal
 refresh loop must wait for the TUI kernel's cancellation, restoration, focus, resize, and
 accessibility contracts; this slice does not claim those contracts are complete.
+

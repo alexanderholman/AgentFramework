@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
@@ -12,11 +13,16 @@ from af.framework.context import CancellationToken
 from af.framework.errors import PlatformReason
 from af.messaging import EnvelopeKind, MessageEnvelope, MessageMetadata
 from af.observability import (
+    CapabilityState,
+    DegradationState,
+    LivenessState,
+    ReadinessState,
     TelemetryContext,
     TelemetryKind,
     TelemetryPublisher,
     TelemetrySignal,
 )
+from af.queue import worker as worker_module
 from af.queue.contracts import (
     QueueDispatchDisposition,
     QueueDispatchReceipt,
@@ -28,6 +34,7 @@ from af.queue.contracts import (
 from af.queue.manager import QueueFeature
 from af.queue.worker import (
     InMemoryIdempotencyStore,
+    WorkerAdmissionPermit,
     WorkerKernel,
     WorkerState,
 )
@@ -42,6 +49,10 @@ def test_queue_public_api_exports_worker_reliability_boundaries() -> None:
         IdempotencyStore,
         InMemoryIdempotencyStore,
         JobScopeFactory,
+        OwnedManagerConnectionRecycler,
+        PurgeableConnectionManager,
+        WorkerAdmissionGate,
+        WorkerConnectionRecycler,
     )
 
     assert IdempotencyClaim is not None
@@ -49,6 +60,464 @@ def test_queue_public_api_exports_worker_reliability_boundaries() -> None:
     assert IdempotencyStore is not None
     assert InMemoryIdempotencyStore is not None
     assert JobScopeFactory is not None
+    assert OwnedManagerConnectionRecycler is not None
+    assert PurgeableConnectionManager is not None
+    assert WorkerAdmissionGate is not None
+    assert WorkerConnectionRecycler is not None
+
+
+def test_worker_kernel_resource_admission_denial_reserves_no_job() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-resource-denied"))
+    allowed = False
+    observations: list[tuple[str | None, int, int]] = []
+
+    def admission_gate(
+        *,
+        lane: str | None,
+        active_jobs: int,
+        max_concurrency: int,
+    ) -> bool:
+        observations.append((lane, active_jobs, max_concurrency))
+        return allowed
+
+    kernel = WorkerKernel(
+        driver,
+        max_concurrency=2,
+        admission_gate=admission_gate,
+        clock=lambda: _NOW,
+    )
+    processed: list[str] = []
+
+    assert (
+        kernel.run_once(
+            consumer=lambda job: processed.append(job.envelope.metadata.message_id),
+            lane="priority",
+        )
+        is None
+    )
+    assert observations == [("priority", 0, 2)]
+    assert processed == []
+    assert driver.queued_message_ids == ["job-resource-denied"]
+    assert driver._attempts == {}
+
+    allowed = True
+    assert (
+        kernel.run_once(consumer=lambda job: processed.append(job.envelope.metadata.message_id))
+        is not None
+    )
+    assert processed == ["job-resource-denied"]
+
+
+def test_worker_kernel_rejects_invalid_lane_before_resource_admission() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-invalid-admission-lane"))
+    admission_calls = 0
+
+    def admission_gate(**_: object) -> bool:
+        nonlocal admission_calls
+        admission_calls += 1
+        return True
+
+    kernel = WorkerKernel(driver, admission_gate=admission_gate, clock=lambda: _NOW)
+
+    with pytest.raises(ValueError, match="queue lane must be a canonical identifier"):
+        kernel.run_once(lambda _job: None, lane="INVALID")
+
+    assert admission_calls == 0
+    assert driver.queued_message_ids == ["job-invalid-admission-lane"]
+    assert driver._attempts == {}
+
+
+def test_worker_kernel_resource_admission_failure_is_fail_closed() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-resource-gate-failed"))
+
+    def admission_gate(**_: object) -> bool:
+        raise RuntimeError("resource admission unavailable")
+
+    kernel = WorkerKernel(driver, admission_gate=admission_gate, clock=lambda: _NOW)
+
+    with pytest.raises(RuntimeError, match="resource admission unavailable"):
+        kernel.run_once(consumer=lambda job: None)
+
+    assert driver.queued_message_ids == ["job-resource-gate-failed"]
+    assert driver._attempts == {}
+
+
+def test_worker_kernel_rechecks_drain_after_resource_admission() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-resource-drain-race"))
+    gate_entered = Event()
+    release_gate = Event()
+
+    def admission_gate(**_: object) -> bool:
+        gate_entered.set()
+        assert release_gate.wait(timeout=2)
+        return True
+
+    kernel = WorkerKernel(driver, admission_gate=admission_gate, clock=lambda: _NOW)
+    worker = Thread(target=kernel.run_once, args=(lambda job: None,))
+    worker.start()
+    assert gate_entered.wait(timeout=2)
+
+    kernel.start_draining()
+    release_gate.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert driver.queued_message_ids == ["job-resource-drain-race"]
+    assert driver._attempts == {}
+
+
+def test_worker_kernel_resource_admission_requires_boolean_decision() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-resource-invalid-decision"))
+    kernel = WorkerKernel(
+        driver,
+        admission_gate=lambda **_: 1,  # type: ignore[return-value]
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(TypeError, match="admission permit requires callable release"):
+        kernel.run_once(consumer=lambda job: None)
+
+    assert driver.queued_message_ids == ["job-resource-invalid-decision"]
+    assert driver._attempts == {}
+
+
+def test_worker_kernel_rejects_non_callable_resource_admission_gate() -> None:
+    with pytest.raises(TypeError, match="resource admission gate must be callable"):
+        WorkerKernel(
+            _make_driver(),
+            admission_gate=object(),  # type: ignore[arg-type]
+            clock=lambda: _NOW,
+        )
+
+
+class _AdmissionPermit:
+    def __init__(self, *, release_error: BaseException | None = None) -> None:
+        self.released = 0
+        self.release_error = release_error
+
+    def release(self) -> None:
+        self.released += 1
+        if self.release_error is not None:
+            raise self.release_error
+
+
+class _ConnectionRecycler:
+    def __init__(
+        self,
+        lifecycle: list[str],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        self.lifecycle = lifecycle
+        self.error = error
+
+    def recycle(self) -> None:
+        self.lifecycle.append("recycle")
+        if self.error is not None:
+            raise self.error
+
+
+def test_worker_kernel_holds_admission_permit_until_delivery_settles() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-resource-permit"))
+    permit = _AdmissionPermit()
+    observed: list[int] = []
+    kernel = WorkerKernel(driver, admission_gate=lambda **_: permit, clock=lambda: _NOW)
+
+    reservation = kernel.run_once(lambda _job: observed.append(permit.released))
+
+    assert reservation is not None
+    assert observed == [0]
+    assert permit.released == 1
+
+
+def test_worker_kernel_releases_admission_permit_when_queue_is_empty() -> None:
+    permit = _AdmissionPermit()
+    kernel = WorkerKernel(
+        _make_driver(),
+        admission_gate=lambda **_: permit,
+        clock=lambda: _NOW,
+    )
+
+    assert kernel.run_once(lambda _job: None) is None
+    assert permit.released == 1
+
+
+def test_worker_kernel_rejects_malformed_admission_permit_before_reservation() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-malformed-permit"))
+    kernel = WorkerKernel(
+        driver,
+        admission_gate=lambda **_: object(),  # type: ignore[return-value]
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(TypeError, match="admission permit requires callable release"):
+        kernel.run_once(lambda _job: None)
+
+    assert driver.queued_message_ids == ["job-malformed-permit"]
+
+
+def test_worker_kernel_rejects_async_admission_permit_before_reservation() -> None:
+    class AsyncPermit:
+        async def release(self) -> None:
+            return None
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-async-permit"))
+    kernel = WorkerKernel(
+        driver,
+        admission_gate=lambda **_: AsyncPermit(),
+        clock=lambda: _NOW,
+    )
+
+    with pytest.raises(TypeError, match="admission permit must be synchronous"):
+        kernel.run_once(lambda _job: None)
+
+    assert driver.queued_message_ids == ["job-async-permit"]
+    assert driver._attempts == {}
+
+
+@pytest.mark.parametrize("result_kind", ["coroutine", "awaitable", "value"])
+def test_worker_kernel_rejects_invalid_admission_permit_release_result(
+    result_kind: str,
+) -> None:
+    class AwaitableResult:
+        def __await__(self):  # type: ignore[no-untyped-def]
+            yield
+
+    async def asynchronous_result() -> None:
+        return None
+
+    class InvalidPermit:
+        def release(self) -> object:
+            if result_kind == "coroutine":
+                return asynchronous_result()
+            if result_kind == "awaitable":
+                return AwaitableResult()
+            return "unexpected"
+
+    driver = _make_driver()
+    driver.dispatch(_job(f"job-invalid-release-{result_kind}"))
+    kernel = WorkerKernel(
+        driver,
+        admission_gate=lambda **_: InvalidPermit(),  # type: ignore[return-value]
+        clock=lambda: _NOW,
+    )
+
+    expected = (
+        "admission permit returned an asynchronous result"
+        if result_kind != "value"
+        else "admission permit must return None"
+    )
+    with pytest.raises(TypeError, match=expected):
+        kernel.run_once(lambda _job: None)
+
+    assert driver.queued_message_ids == []
+
+
+def test_worker_kernel_preserves_handler_and_permit_release_failures() -> None:
+    driver = _make_driver()
+    driver.dispatch(_job("job-permit-release-failure"))
+    permit = _AdmissionPermit(release_error=RuntimeError("lease release failed"))
+    kernel = WorkerKernel(driver, admission_gate=lambda **_: permit, clock=lambda: _NOW)
+
+    def fail(_job: QueueJob) -> None:
+        raise ValueError("handler failed")
+
+    with pytest.raises(BaseExceptionGroup) as captured:
+        kernel.run_once(fail)
+
+    assert [str(error) for error in captured.value.exceptions] == [
+        "handler failed",
+        "lease release failed",
+    ]
+    assert permit.released == 1
+
+
+def test_worker_kernel_retries_retained_permit_cleanup_before_new_admission() -> None:
+    class TransientPermit(_AdmissionPermit):
+        def release(self) -> None:
+            self.released += 1
+            if self.released == 1:
+                raise RuntimeError("transient lease release failure")
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-retained-permit"))
+    permit = TransientPermit()
+    admission_count = 0
+
+    def admit(**_: object) -> WorkerAdmissionPermit | bool:
+        nonlocal admission_count
+        admission_count += 1
+        return permit if admission_count == 1 else False
+
+    kernel = WorkerKernel(driver, admission_gate=admit, clock=lambda: _NOW)
+
+    with pytest.raises(RuntimeError, match="transient lease release failure"):
+        kernel.run_once(lambda _job: None)
+
+    assert driver.acked == ["job-retained-permit"]
+    assert permit.released == 1
+    assert kernel.run_once(lambda _job: None) is None
+    assert permit.released == 2
+
+
+def test_worker_kernel_retries_retained_permit_cleanup_during_shutdown() -> None:
+    class TransientPermit(_AdmissionPermit):
+        def release(self) -> None:
+            self.released += 1
+            if self.released == 1:
+                raise RuntimeError("transient lease release failure")
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-shutdown-permit"))
+    permit = TransientPermit()
+    kernel = WorkerKernel(driver, admission_gate=lambda **_: permit, clock=lambda: _NOW)
+
+    with pytest.raises(RuntimeError, match="transient lease release failure"):
+        kernel.run_once(lambda _job: None)
+
+    kernel.close()
+    assert permit.released == 2
+    assert kernel.state is WorkerState.STOPPED
+
+
+def test_worker_kernel_recycles_connections_after_settlement_before_permit_release() -> None:
+    lifecycle: list[str] = []
+
+    class Driver(_TestQueueDriver):
+        def ack(self, reservation: QueueReservation, /) -> None:
+            lifecycle.append("ack")
+            super().ack(reservation)
+
+    class Permit(_AdmissionPermit):
+        def release(self) -> None:
+            lifecycle.append("permit-release")
+            super().release()
+
+    @contextmanager
+    def scope(_job: QueueJob):  # type: ignore[no-untyped-def]
+        lifecycle.append("scope-enter")
+        try:
+            yield
+        finally:
+            lifecycle.append("scope-exit")
+
+    driver = Driver()
+    driver.dispatch(_job("job-connection-recycle"))
+    kernel = WorkerKernel(
+        driver,
+        scope_factory=scope,
+        admission_gate=lambda **_: Permit(),
+        connection_recycler=_ConnectionRecycler(lifecycle),
+        clock=lambda: _NOW,
+    )
+
+    kernel.run_once(lambda _job: lifecycle.append("handler"))
+
+    assert lifecycle == [
+        "scope-enter",
+        "handler",
+        "scope-exit",
+        "ack",
+        "recycle",
+        "permit-release",
+    ]
+
+
+def test_worker_kernel_preserves_delivery_recycler_and_permit_failures() -> None:
+    lifecycle: list[str] = []
+    recycler_error = RuntimeError("connection recycle failed")
+    permit_error = OSError("permit release failed")
+    permit = _AdmissionPermit(release_error=permit_error)
+    driver = _make_driver()
+    driver.dispatch(_job("job-connection-recycle-failure"))
+    kernel = WorkerKernel(
+        driver,
+        admission_gate=lambda **_: permit,
+        connection_recycler=_ConnectionRecycler(lifecycle, error=recycler_error),
+        clock=lambda: _NOW,
+    )
+    handler_error = ValueError("handler failed")
+
+    with pytest.raises(BaseExceptionGroup) as captured:
+        kernel.run_once(lambda _job: (_ for _ in ()).throw(handler_error))
+
+    assert captured.value.exceptions == (handler_error, recycler_error, permit_error)
+    assert lifecycle == ["recycle"]
+    assert permit.released == 1
+    assert driver.rejected == ["job-connection-recycle-failure"]
+
+
+def test_worker_kernel_does_not_recycle_connections_without_a_delivery() -> None:
+    lifecycle: list[str] = []
+    kernel = WorkerKernel(
+        _make_driver(),
+        connection_recycler=_ConnectionRecycler(lifecycle),
+        clock=lambda: _NOW,
+    )
+
+    assert kernel.run_once(lambda _job: None) is None
+    assert lifecycle == []
+
+
+def test_worker_shutdown_waits_for_connection_recycling() -> None:
+    recycle_entered = Event()
+    release_recycler = Event()
+    driver_closed = Event()
+    failures: list[BaseException] = []
+
+    class Driver(_TestQueueDriver):
+        def close(self) -> None:
+            driver_closed.set()
+            super().close()
+
+    class Recycler:
+        def recycle(self) -> None:
+            recycle_entered.set()
+            assert release_recycler.wait(timeout=2)
+
+    driver = Driver()
+    driver.dispatch(_job("job-blocked-recycle"))
+    kernel = WorkerKernel(
+        driver,
+        connection_recycler=Recycler(),
+        clock=lambda: _NOW,
+    )
+
+    def run() -> None:
+        try:
+            kernel.run_once(lambda _job: None)
+        except BaseException as error:
+            failures.append(error)
+
+    def close() -> None:
+        try:
+            kernel.close(timeout=timedelta(seconds=2))
+        except BaseException as error:
+            failures.append(error)
+
+    worker = Thread(target=run)
+    worker.start()
+    assert recycle_entered.wait(timeout=2)
+    closer = Thread(target=close)
+    closer.start()
+
+    assert not driver_closed.wait(timeout=0.05)
+    release_recycler.set()
+    worker.join(timeout=2)
+    closer.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert not closer.is_alive()
+    assert failures == []
+    assert driver_closed.is_set()
 
 
 def _job(message_id: str, **overrides: object) -> QueueJob:
@@ -291,6 +760,43 @@ def test_worker_kernel_tracks_runtime() -> None:
     assert stats.jobs_processed == 1
 
 
+@pytest.mark.parametrize("wall_jump", [timedelta(hours=-1), timedelta(days=1)])
+def test_worker_runtime_uses_monotonic_duration_across_wall_clock_jumps(
+    monkeypatch: pytest.MonkeyPatch,
+    wall_jump: timedelta,
+) -> None:
+    class MonotonicClock:
+        def __init__(self) -> None:
+            self._ticks = iter((100.0, 100.25))
+
+        def monotonic(self) -> float:
+            return next(self._ticks)
+
+    class RecordingSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+
+    wall_times = iter((_NOW, _NOW + wall_jump, _NOW + wall_jump))
+    monkeypatch.setattr(worker_module, "time", MonotonicClock())
+    driver = _make_driver()
+    sink = RecordingSink()
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: next(wall_times),
+    )
+
+    driver.dispatch(_job("job-monotonic-runtime"))
+    kernel.run_once(consumer=lambda job: None)
+
+    assert kernel.stats.total_runtime == timedelta(milliseconds=250)
+    delivery = next(signal for signal in sink.signals if signal.name == "queue.worker.delivery")
+    assert dict(delivery.attributes)["runtime_bucket"] == "lt_1s"
+
+
 def test_worker_kernel_stats_are_immutable_snapshots() -> None:
     kernel = WorkerKernel(_make_driver(), clock=lambda: _NOW)
 
@@ -333,6 +839,508 @@ def test_worker_kernel_heartbeat_detects_timeout() -> None:
 
     stats = kernel.stats
     assert stats.idle_timeouts == 0
+
+
+def test_worker_run_loop_emits_fresh_health_heartbeats_until_stopped() -> None:
+    class HeartbeatSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+            self.two_live_heartbeats = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+            live_count = sum(
+                item.name == "queue.worker.heartbeat"
+                and item.health_state is not None
+                and item.health_state.liveness is LivenessState.LIVE
+                for item in self.signals
+            )
+            if live_count >= 2:
+                self.two_live_heartbeats.set()
+
+    driver = _make_driver()
+    sink = HeartbeatSink()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        driver,
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                lambda job: None,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert sink.two_live_heartbeats.wait(timeout=1)
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+    heartbeats = [signal for signal in sink.signals if signal.name == "queue.worker.heartbeat"]
+    assert len(heartbeats) >= 3
+    assert all(signal.kind is TelemetryKind.HEALTH for signal in heartbeats)
+    assert all(signal.context is None for signal in heartbeats)
+    assert all(
+        heartbeat.health_state is not None
+        and heartbeat.health_state.degradation is DegradationState.HEALTHY
+        and heartbeat.health_state.capability is CapabilityState.AVAILABLE
+        for heartbeat in heartbeats[:-1]
+    )
+    assert [heartbeat.health_state.liveness for heartbeat in heartbeats[-2:]] == [
+        LivenessState.LIVE,
+        LivenessState.STOPPED,
+    ]
+    assert heartbeats[-1].health_state.readiness is ReadinessState.NOT_READY
+    assert dict(heartbeats[0].attributes) == {
+        "active_jobs_bucket": "zero",
+        "saturation_bucket": "lt_50pct",
+        "state": "idle",
+    }
+    assert heartbeats[0].health_state.fresh_until > heartbeats[0].observed_at
+
+
+def test_concurrent_polling_loops_share_one_heartbeat_lifecycle() -> None:
+    sink = _RecordingTelemetrySink()
+    kernel = WorkerKernel(
+        _make_driver(),
+        max_concurrency=2,
+        heartbeat_interval=timedelta(seconds=1),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+    first_stop = Event()
+    second_stop = Event()
+    first = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": first_stop},
+    )
+    second = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": second_stop},
+    )
+
+    first.start()
+    second.start()
+    try:
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and kernel._heartbeat_users != 2:
+            time.sleep(0.001)
+        assert kernel._heartbeat_users == 2
+
+        first_stop.set()
+        first.join(timeout=1)
+        assert not first.is_alive()
+        time.sleep(0.02)
+        assert not any(
+            signal.health_state is not None
+            and signal.health_state.liveness is LivenessState.STOPPED
+            for signal in sink.signals
+            if signal.name == "queue.worker.heartbeat"
+        )
+    finally:
+        first_stop.set()
+        second_stop.set()
+        first.join(timeout=1)
+        second.join(timeout=1)
+
+    assert not second.is_alive()
+    stopped = [
+        signal
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat"
+        and signal.health_state is not None
+        and signal.health_state.liveness is LivenessState.STOPPED
+    ]
+    assert len(stopped) == 1
+
+
+def test_retired_heartbeat_cannot_stop_a_reacquired_lifecycle() -> None:
+    sink = _RecordingTelemetrySink()
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(seconds=1),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+    retired_stop = Event()
+    retired_started = Event()
+    retired_release = Event()
+
+    def retired_heartbeat() -> None:
+        retired_started.set()
+        retired_release.wait(timeout=1)
+
+    retired_thread = Thread(target=retired_heartbeat)
+    retired_thread.start()
+    assert retired_started.wait(timeout=1)
+    with kernel._condition:
+        kernel._heartbeat_users = 1
+        kernel._heartbeat_stop = retired_stop
+        kernel._heartbeat_thread = retired_thread
+
+    releaser = Thread(target=kernel._release_heartbeat)
+    releaser.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        with kernel._condition:
+            if kernel._heartbeat_users == 0 and kernel._heartbeat_thread is None:
+                break
+        time.sleep(0.001)
+    else:
+        pytest.fail("retired heartbeat did not begin teardown")
+
+    kernel._acquire_heartbeat()
+    retired_release.set()
+    releaser.join(timeout=1)
+    assert not releaser.is_alive()
+    assert not any(
+        signal.health_state is not None and signal.health_state.liveness is LivenessState.STOPPED
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat"
+    )
+
+    kernel._release_heartbeat()
+
+
+def test_stalled_heartbeat_telemetry_cannot_block_polling_loop_teardown() -> None:
+    entered = Event()
+    release = Event()
+
+    class StalledSink:
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            if signal.name == "queue.worker.heartbeat":
+                entered.set()
+                release.wait(timeout=1)
+
+    stop = Event()
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((StalledSink(),)),
+        clock=lambda: datetime.now(UTC),
+    )
+    polling = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": stop},
+    )
+    polling.start()
+    assert entered.wait(timeout=1)
+    stop.set()
+    polling.join(timeout=0.2)
+    try:
+        assert not polling.is_alive()
+    finally:
+        release.set()
+
+
+def test_stalled_terminal_heartbeat_cannot_block_polling_loop_teardown() -> None:
+    terminal_entered = Event()
+    release = Event()
+
+    class TerminalStalledSink:
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            if (
+                signal.name == "queue.worker.heartbeat"
+                and signal.health_state is not None
+                and signal.health_state.liveness is LivenessState.STOPPED
+            ):
+                terminal_entered.set()
+                release.wait(timeout=1)
+
+    stop = Event()
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((TerminalStalledSink(),)),
+        clock=lambda: datetime.now(UTC),
+    )
+    polling = Thread(
+        target=kernel.run_loop,
+        args=(lambda job: None,),
+        kwargs={"poll_interval": timedelta(milliseconds=1), "stop_event": stop},
+    )
+    polling.start()
+    time.sleep(0.02)
+    stop.set()
+    assert terminal_entered.wait(timeout=1)
+    polling.join(timeout=0.2)
+    try:
+        assert not polling.is_alive()
+    finally:
+        release.set()
+
+
+def test_stopped_blocked_heartbeat_producer_cannot_publish_live() -> None:
+    sink = _RecordingTelemetrySink()
+    kernel = WorkerKernel(
+        _make_driver(),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: _NOW,
+    )
+    stop = Event()
+    stop.set()
+
+    kernel._run_heartbeat(stop)
+
+    assert not any(signal.name == "queue.worker.heartbeat" for signal in sink.signals)
+
+
+def test_terminal_heartbeat_thread_start_failure_is_fail_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RetiredThread:
+        def join(self, timeout: float | None = None) -> None:
+            return
+
+        def is_alive(self) -> bool:
+            return False
+
+    class FailingThread:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread capacity exhausted")
+
+    kernel = WorkerKernel(
+        _make_driver(),
+        telemetry=TelemetryPublisher((_RecordingTelemetrySink(),)),
+        clock=lambda: _NOW,
+    )
+    with kernel._condition:
+        kernel._heartbeat_users = 1
+        kernel._heartbeat_stop = Event()
+        kernel._heartbeat_thread = RetiredThread()  # type: ignore[assignment]
+    monkeypatch.setattr(worker_module, "Thread", FailingThread)
+
+    kernel._release_heartbeat()
+
+
+def test_worker_heartbeat_remains_live_and_reports_saturation_during_long_job() -> None:
+    class HeartbeatSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+            self.saturated = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+            if (
+                signal.name == "queue.worker.heartbeat"
+                and signal.health_state is not None
+                and signal.health_state.readiness is ReadinessState.SATURATED
+            ):
+                self.saturated.set()
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-long-heartbeat"))
+    sink = HeartbeatSink()
+    release_job = Event()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        driver,
+        max_concurrency=1,
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def handle(job: QueueJob) -> None:
+        del job
+        release_job.wait(timeout=1)
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                handle,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert sink.saturated.wait(timeout=1)
+    finally:
+        release_job.set()
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+    saturated = next(
+        signal
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat"
+        and signal.health_state is not None
+        and signal.health_state.readiness is ReadinessState.SATURATED
+    )
+    assert dict(saturated.attributes) == {
+        "active_jobs_bucket": "one",
+        "saturation_bucket": "full",
+        "state": "processing",
+    }
+    assert "job-long-heartbeat" not in repr(saturated)
+
+
+def test_worker_heartbeat_reports_busy_then_draining_during_long_job() -> None:
+    class HeartbeatSink:
+        def __init__(self) -> None:
+            self.signals: list[TelemetrySignal] = []
+            self.busy = Event()
+            self.draining = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.signals.append(signal)
+            if signal.name != "queue.worker.heartbeat" or signal.health_state is None:
+                return
+            if signal.health_state.readiness is ReadinessState.BUSY:
+                self.busy.set()
+            if signal.health_state.readiness is ReadinessState.DRAINING:
+                self.draining.set()
+
+    driver = _make_driver()
+    driver.dispatch(_job("job-draining-heartbeat"))
+    sink = HeartbeatSink()
+    release_job = Event()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        driver,
+        max_concurrency=2,
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def handle(job: QueueJob) -> None:
+        del job
+        release_job.wait(timeout=1)
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                handle,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert sink.busy.wait(timeout=1)
+        kernel.start_draining()
+        assert sink.draining.wait(timeout=1)
+    finally:
+        release_job.set()
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+    states = [
+        signal.health_state.readiness
+        for signal in sink.signals
+        if signal.name == "queue.worker.heartbeat" and signal.health_state is not None
+    ]
+    assert ReadinessState.BUSY in states
+    assert ReadinessState.DRAINING in states
+
+
+def test_worker_heartbeat_publisher_failure_cannot_stop_polling() -> None:
+    class FailingSink:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.called_twice = Event()
+
+        def emit(self, signal: TelemetrySignal, /) -> None:
+            self.calls += 1
+            if self.calls >= 2:
+                self.called_twice.set()
+            raise RuntimeError("telemetry unavailable")
+
+    sink = FailingSink()
+    stop = Event()
+    failures: list[BaseException] = []
+    kernel = WorkerKernel(
+        _make_driver(),
+        heartbeat_interval=timedelta(milliseconds=10),
+        telemetry=TelemetryPublisher((sink,)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    def run() -> None:
+        try:
+            kernel.run_loop(
+                lambda job: None,
+                poll_interval=timedelta(milliseconds=1),
+                stop_event=stop,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+
+    thread.start()
+    try:
+        assert sink.called_twice.wait(timeout=1)
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert failures == []
+
+
+def test_worker_heartbeat_thread_start_failure_cannot_stop_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingThread:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread capacity exhausted")
+
+    monkeypatch.setattr(worker_module, "Thread", FailingThread)
+    driver = _make_driver()
+    driver.dispatch(_job("job-heartbeat-start-failure"))
+    stop = Event()
+    processed: list[str] = []
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((_RecordingTelemetrySink(),)),
+        clock=lambda: _NOW,
+    )
+
+    def handle(job: QueueJob) -> None:
+        processed.append(job.envelope.metadata.message_id)
+        stop.set()
+
+    kernel.run_loop(handle, poll_interval=timedelta(milliseconds=1), stop_event=stop)
+
+    assert processed == ["job-heartbeat-start-failure"]
+    assert driver.acked == ["job-heartbeat-start-failure"]
 
 
 @pytest.mark.parametrize(
@@ -955,6 +1963,49 @@ def test_worker_kernel_emits_queue_wait_alert_above_configured_threshold() -> No
     assert dict(sink.signals[1].attributes) == {
         "lag_bucket": "lt_1m",
         "status": "exceeded",
+        "threshold_bucket": "lt_10s",
+    }
+
+
+def test_worker_kernel_emits_queue_wait_alert_only_on_state_transitions() -> None:
+    driver = _make_driver()
+    sink = _RecordingTelemetrySink()
+    for message_id, lag in (
+        ("job-wait-alert-first", timedelta(seconds=12)),
+        ("job-wait-alert-duplicate", timedelta(seconds=11)),
+        ("job-wait-alert-recovered", timedelta(seconds=1)),
+        ("job-wait-alert-reopened", timedelta(seconds=15)),
+    ):
+        envelope = MessageEnvelope.create(
+            metadata=MessageMetadata(
+                message_id=message_id,
+                message_type="jobs.example",
+                schema_version=1,
+                kind=EnvelopeKind.JOB,
+                occurred_at=_NOW - lag,
+            ),
+            payload={},
+        )
+        driver.dispatch(_job(message_id, envelope=envelope))
+    kernel = WorkerKernel(
+        driver,
+        telemetry=TelemetryPublisher((sink,)),
+        queue_wait_alert_after=timedelta(seconds=5),
+        clock=lambda: _NOW,
+    )
+
+    for _ in range(4):
+        kernel.run_once(consumer=lambda job: None)
+
+    alerts = [signal for signal in sink.signals if signal.name == "queue.worker.wait_alert"]
+    assert [dict(signal.attributes)["status"] for signal in alerts] == [
+        "exceeded",
+        "recovered",
+        "exceeded",
+    ]
+    assert dict(alerts[1].attributes) == {
+        "lag_bucket": "lt_10s",
+        "status": "recovered",
         "threshold_bucket": "lt_10s",
     }
 

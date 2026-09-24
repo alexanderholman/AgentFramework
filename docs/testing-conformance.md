@@ -203,3 +203,4 @@ provenance fields stay out of exports, telemetry, caches, and general evidence s
 Like the rest of `af.testing`, this API does not certify production isolation, deletion, domain
 governance, or physical no-egress behavior by itself. Fakes and local contract tests are necessary
 evidence inputs, never sufficient authority.
+

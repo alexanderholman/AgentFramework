@@ -19,6 +19,15 @@ class LeaseState(StrEnum, Enum):
     RECONCILED = "reconciled"
 
 
+class LeaseAdmissionStatus(StrEnum, Enum):
+    """Outcome of an atomic repository admission attempt."""
+
+    ADMITTED = "admitted"
+    DUPLICATE = "duplicate"
+    CAPACITY_EXCEEDED = "capacity_exceeded"
+    CONCURRENCY_EXCEEDED = "concurrency_exceeded"
+
+
 class ResourceKind(StrEnum, Enum):
     """Resource types that can be leased."""
 
@@ -82,10 +91,24 @@ class Lease:
     scope: dict[str, str] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class LeaseAdmissionResult:
+    """Repository evidence returned by one atomic admission decision."""
+
+    status: LeaseAdmissionStatus
+    available_quantity: float
+    concurrent: int
+    max_concurrent: int | None
+
+
 class LeaseRepository(Protocol):
     """Repository port for lease persistence."""
 
     def save(self, lease: Lease) -> None: ...
+
+    def reserve(self, lease: Lease) -> LeaseAdmissionResult: ...
+
+    def compare_and_swap(self, lease: Lease, *, expected_fence: int) -> bool: ...
 
     def get(self, lease_id: str) -> Lease | None: ...
 

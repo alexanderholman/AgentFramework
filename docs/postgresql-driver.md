@@ -38,3 +38,4 @@ Production evidence comes only from the real PostgreSQL workflow, which covers t
 commit, rollback, savepoint, stream-lifetime, read-only, error-redaction, and shutdown suite,
 plus cancellation recovery, pooling, runtime registration, connection failure, and migration
 schema create, dry-run, verification, reversal, and interrupted-DDL rollback.
+

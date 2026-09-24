@@ -2035,3 +2035,2239 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - All acceptance criteria for issue #22 satisfied.
 - Closed issue #22.
 - 3 pre-existing test failures unrelated to this change (test_dev_scripts, test_graphql_interface, test_release_gates).
+
+---
+
+## Run #038 - Queue Worker Resource Admission Boundary
+**Date**: 2026-08-17
+**Agent**: Codex
+**Status**: Bounded slice completed; issue #21 remains open
+
+### Inputs
+- Direct operator instruction to correct current state and close only fully evidenced work
+- Issue #21 worker resource-admission requirement
+- Closed issue #46 host-resource lease foundation
+- Reconstructed live `master` after merged PR #205
+
+### Outputs
+- Added public `WorkerAdmissionGate` protocol
+- Added pre-reservation fail-closed admission to `WorkerKernel`
+- Preserved queued jobs and delivery attempts on denial, failure, and malformed decisions
+- Rechecked drain, shutdown, and concurrency after an allowed decision
+- Added denial, failure, invalid-result, recovery, public-export, and drain-race specifications
+
+### Verified Results
+- Locked Ruff format and lint passed for the queue package and focused test module
+- Strict mypy passed for `src/af/queue`
+- 72 zero-fixture WorkerKernel behavioural specifications executed directly and passed, including
+  all six new resource-admission specifications
+- Production declaration validation passed
+
+### Incomplete or Unavailable Evidence
+- The full locked environment could not be recreated because PyMongo was absent from the sandbox's
+  offline dependency cache.
+- The surviving prebuilt pytest environment terminated with SIGBUS even for `pytest --help`;
+  therefore no pytest result is claimed for this run.
+- Issue #21 remains open: process isolation/supervision, durable adapter evidence, full aggregate
+  gates, and criterion-level closure review remain outside this bounded slice.
+
+### Related References
+- SPEC-039
+- DEC-054
+- Issues #21 and #46
+
+---
+
+## Run #039 - Durable Queue Dead-Letter Recovery
+**Date**: 2026-08-17
+**Agent**: Codex hourly project runner (immediate first iteration)
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Direct operator request to start the hourly code-first runner immediately
+- Issue #177 control-plane constraints and current operator hold
+- Issue #21 failed-job inspection and replay requirement
+- Existing relational queue dead-letter persistence and fencing contracts
+
+### Outputs
+- Added public redacted `QueueDeadLetter` inspection records
+- Added countable `QueueDeadLetterReplayReceipt` evidence
+- Added bounded deterministic relational dead-letter inspection
+- Added atomic fail-closed replay that resets attempts and preserves fencing generations
+- Added specifications for inspection redaction, fenced replay, and live/missing rejection
+
+### Verified Results
+- Python byte-compilation passed for changed production and test modules
+- Focused Ruff lint passed for all changed queue and test files
+- Intended pytest selection was attempted but produced no test result: the inherited virtualenv
+  terminated with SIGBUS, and clean offline resolution was blocked by uncached PyMongo 4.17.0
+- No aggregate, mypy, or pytest pass is claimed
+
+### Remaining Work
+- Re-run the focused tests, strict mypy, and locked aggregate gates in a healthy complete environment
+- Add an authorized operator interface if issue #21 requires recovery outside injected Python code
+- Continue process supervision/isolation, production resource-admission adapter evidence, and
+  criterion-level closure review
+
+### Related References
+- SPEC-040
+- DEC-055
+- Issue #21
+
+## Run #040 - Durable Context-Bound Worker Tags
+**Date**: 2026-08-17
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177 and issue #21 authority, comments, ownership, open PRs, branches, and latest
+  commits
+- No open PRs; live `master` remains at `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive Copilot attempt, with no competing branch or PR found
+- Existing local resource-admission and dead-letter recovery checkpoints
+
+### Outputs
+- Added typed, immutable, fully redacted worker job tags
+- Bound correlation and opaque tenant tags to envelope policy/telemetry context
+- Added canonical agent, task, and capability identifiers
+- Persisted tags through relational dispatch, restart, terminal inspection, and replay
+- Added a nullable compatibility migration for existing queue tables
+- Corrected explicit reject and exhausted retry to persist the consumed terminal attempt
+
+### Verified Results
+- Direct SQLite dispatch/restart/reserve/reject/inspect/replay/ack journey passed, including tag
+  preservation, redaction, terminal attempt accounting, and fencing generation rotation
+- Focused Ruff lint passed
+- Strict mypy passed for all changed queue source modules
+- Python byte-compilation passed for changed source and test modules
+- Focused pytest was attempted with plugin autoload disabled but the inherited environment still
+  terminated with SIGBUS; no pytest or aggregate pass is claimed
+
+### Remaining Work
+- Re-run focused pytest and the locked aggregate/governance/package gates in a healthy complete
+  environment
+- Complete production fenced resource admission, connection-recycling evidence, backend-specific
+  optimization providers, and process supervision/isolation
+- Perform independent criterion-level closure review before any issue-status change
+
+### Related References
+- SPEC-041
+- DEC-056
+- Issue #21
+
+---
+
+## Run #041 - Held Worker Resource Admission Permits
+**Date**: 2026-08-17
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177 and issue #21 authority, comments, ownership, open PRs, and latest commits
+- No open PRs; live `master` remains `abc7e6f`; unattended operator hold remains active
+- Existing boolean `WorkerAdmissionGate` and issue #46 resource-lease contracts
+
+### Outputs
+- Added public `WorkerAdmissionPermit` lifecycle contract
+- Held acquired capacity from before reservation through terminal delivery settlement
+- Released permits on empty queues, post-gate refusal, reservation failure, duplicate deferral, and
+  all delivery outcomes
+- Preserved simultaneous delivery and permit-release failures
+- Retained backward-compatible literal boolean gate decisions
+
+### Verified Results
+- All 84 zero-fixture worker-kernel behavioral specifications executed directly and passed
+- Focused Ruff lint passed
+- Strict mypy passed for changed queue source modules
+- Python byte-compilation passed for changed source and test modules
+- Node route gate passed 9/9
+- Locked aggregate entrypoint was attempted and stopped before execution because PyMongo 4.17.0 is
+  absent from the offline cache; no aggregate, pytest, governance, or package pass is claimed
+
+### Remaining Work
+- Implement the concrete fenced resource-lease adapter using this permit lifecycle
+- Prove renewal, authorization expiry, stale-fence rejection, and release/reconciliation behavior
+- Continue connection recycling, backend optimization providers, and process supervision/isolation
+- Perform exact-head aggregate gates and independent closure review in a healthy environment
+
+### Related References
+- SPEC-042
+- DEC-057
+- Issues #21 and #46
+
+---
+
+## Run #042 - Atomic Fenced Resource-Lease Worker Admission
+**Date**: 2026-08-17
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177 and issue #21 authority, comments, ownership, open pull requests, branches,
+  and latest commits
+- No open pull requests or issue-21 branch; live `master` remains `abc7e6f`; the unattended
+  operator hold remains active
+- Existing resource-lease lifecycle and the held `WorkerAdmissionPermit` contract from Run #041
+
+### Outputs
+- Replaced read-then-save lease transitions with exact-fence atomic compare-and-swap
+- Added atomic duplicate-safe lease creation and explicit expiry cleanup
+- Added authorization-bound renewal with deterministic clock injection
+- Added a concrete worker admission gate and permit that activate before reservation, retain the
+  newest fence, and release then reconcile after settlement
+- Added concurrency-race, future-fence, worker-integration, and renewal lifecycle specifications
+
+### Verified Results
+- Four new fenced resource-admission behavioral specifications executed directly and passed
+- All 24 pre-existing resource-lease lifecycle behaviors executed directly and passed
+- All 114 zero-fixture worker behaviors across the worker kernel and runtime executed directly and
+  passed
+- Focused Ruff lint passed; strict mypy passed for six changed source/test modules; Python
+  byte-compilation passed
+- Node route gate passed 9/9
+- Focused pytest was attempted and the inherited environment terminated with exit 135/SIGBUS; no
+  pytest pass is claimed
+- The locked aggregate entrypoint was attempted and stopped before execution because PyMongo 4.17.0
+  is absent from the offline cache; no aggregate or package pass is claimed
+
+### Remaining Work
+- Add a durable compare-and-swap lease repository and atomic aggregate capacity accounting for
+  multiple worker processes
+- Re-run focused pytest and the locked aggregate, governance, and package gates in a healthy
+  complete environment
+- Continue connection recycling, backend optimization providers, and process supervision/isolation
+- Perform exact-head criterion review before any issue-status change
+
+### Related References
+- SPEC-043
+- DEC-058
+- Issues #21 and #46
+
+### Run #042 Verification Addendum
+- The permit-startup cleanup regression failed as intended against the initial implementation, then
+  passed after release/reconcile cleanup was centralized; five new fenced-admission behaviors now
+  pass.
+- Direct release-declaration validation, registry-schema validation, and dry-run convention checks
+  passed.
+- All governed files remain byte-prefix appends of checked-out `HEAD`; the canonical governance
+  script cannot certify a dirty review checkpoint because it requires working content to equal a
+  committed head, so no full governance pass is claimed.
+- The explicit package gate was attempted and stopped at the same missing offline PyMongo 4.17.0
+  artifact; no package result is claimed.
+
+---
+
+## Run #043 - Worker-Owned Connection Recycling
+**Date**: 2026-08-17
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, comments, ownership, open pull requests, branches, and live
+  `master`
+- No open pull requests; live `master` remains `abc7e6f`; no new issue-21 branch or active worker
+  overlaps this slice; Copilot's assigned attempt remains inactive after its credit failure
+- The unattended operator hold remains explicit; supervised merge authority was not exercised
+- Existing manager `purge()` semantics, worker settlement, held admission permits, and owned runtime
+
+### Outputs
+- Added the public synchronous `WorkerConnectionRecycler` lifecycle port
+- Recycled only after terminal queue settlement and never on empty-queue polling
+- Kept deliveries active through recycler and permit cleanup so shutdown waits for both
+- Preserved simultaneous delivery, recycler, and permit-release failures while attempting all
+  cleanup paths
+- Added `OwnedManagerConnectionRecycler` to bridge explicitly worker-owned AF managers to their
+  existing purge/rebuild behavior
+
+### Verified Results
+- The initial lifecycle test failed because the kernel had no recycler parameter; the shutdown-race
+  test then failed because the driver could close before recycling completed
+- Four new kernel recycling behaviors and two owned-manager adapter behaviors passed after the fixes
+- All 125 zero-fixture worker, worker-runtime, and fenced-admission behaviors executed directly and
+  passed
+- Focused Ruff formatting and lint passed; strict mypy passed for all nine queue source modules;
+  Python byte-compilation passed
+- Node route gate passed 9/9
+- Direct release-declaration, registry-schema, and dry-run convention validation passed
+- Focused pytest was attempted and the inherited environment terminated with exit 135/SIGBUS; no
+  pytest pass is claimed
+- The locked aggregate and explicit package entries were attempted and stopped before execution
+  because PyMongo 4.17.0 is absent from the offline cache; no aggregate or package pass is claimed
+
+### Remaining Work
+- Wire and certify backend-specific worker-owned manager sets without purging connections shared by
+  concurrent application work
+- Implement code-controlled process supervision/isolation and backend optimization providers
+- Add durable multi-process resource-capacity accounting and real-service crash/restart evidence
+- Re-run focused pytest and exact-head aggregate, governance, and package gates in a healthy complete
+  environment before any publication or closure review
+
+### Related References
+- SPEC-044
+- DEC-059
+- Issue #21
+
+---
+
+## Run #044 - Bounded Worker-Runtime Generation Supervision
+**Date**: 2026-08-17
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, recent comments, ownership, open pull requests, branches, and
+  live `master`
+- No open pull requests; live `master` remains `abc7e6f`; only old Lovelace recovery prototypes
+  overlap the issue name, and Copilot's assigned attempt remains inactive after its credit failure
+- The unattended operator hold remains active; no GitHub write or supervised publication authority
+  was exercised
+- Existing owned runtime failure, drain, cancellation, shutdown, and connection-recycling contracts
+
+### Outputs
+- Classified an unexpected kernel-loop return as sticky worker loss instead of leaving the runtime
+  apparently healthy
+- Added a public blocking supervisor that creates fresh runtime generations and applies explicit
+  restart, delay, watch, and shutdown bounds
+- Closed each failed generation before replacement and prohibited restart when cleanup could not
+  prove the prior kernel closed
+- Preserved ordered generation failures, terminal state, generation count, and completed restart
+  count
+- Made restart delay interruptible by an external stop event
+
+### Verified Results
+- The initial test import failed because no supervisor existed; the unsafe-cleanup test then failed
+  because the first implementation attempted another generation after kernel close failure
+- Five new worker-loss/restart lifecycle behaviors and the public export behavior passed directly
+- All 37 zero-fixture runtime behaviors and all 88 zero-fixture worker-kernel behaviors passed in
+  isolated direct runs
+- Focused Ruff formatting and lint, strict mypy for all nine queue source modules, Python
+  byte-compilation, and relevant `git diff --check` passed
+- Node route gate passed 9/9; release-declaration, registry-schema, and dry-run convention checks
+  passed
+- Focused pytest was attempted through the valid Python entrypoint and terminated with exit
+  135/SIGBUS; the installed pytest script also points to a removed prior-workspace interpreter
+- The locked aggregate stopped before its commands because offline PyMongo 4.17.0 was unavailable;
+  the explicit package entry stopped because its transitive dnspython 2.8.0 artifact was unavailable
+- Canonical append-only governance skipped because it could not resolve a git base ref in this
+  checkpoint; a direct byte-prefix comparison against checked-out `HEAD` is recorded separately
+
+### Remaining Work
+- Add an OS process adapter with signal translation and fresh composition per child process
+- Prove stale-heartbeat fencing, crash replacement, no cross-process resource overlap, and
+  real-service recovery
+- Complete backend-specific optimization providers and durable multi-process capacity accounting
+- Re-run focused pytest and exact-head aggregate, governance, package, and independent review gates
+  in a healthy complete environment before any publication or closure review
+
+### Related References
+- SPEC-045
+- DEC-060
+- Issue #21
+
+### Run #044 Verification Addendum
+- The explicit canonical append-only invocation resolved `HEAD` and failed, as expected for this
+  uncommitted review checkpoint, because governed working-tree bytes do not equal committed `HEAD`;
+  no canonical governance pass is claimed.
+- Direct byte-prefix comparisons confirmed that `specs.md`, `decisions.md`, and `agent_runs.md`
+  preserve every byte from checked-out `HEAD` and only append after it.
+- The aggregate `validate_agents.sh` wrapper passed 28 of 36 checks but its eight uv-backed checks
+  could not initialize the default read-only `/root/.cache/uv`; direct tag-presence, unique-ID,
+  allowed-tag, repeatable-script-reference, registry-schema, and dry-run checks passed.
+
+---
+
+## Run #045 - Spawn-Based Worker Process Boundary
+**Date**: 2026-08-17
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, recent comments, ownership, open pull requests, branches, and
+  live `master`
+- No open pull requests; live `master` remains `abc7e6f`; only old inactive Lovelace recovery
+  prototypes overlap the issue name, while Copilot's assigned attempt remains blocked by credits
+- The unattended operator hold remains active; no GitHub write or supervised publication authority
+  was exercised
+- Run #044's blocking runtime-generation supervisor and explicit follow-on process-boundary decision
+
+### Outputs
+- Added a public non-daemon `SpawnWorkerProcess` using a fresh `spawn` interpreter
+- Moved supervisor composition behind the child target so parent runtime, scope, manager, and
+  connection ownership are not intentionally reused
+- Added a structural thread/process stop-signal contract
+- Translated child `SIGTERM` and `SIGINT` into cooperative stop requests with handler restoration
+- Added bounded, retryable parent close without implicit terminate/kill escalation
+- Exposed PID, exact exit code, process lifecycle state, and sticky nonzero-exit failure evidence
+
+### Verified Results
+- The initial import failed because no process adapter existed; the first signal test then exposed
+  and corrected an exact-`int` check that rejected Python's valid `Signals` integer enum values
+- Seven new zero-fixture process behaviors passed, including a real spawned child that composed its
+  supervisor in-child and exited cooperatively
+- All 37 zero-fixture runtime and all 88 zero-fixture worker-kernel behaviors passed in isolated
+  direct runs
+- Focused Ruff formatting and lint, strict mypy for all ten queue source modules, Python
+  byte-compilation, and relevant diff checks passed
+- Node route gate passed 9/9; release-declaration, tag, unique-ID, allowed-tag,
+  repeatable-script-reference, registry-schema, and dry-run checks passed
+- Focused pytest terminated with exit 135/SIGBUS; no pytest pass is claimed
+- The locked aggregate and explicit package entry both stopped before execution because offline
+  PyMongo 4.17.0 was unavailable
+- Canonical append-only governance rejected governed working content that does not equal committed
+  `HEAD`; a direct byte-prefix comparison is recorded separately
+
+### Remaining Work
+- Add parent-level child-loss reconciliation with bounded process restart and no overlapping child
+  ownership
+- Add stale-heartbeat fencing so a replaced process cannot settle or renew stale work
+- Prove cross-process capacity accounting and real-service crash/restart recovery
+- Complete backend-specific optimization providers and exact-head aggregate, package, governance,
+  independent review, and criterion-mapped closure evidence
+
+### Related References
+- SPEC-046
+- DEC-061
+- Issue #21
+
+### Run #045 Verification Addendum
+- A post-implementation contract review found that independent event/process factory injection
+  could bypass the stated spawn-only boundary. A new intended-failure test first received an
+  unsupported-argument error, then passed after injection was narrowed to a process context whose
+  reported start method must be `spawn`.
+- Eight zero-fixture process behaviors now pass, including explicit rejection of a `fork` context;
+  the existing real-spawn, runtime, worker-kernel, Ruff, mypy, and byte-compilation results remain
+  passing after the correction.
+
+---
+
+## Run #046 - Bounded Parent-Level Worker Process Reconciliation
+**Date**: 2026-08-17
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, recent comments, ownership, open pull requests, branches, and
+  live `master`
+- No open pull requests; live `master` remains `abc7e6f`; only old issue #21 recovery branches
+  overlap the frontier, and Copilot's assigned attempt remains inactive after its credit failure
+- The unattended operator hold remains active; no GitHub write or supervised publication authority
+  was exercised
+- Run #045's spawn-only process adapter and its explicit parent-reconciliation follow-on
+
+### Outputs
+- Added a public blocking `WorkerProcessSupervisor` that creates fresh process generations from a
+  synchronous factory
+- Classified both nonzero child exit and unexpected clean exit as worker-process loss
+- Added explicit restart, delay, watch, and cooperative retirement bounds
+- Required the prior child to report not alive before a replacement factory can run
+- Failed closed when a launch error left its child possibly alive, preventing an overlapping process
+  generation
+- Preserved chronological failures, generation count, completed restart count, and terminal state
+- Made restart delay interruptible by the external stop signal
+
+### Verified Results
+- The intended-failure test first stopped at import because no parent process supervisor existed
+- Four new parent-supervisor lifecycle behaviors and the expanded public export behavior passed;
+  all 12 zero-fixture worker-process behaviors passed directly
+- All 37 zero-fixture runtime behaviors and all 88 zero-fixture worker-kernel behaviors passed in
+  isolated direct runs
+- Focused Ruff formatting and lint, strict mypy for all ten queue source modules, and Python
+  byte-compilation passed
+- Node route gate passed 9/9; release-declaration, registry-schema, dry-run convention, and
+  repeatable-script-reference checks passed
+- Focused pytest terminated with exit 135/SIGBUS; no pytest pass is claimed
+- The locked aggregate and explicit package entry both stopped before execution because offline
+  PyMongo 4.17.0 was unavailable
+- Canonical append-only governance rejected governed working content that does not equal committed
+  `HEAD`; a direct byte-prefix comparison is recorded separately
+
+### Remaining Work
+- Add stale-heartbeat fencing so a replaced process cannot settle or renew stale work
+- Prove durable cross-process resource accounting and real-service crash/restart recovery
+- Complete backend-specific optimization providers
+- Re-run focused pytest and exact-head aggregate, package, governance, independent review, and
+  criterion-mapped closure gates in a healthy complete environment
+
+### Related References
+- SPEC-047
+- DEC-062
+- Issue #21
+
+---
+
+## Run #047 - Stale Worker Heartbeat and Settlement Fencing
+**Date**: 2026-08-17
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, all current comments, ownership, open pull requests, branches,
+  and the private repository default branch
+- No open pull requests; issue #21 remains assigned to Alexander and inactive Copilot, whose attempt
+  remains credit-blocked
+- The unattended hold remains active; no branch publication, PR, merge, issue mutation, or closure
+  authority was exercised
+- Run #046's parent process reconciliation and the explicit stale-heartbeat fencing follow-on
+
+### Outputs
+- Added a two-worker SQLite recovery specification covering an old paused worker, lease expiry,
+  replacement acquisition/completion, and rejected predecessor renewal/settlement
+- Corrected resource-lease renewal so an active record cannot renew at or after its heartbeat expiry
+- Preserved the prior active record without fence rotation or expiry extension on rejected renewal
+- Reused the database queue's existing reservation generation, worker owner, and rotating acquisition
+  capability rather than duplicating fence authority
+
+### Verified Results
+- A direct dependency-minimal production probe passed the exact-expiry rejection and no-mutation
+  behavior
+- Focused Ruff formatting and lint passed for production and both regression files
+- Strict mypy passed for the resource services and new integration recovery specification
+- Python byte-compilation and relevant diff checks passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The intended-failure unit execution and the SQLite recovery specification both terminated during
+  import with exit 135/SIGBUS; a minimal `SQLiteDriver` lifecycle reproduced the same environment
+  failure, so no SQLite or pytest pass is claimed
+- The locked aggregate stopped before its commands because offline PyMongo 4.17.0 was unavailable;
+  the explicit package entry stopped on unavailable offline trove-classifiers 2026.6.1.19
+- Canonical append-only governance rejected uncommitted governed content; direct checked-out-HEAD
+  byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Run the SQLite two-worker recovery specification in a healthy environment
+- Add durable leaked-resource reconciliation and cross-process capacity accounting
+- Qualify real-service crash/restart behavior and complete backend optimization providers
+- Re-run the locked aggregate, package, governance, independent review, and criterion-mapped closure
+  gates on an exact review head
+
+### Related References
+- SPEC-048
+- DEC-063
+- Issue #21
+
+---
+
+## Run #048 - Atomic Aggregate Resource-Lease Admission Contract
+**Date**: 2026-08-17
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, current comments, ownership, open pull requests, branches, and
+  repository metadata
+- No open pull requests; issue #21 remains assigned to Alexander and inactive Copilot, whose prior
+  attempt remains credit-blocked; only two inactive recovery branches overlap the frontier
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #047's explicit durable aggregate-capacity follow-on
+
+### Outputs
+- Added an explicit atomic lease-admission result and disposition contract to `LeaseRepository`
+- Replaced application-level raw insertion with repository-owned aggregate quantity and concurrency
+  admission
+- Added a lock-atomic in-memory reference implementation that counts `reserved` and `active` leases
+  for the same resource identity and leaves rejected candidates unpersisted
+- Added concurrent full-capacity and sequential concurrency-limit regression specifications
+
+### Verified Results
+- The first intended-failure pytest attempt terminated before collection with exit 135/SIGBUS, so
+  no red pytest result is claimed
+- The post-implementation focused pytest and normal production-module import reproduced the same
+  SIGBUS; an isolated execution of the exact production repository module passed concurrent
+  quantity admission and concurrency rejection assertions
+- Focused Ruff lint, strict mypy for all three changed source modules, and Python byte-compilation
+  passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and package entry stopped before their commands because offline PyMongo
+  4.17.0 was unavailable
+- Canonical append-only governance correctly rejected governed working content that differs from
+  checked-out `HEAD`; no exact-head governance pass is claimed
+
+### Remaining Work
+- Implement the atomic `reserve` contract in a durable repository with transaction/concurrency tests
+  across independent processes
+- Add expired/leaked lease sweeping and restart-safe reconciliation against durable resource state
+- Run the blocked pytest and SQLite recovery specifications in a healthy environment and qualify
+  crash/restart behavior against applicable real services
+- Complete backend-specific optimization providers and production connection-recycler composition
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-049
+- DEC-064
+- Issue #21
+
+### Run #048 Verification Addendum
+- A post-implementation review added a non-widening identity-budget regression. The isolated
+  production probe first failed with exit 1 because a wider candidate was admitted, then passed
+  after the repository enforced and reported the most restrictive live quantity and concurrency
+  ceilings.
+
+---
+
+## Run #049 - Durable SQLite Resource-Lease Admission
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, current comments, assignments, open pull requests, branches, and
+  repository metadata
+- No open pull requests; issue #21 remains assigned to Alexander and the credit-blocked Copilot
+  attempt; only two inactive Lovelace recovery branches overlap the issue frontier
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #048's explicit durable transactional repository follow-on
+
+### Outputs
+- Added a SQLite-specific durable `LeaseRepository` using the existing relational driver and its
+  serialized writer transaction
+- Persisted full immutable lease snapshots plus transaction-critical scalar fields
+- Added durable exact-fence compare-and-swap, deterministic filtering/listing, save, lookup, and
+  delete behavior
+- Added restart round-trip, independent-connection contention, and fresh spawned-process contention
+  specifications
+
+### Verified Results
+- The intended-failure pytest attempt terminated before collection with exit 135/SIGBUS, so no red
+  test result is claimed
+- Fault diagnostics localized SIGBUS to SQLAlchemy's optional C-extension import; using SQLAlchemy's
+  documented `DISABLE_SQLALCHEMY_CEXT_RUNTIME=1` pure-Python switch allowed focused execution
+- All 3 new SQLite repository tests passed, including exact restart round-trip and spawned-process
+  contention; the combined resource-admission, lease-lifecycle, and stale-worker recovery selection
+  passed 37/37
+- An isolated exact-source production probe independently passed full-field restart persistence,
+  lifecycle CAS, and two-connection aggregate contention
+- Focused Ruff format/lint, strict mypy for production and integration code, and Python
+  byte-compilation passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and package entry stopped before execution because offline PyMongo 4.17.0
+  was unavailable
+- Canonical append-only governance rejected uncommitted governed content; no exact-head governance
+  pass is claimed
+
+### Remaining Work
+- Wire explicit durable lease-repository selection into application/bootstrap configuration without
+  making durable SQLite ownership implicit
+- Add expiry/leak sweeping and restart-safe reconciliation that fences stale owners before releasing
+  capacity
+- Qualify the same isolation and recovery contract for applicable real-service database backends
+- Complete backend-specific optimization providers and production connection-recycler composition
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-050
+- DEC-065
+- Issue #21
+
+### Run #049 Verification Addendum
+- The governance wrapper lacks its executable bit in this checkpoint, so its direct invocation
+  returned exit 126. Running the same checked-in workflow through `bash` completed 28 of 36 checks;
+  all eight failures occurred in uv-backed commands before their checks because the offline cache
+  lacks PyMongo 4.17.0, pytest-asyncio 1.4.0, or trove-classifiers 2026.6.1.19. No aggregate
+  governance pass is claimed.
+
+---
+
+## Run #050 - Explicit Durable Resource-Lease Composition
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, current comments, assignments, open pull requests, branches, and
+  the private repository default branch
+- No open pull requests; issue #21 remains assigned to Alexander and the inactive credit-blocked
+  Copilot attempt; only two inactive Lovelace recovery branches overlap the frontier
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #049's explicit bootstrap/configuration follow-on for the durable SQLite repository
+
+### Outputs
+- Added typed `memory` and `sqlite` resource-lease backend configuration with an explicit durable
+  path and retained memory as the default
+- Rejected unknown backend values and an ephemeral `:memory:` path when durable SQLite is selected
+- Wired the SQLite driver and lease repository into application scope, eagerly initialized the
+  configured repository during boot, and delegated driver cleanup to the application lifecycle
+- Preserved an injected lease repository as a higher-priority, externally owned composition
+- Added public-bootstrap restart coverage proving lease recovery and exactly-once driver cleanup
+
+### Verified Results
+- The intended-failure selection failed during collection because `ResourceLeaseBackend` did not
+  exist, then the exact two new configuration/lifecycle tests passed 2/2 after implementation
+- The expanded configuration, bootstrap, admission, lifecycle, recovery, and SQLite repository
+  selection passed 67/67 using SQLAlchemy's pure-Python runtime switch
+- Focused Ruff format/lint, strict mypy for the changed production and integration modules, and
+  Python byte-compilation passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and package entry stopped before their commands because offline PyMongo
+  4.17.0 was unavailable
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions on the same unavailable PyMongo artifact. No aggregate governance pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Add expiry/leak sweeping and restart-safe reconciliation that fences stale owners before releasing
+  durable capacity
+- Qualify equivalent isolation and lifecycle behavior for applicable real-service database backends
+- Complete backend-specific optimization providers and production connection-recycler composition
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-051
+- DEC-066
+- Issue #21
+
+---
+
+## Run #051 - Restart-Safe Expired Resource-Lease Sweeping
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, current comments, assignments, open pull requests, branches, and
+  live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #050's expired/leaked durable-capacity reconciliation follow-on
+
+### Outputs
+- Added explicit finite reservation deadlines and rejected activation at the exact deadline without
+  mutating the persisted reservation
+- Added a deterministic host-filterable sweep result that distinguishes expired, reconciled, and
+  compare-and-swap-conflicted lease identities
+- Fenced due reserved and active leases before capacity release, then reconciled them through a
+  second exact-fence transition
+- Recovered legacy reservations without stored expiry from their creation time and finite duration
+- Finished durable `expired` transitions left by a crash before reconciliation
+
+### Verified Results
+- The initial two SQLite restart specifications failed 2/2 because the sweep API did not exist; the
+  exact-boundary activation assertion then independently failed because stale activation succeeded
+- After implementation, both new restart/reconciliation specifications passed 2/2, and the expanded
+  configuration, bootstrap, admission, lifecycle, recovery, and SQLite selection passed 69/69
+- Focused Ruff format/lint, strict mypy for the changed production and durable integration modules,
+  and Python byte-compilation passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and package entry stopped before their commands because offline PyMongo
+  4.17.0 was unavailable
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions on unavailable PyMongo, pymemcache, or pytest-asyncio artifacts. No aggregate
+  governance pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Compose the sweep into bounded startup and periodic worker supervision with telemetry and an
+  operator-visible cadence; preserve explicit shutdown ownership
+- Qualify equivalent fencing/recovery against applicable real-service database backends
+- Complete failed-job administration, backend optimization providers, and production connection
+  recycling still required by issue #21
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-052
+- DEC-067
+- Issue #21
+
+---
+
+## Run #052 - Supervised Resource-Lease Maintenance Cadence
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, current comments, assignments, open pull requests, issue-named
+  branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #051's explicit startup/periodic composition and telemetry follow-on
+
+### Outputs
+- Added a public synchronous worker-supervisor maintenance contract with a positive visible cadence
+  and successful-run counter
+- Ran maintenance before every generation factory and periodically inside the existing blocking
+  supervisor loop without adding another owned thread
+- Routed maintenance failures through safe runtime retirement and the existing restart/fail-closed
+  policy; startup failure constructs no worker generation
+- Added a resource-lease maintenance adapter retaining exact local sweep evidence and publishing only
+  bounded count buckets and canonical status
+- Preserved optional telemetry as best-effort without weakening authoritative reconciliation failure
+
+### Verified Results
+- The initial three-test selection failed during collection because the resource maintenance adapter
+  did not exist; after implementation all three new lifecycle/telemetry specifications passed 3/3
+- The complete worker runtime plus maintenance selection passed 46/46; the broader worker,
+  admission, recovery, process, and SQLite lease selection passed 174/174
+- Focused Ruff format/lint, strict mypy for the changed production and new test modules, and Python
+  byte-compilation passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate stopped before its commands because offline PyMongo 4.17.0 was unavailable;
+  the explicit package entry stopped on its unavailable dnspython 2.8.0 transitive dependency
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions on unavailable PyMongo. No aggregate governance pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Provide deployment-facing supervisor composition/configuration for maintenance host scope, cadence,
+  telemetry, worker/runtime factories, and shutdown signals
+- Qualify the fenced admission and maintenance path against applicable real-service backends
+- Complete failed-job administration, backend optimization providers, and production connection
+  recycling still required by issue #21
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-053
+- DEC-068
+- Issue #21
+
+---
+
+## Run #053 - Application-Composed Worker Lease Maintenance
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, their latest authority comments, assignments, open pull requests,
+  issue-named branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #052's remaining deployment-composition gap for lease maintenance
+
+### Outputs
+- Added typed optional host scope and a finite positive maintenance cadence capped at one day, with
+  environment parsing and sanitized invalid-configuration behavior
+- Added an application-scoped worker-supervisor factory bound to the authoritative lease service
+- Ensured every produced supervisor receives fresh lease maintenance with the configured scope and
+  cadence before the deployment-owned runtime factory can run
+- Kept telemetry, restart tuning, worker/runtime construction, and stop-signal ownership explicit at
+  the deployment boundary without starting background work during application boot
+
+### Verified Results
+- The initial two-test selection failed 2/2 because the settings and application factory surface did
+  not exist; after implementation the exact selection passed 2/2
+- Configuration, bootstrap, maintenance, and worker-supervisor tests passed 78/78; the broader worker,
+  process, admission, recovery, and SQLite resource-lease selection passed 206/206
+- Focused Ruff format/lint, strict mypy for changed production and composition test modules, and
+  Python byte-compilation passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate stopped before its commands on unavailable offline dnspython 2.8.0; the
+  explicit package entry stopped on unavailable offline PyMongo 4.17.0
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions on unavailable PyMongo or Redis artifacts. No aggregate governance pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Implement and certify failed-job inspection/replay, queue wait alerts, and complete control-plane
+  tagging/metric evidence
+- Qualify fenced admission and supervised maintenance against applicable real-service backends
+- Complete backend optimization providers and production connection recycling required by issue #21
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-054
+- DEC-069
+- Issue #21
+
+---
+
+## Run #054 - Capability-Routed Failed-Job Control
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, their latest authority comments, assignments, open pull requests,
+  issue-named branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #053's next explicit failed-job inspection/replay control-plane frontier
+
+### Outputs
+- Added independent verified queue capabilities for dead-letter inspection and replay
+- Exposed deterministic lane-filtered bounded inspection and atomic replay through `QueueManager`
+- Validated structural driver support and returned dead-letter/receipt values at the manager boundary
+- Certified the existing relational implementation under database registration version 1.4.0 while
+  leaving the sync backend explicitly unsupported
+- Corrected an existing driver test to assert the current immutable frozen JSON payload contract
+
+### Verified Results
+- After the missing test import was corrected, the intended two-test selection failed 2/2 because
+  `QueueManager` exposed neither control-plane operation; after implementation it passed 2/2
+- The complete queue manager/driver selection passed 90/90; the broader configuration, bootstrap,
+  queue, worker, process, admission, recovery, and SQLite lease selection passed 296/296
+- Focused Ruff format/lint, strict mypy for all changed production modules, and Python
+  byte-compilation passed
+- Strict mypy over the legacy `test_queue_drivers.py` module still reports five unrelated existing
+  diagnostics in its SQLite override and module monkeypatch fixtures; no test-module mypy pass is
+  claimed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and explicit package entries stopped before their commands on unavailable
+  offline PyMongo 4.17.0
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions on unavailable PyMongo. No aggregate governance pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Add bounded queue-wait alert policy and operator-safe failed-job/control-plane telemetry
+- Complete backend optimization providers and production connection recycling required by issue #21
+- Qualify applicable queue/resource behavior against real-service database backends
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-055
+- DEC-070
+- Issue #21
+
+---
+
+## Run #055 - Edge-Triggered Queue-Wait Alert Policy
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, all authority comments, assignments, open pull requests,
+  issue-named branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #054's bounded queue-wait alert policy follow-on
+
+### Outputs
+- Reused the existing worker lag calculation, telemetry publisher, bucket vocabulary, and
+  configured wait threshold rather than adding a parallel alert subsystem
+- Made breach and recovery alerts edge-triggered within one worker generation
+- Serialized alert state with the existing worker lifecycle condition to suppress concurrent and
+  sequential duplicate alerts
+- Preserved payload-blind bounded attributes and best-effort telemetry semantics
+
+### Verified Results
+- The intended transition test failed 1/1 because consecutive slow jobs emitted duplicate
+  `exceeded` alerts and recovery emitted no alert; after implementation the exact selection passed
+  2/2, including the pre-existing first-breach contract
+- The complete WorkerKernel module passed 102/102; the combined queue manager, driver, worker,
+  runtime, process, and SQLite recovery selection passed 250/250
+- Focused Ruff format/lint, strict mypy for the changed production module, and Python
+  byte-compilation passed
+- Strict mypy over the legacy worker test module reports 11 existing diagnostics in malformed
+  contract fixtures, protocol callback fixtures, state-narrowing assertions, and one unreachable
+  fixture; no test-module mypy pass is claimed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and explicit package entries stopped before their commands because offline
+  PyMongo 4.17.0 was unavailable
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions on unavailable PyMongo, dnspython, or trove-classifiers artifacts. No aggregate
+  governance pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Add operator-authorized failed-job/control-plane presentation and broader telemetry where it can
+  preserve payload and tenant boundaries
+- Complete backend-specific optimization providers and production connection-recycler composition
+- Qualify applicable queue/resource behavior against real-service database backends
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-056
+- DEC-071
+- Issue #21
+
+---
+
+## Run #056 - Authorized Payload-Blind Failed-Job Control
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, all authority comments, assignments, open pull requests,
+  issue-named branches, live default-branch commits, and dependency issue #20
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- Live issue #20 is closed, correcting the prior checkpoint's stale statement that dependency
+  closure remained outstanding
+- The unattended operator hold remains active; no push, pull request, merge, issue mutation, or
+  closure authority was exercised
+- Run #055's operator-safe failed-job/control-plane frontier
+
+### Outputs
+- Added a transport-neutral application service that authorizes the selected connection plus
+  lane/message resource before failed-job inspection or replay
+- Reused the central `Gate`, operator-evaluation scope, execution context, verified `QueueManager`
+  operations, and telemetry publisher
+- Added payload-blind projections that retain the allowing decision but never return queue jobs,
+  envelopes, payloads, tag values, principals, or raw tenant identities
+- Added bounded success/failure telemetry and preserved original backend failures unchanged
+
+### Verified Results
+- The initial intended-failure selection stopped at collection because the application control
+  service did not exist; after implementation the first two specifications passed 2/2
+- A second intended-failure test failed 1/1 because backend failures emitted no control-plane
+  telemetry; after implementation the complete focused module passed 4/4
+- Application bus, authorization middleware, queue manager/driver, and control tests passed 139/139;
+  the broader queue, worker, runtime, process, control, and SQLite recovery selection passed 254/254
+- Focused Ruff format/lint, strict mypy for both changed modules, and Python byte-compilation passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and explicit package entries stopped before their commands because offline
+  PyMongo 4.17.0 was unavailable
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions on the unavailable PyMongo dependency chain. No aggregate governance pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Compose the authorized queue-control service into explicitly protected operator interfaces and
+  deployment policy without widening payload or tenant disclosure
+- Complete backend-specific optimization providers and production connection-recycler composition
+- Qualify applicable queue/resource crash and restart behavior against real-service backends
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-057
+- DEC-072
+- Issue #21
+
+---
+
+## Run #057 - Verified Backend-Specific Worker Generation
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, dependency issue #20, authority comments, assignments, open pull
+  requests, issue-named branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- Issue #20 remains closed and the unattended operator hold remains active; no push, pull request,
+  merge, issue mutation, or closure authority was exercised
+- Run #056's backend-specific optimization and production connection-recycler frontier
+
+### Outputs
+- Added a generation factory that verifies reservation capability and evidence before selecting an
+  exact backend optimizer and applying its fully bounded runtime values
+- Added a pinned optimization provider bound to backend identity, full capability binding, and a
+  profiling-artifact digest; no unmeasured optimal defaults were introduced
+- Added a generic immutable manager connection reference and public runtime configuration evidence
+- Added an explicit worker driver-close boundary so the dedicated queue manager retains and disposes
+  its driver ownership coherently
+- Reused the existing owned-manager recycler for handler-side connections and prevented any queue
+  manager from entering that per-delivery recycler
+- Rejected pre-resolved borrowed managers without closing them and rolled back fresh managers on all
+  later composition failures
+
+### Verified Results
+- The intended-failure selection stopped at collection because `af.application.worker_generation`
+  did not exist; after implementation the focused module passed 5/5
+- Queue manager, driver, worker, runtime, process, supervision, and generation tests passed 255/255
+- Focused Ruff format/lint, strict mypy over all changed production modules, and Python
+  byte-compilation passed
+- The repository `.venv` pytest process still exits with SIGBUS; focused and broader pytest evidence
+  used the surviving pre-provisioned test interpreter with `PYTHONPATH=src`
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate and package entries stopped before their commands because offline PyMongo
+  4.17.0 was unavailable
+- The governance wrapper completed 28 of 36 checks; its eight uv-backed checks stopped before their
+  assertions because the writable offline cache lacked Hatchling 1.27.0. No aggregate governance
+  pass is claimed
+- Canonical append-only governance cannot pass on an uncommitted governed checkpoint; direct
+  checked-out-HEAD byte-prefix evidence is recorded separately
+
+### Remaining Work
+- Supply benchmark/wizard-produced pinned profiles and bootstrap factories for each deployed queue
+  backend, then qualify their safety and performance against applicable real services
+- Compose the authorized queue-control service into explicitly protected operator interfaces and
+  deployment policy without widening payload or tenant disclosure
+- Complete criterion-mapped tagging evidence and applicable queue/resource crash-restart
+  qualification
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-058
+- DEC-073
+- Issue #21
+
+### Validation Addendum
+- The standalone append-only checker returned `skipped (no git base ref available)` in this local
+  branch, so no canonical append-only pass is claimed. A separate read-only comparison confirmed
+  that `specs.md`, `decisions.md`, and `agent_runs.md` each retain the complete checked-out `HEAD`
+  byte stream as an exact prefix.
+- A working-tree-wide `git diff --check` did not pass because 13 previously accumulated files report
+  a new blank line at EOF. None is part of this run's production slice; the unrelated user-owned
+  changes were preserved rather than rewritten.
+
+---
+
+## Run #058 - Exact-Binding Worker Profile Bootstrap
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, dependency issue #20, authority comments, assignments, open pull
+  requests, issue-named branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- Issue #20 remains closed and the unattended operator hold remains active; no push, pull request,
+  merge, issue mutation, or closure authority was exercised
+- Run #057's concrete manager-factory and qualified-profile bootstrap frontier
+
+### Outputs
+- Added paired opt-in configuration for a durable SQLite worker queue and a qualified profile file;
+  default application bootstrap remains worker-disabled
+- Added a bounded exact-schema profile loader that retains an exact-file digest and rejects unknown,
+  missing, malformed, incorrectly typed, non-positive, or oversized declarations
+- Added an application provider that compares declared backend and complete capability binding before
+  exposing the generation factory, without resolving a queue driver or opening storage during boot
+- Bound the resolved SQLite storage target into the queue manager through a non-reversible identity
+  digest and advanced the database queue registration contract to 1.5.0
+- Preserved the Run #057 fresh-manager, rollback, manager-owned shutdown, and explicit handler-
+  connection recycling boundaries
+
+### Verified Results
+- The initial six intended specifications failed because the settings and bootstrap surface did not
+  exist; after implementation the exact selection passed 6/6
+- A second intended regression failed 1/1 because changing only the SQLite path did not change the
+  capability binding; after binding storage identity, the drift and exact-profile selection passed
+  2/2
+- Configuration, profile, database-registration, bootstrap-lifecycle, generation, and supervision
+  checks passed 101/101; the broader queue and worker regression selection passed 294/294
+- Focused Ruff format/lint, strict mypy over all changed production modules, and Python
+  byte-compilation passed
+- Node route gate passed 9/9; production release declaration, registry schema, dry-run convention,
+  and repeatable-script-reference checks passed
+- The locked aggregate stopped before its commands because offline dnspython 2.8.0 was unavailable;
+  the explicit package entry stopped before execution because PyMongo 4.17.0 was unavailable
+- The governance wrapper completed 28 of 36 checks; all eight uv-backed checks stopped before their
+  assertions because the writable offline cache lacked Hatchling 1.27.0. No aggregate governance
+  pass is claimed
+- The surviving pre-provisioned interpreter supplied pytest evidence because the repository `.venv`
+  pytest process remains unusable after its recorded SIGBUS failure
+
+### Remaining Work
+- Add a deterministic profiler/qualification recorder that emits these exact-binding profile
+  artifacts from measured backend evidence rather than hand-authored values
+- Compose the authorized queue-control service into explicitly protected operator interfaces and
+  deployment policy without widening payload or tenant disclosure
+- Complete criterion-mapped job-tagging evidence and applicable real-service crash, restart, and
+  performance qualification
+- Re-run the locked aggregate, package, exact-head governance, independent review, and
+  criterion-mapped closure gates on a published review head
+
+### Related References
+- SPEC-059
+- DEC-074
+- Issue #21
+
+---
+
+## Run #059 - Measured Worker Qualification Recording
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, dependency issue #20, authority comments, assignments, open pull
+  requests, issue-named branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- Issue #20 remains closed and the unattended operator hold remains active; no push, pull request,
+  merge, issue mutation, or closure authority was exercised
+- Run #058's exact-binding profile consumer and explicit follow-on recorder frontier
+
+### Outputs
+- Added an immutable record for external worker qualification evidence and its exact selected
+  runtime values; it performs no benchmark and supplies no unmeasured defaults
+- Added a canonical atomic recorder that rejects synthetic, expired, or failure-bearing evidence,
+  exact-millisecond conversion loss, unsafe targets, and failed promotion without replacing the
+  previous profile
+- Superseded the opaque version-one profile with exact version two, embedding evidence/environment
+  digests, freshness, sample count, real-service status, and explicit safety findings
+- Revalidated those fields during load and retained the external qualification digest separately
+  from the exact profile-file digest on the pinned provider
+
+### Verified Results
+- The intended-failure selection stopped at collection because
+  `af.application.worker_qualification` did not exist; after implementation qualification,
+  profile/bootstrap, and generation tests passed 20/20
+- The broader configuration, profile, database-registration, bootstrap-lifecycle, generation,
+  supervision, queue-manager, worker, runtime, process, and recovery selection passed 303/303
+- Focused Ruff format/lint and strict mypy over the three changed production modules passed
+- No real service was contacted and no benchmark, performance optimum, production qualification,
+  acceptance completion, aggregate gate, package gate, governance gate, or independent review is
+  claimed by these focused results
+
+### Remaining Work
+- Build protected operator wizard/profiler composition that produces independently reviewable
+  evidence for explicit performance, safety, and cost objectives
+- Run applicable queue backends against real services and record crash, restart, correctness,
+  settlement, reservation-loss, performance, and cost evidence
+- Compose the authorized queue-control service into explicitly protected operator interfaces and
+  deployment policy without widening payload or tenant disclosure
+- Complete criterion-mapped tagging evidence and re-run the locked aggregate, package, exact-head
+  governance, independent review, and closure gates on a published review head
+
+### Related References
+- SPEC-060
+- DEC-075
+- Issue #21
+
+### Validation Addendum
+- Additional regressions cover future-dated observations, lossy sub-millisecond runtime values,
+  and loader-side revalidation of every embedded safety field. The final focused selection passed
+  26/26 and the final broader queue/bootstrap selection passed 309/309; these supersede the earlier
+  interim counts in this run entry.
+- The tracked governance wrapper lacked execute permission despite being invoked directly by both
+  repository guidance and the locked aggregate plan. Its mode is corrected from 100644 to 100755;
+  with the writable offline cache, the direct wrapper completed 36/36 checks.
+- Release-declaration validation, registry schema, dry-run convention, repeatable-script references,
+  byte-compilation, and the Node route gate passed; governed files retain checked-out `HEAD`
+  byte-for-byte as a prefix. The canonical append checker itself reports skipped because no base ref
+  is available in this local branch.
+- The locked aggregate and explicit package entry still stop before their commands because the
+  writable offline cache lacks PyMongo 4.17.0. No aggregate or package pass is claimed.
+
+---
+
+## Run #060 - Explicit Worker Optimization Objective Policy
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, dependency issue #20, authority comments, assignments, open pull
+  requests, issue-named branches, and live default-branch commits
+- No open pull requests; `master` remains `abc7e6f`; issue #21 remains assigned to Alexander and the
+  inactive credit-blocked Copilot attempt; only two inactive Lovelace recovery branches overlap
+- Issue #20 remains closed and the unattended operator hold remains active; no push, pull request,
+  merge, issue mutation, or closure authority was exercised
+- Run #059's externally measured qualification/profile recording boundary and explicit next
+  performance/safety/cost policy frontier
+
+### Outputs
+- Added exact integer performance, safety, and cost priority percentages with a required total of
+  one hundred and no inferred deployment defaults
+- Added bounded candidate records for externally normalized objective indices; the selector does
+  not execute measurements or synthesize those indices
+- Added a fail-closed deterministic selector that compares only fresh, real-service, zero-finding
+  candidates for one exact backend, capability binding, and environment
+- Added safety-first deterministic tie handling and a selection digest over priorities, every exact
+  candidate qualification/runtime, objective indices, and the chosen evidence identity
+
+### Verified Results
+- The intended import failed because the candidate, priorities, and selector contracts did not
+  exist; after implementation the focused selector selection passed 19/19
+- Qualification, profile/bootstrap, generation, and selection checks passed 45/45; the broader
+  configuration, driver, lifecycle, supervision, queue, worker, process, and recovery selection
+  passed 328/328
+- Focused Ruff format/lint and strict mypy over the changed production module passed
+- The repository environment's SQLAlchemy C extensions still terminate Python with SIGBUS during
+  test discovery; focused evidence therefore disabled those optional extensions and third-party
+  pytest autoload while exercising the same Python production code
+- No profiler was run, no normalized index was fabricated, no real service was contacted, and no
+  production qualification, acceptance completion, publication, or closure is claimed
+
+### Remaining Work
+- Compose authorization, profiler evidence intake, objective selection, atomic profile recording,
+  and bounded decision telemetry behind a protected operator application service
+- Implement trustworthy normalization from applicable real-service performance, safety, and cost
+  measurements rather than accepting caller-supplied indices at an external interface
+- Run applicable queue backends against real services and record crash, restart, correctness,
+  settlement, reservation-loss, performance, and cost evidence
+- Complete criterion-mapped tagging/operator presentation and the locked aggregate, package,
+  exact-head governance, independent-review, publication, and closure gates
+
+### Related References
+- SPEC-061
+- DEC-076
+- Issue #21
+
+### Validation Addendum
+- The writable cache became sufficient for the locked aggregate to execute rather than stop at
+  dependency resolution. Its first pass exposed a previously accumulated Ruff format finding in
+  `worker_resource_admission.py`; that file was mechanically formatted and the locked format gate
+  then passed across 374 files. Locked Ruff lint passed and locked mypy passed across 193 source
+  files.
+- The locked pytest/coverage gate collected 2,825 tests and completed with 2,772 passed, 52 skipped,
+  and one failed. The failure is the governance bootstrap-anchor topology check because this local
+  checkout cannot resolve commit `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`; total coverage is
+  89.29%, below the locked 90% threshold. No aggregate pass is claimed.
+- The explicit package gate now reaches its clean-checkout precondition and correctly refuses the
+  accumulated tracked/untracked checkpoint. It did not build a package and no package pass is
+  claimed.
+- Direct governance completed 36/36; release declaration, registry schema, dry-run convention,
+  repeatable-script references, byte-compilation, and the Node route gate passed 9/9.
+
+---
+
+## Run #061 - Authorized Worker Optimization Promotion Boundary
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, PR comments, reviews, open PRs, and
+  issue-named branches
+- PR #206 is the only active issue #21 branch/PR, is open and mergeable, and has no review or
+  comments; the operator hold remains active for this automation run
+- SPEC-061/DEC-076's explicit remaining protected operator-service boundary
+
+### Outputs
+- Added central default-deny authorization before candidate iteration or recorder effects
+- Bound promotion authority to one canonical driver and exact environment digest
+- Reused deterministic safe-candidate selection and rejected authorized-target drift
+- Added a synchronous recorder port receiving the complete selection, priorities, digest, and UTC
+  operation time
+- Added redacted promotion evidence and fail-closed asynchronous/malformed recorder handling
+
+### Verified Results
+- Intended test collection failed because the control module did not exist
+- After implementation, 17 focused tests passed with 100% statement and branch coverage
+- Focused Ruff format/lint and strict mypy passed
+- No normalized measurement, qualification, service result, publication, merge, acceptance, or
+  closure is claimed
+
+### Remaining Work
+- Run the locked aggregate, governance, Node, and package gates for this checkpoint
+- Implement an authorized evidence-ingress/normalization adapter backed by applicable real-service
+  measurements; do not treat caller indices as authenticated evidence
+- Obtain exact-head independent review and real-service qualification before merging or closing
+  issue #21
+
+### Related References
+- SPEC-062
+- DEC-077
+- Issue #21 and PR #206
+
+### Validation Addendum
+- Locked production declaration, Ruff format across 377 files, Ruff lint, and strict mypy across
+  194 source files passed.
+- Locked pytest collected 2,975 tests and completed with 2,922 passed, 52 applicable real-service
+  skips, and the one expected synthetic-history topology failure; branch coverage passed at 90.03%.
+- The sole failure cannot resolve historical commit `4e27a97f7887dfb4554ff2d74f8262c23deb25a4`
+  because this connector-reconstructed checkout contains exact branch blobs but synthetic Git
+  ancestry. No full aggregate pass is claimed.
+
+---
+
+## Run #062 - PR 206 Review-Invariant Repair
+**Date**: 2026-08-18
+**Agent**: Codex bounded runner under operator hold
+**Status**: Review blockers repaired locally; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, PR comments, review submissions,
+  review threads, open PRs, and issue-named branches
+- PR #206 remains the only active issue #21 pull request and is open and mergeable
+- Automated review at commit `61609bb0e9` reported two P1 blockers: lost executable mode on
+  `scripts/af_epic_worker` and removal of the governed separator before DEC-053
+- Issue #177 still permits only directly supervised bounded publication; this unattended run did
+  not push, merge, mutate issue state, resolve review threads, or claim acceptance completion
+
+### Outputs
+- Restored the exact `---` separator and blank-line framing before DEC-053, matching the immutable
+  default-branch bytes rather than appending a replacement decision
+- Confirmed the reconstructed checkpoint tree stores `scripts/af_epic_worker` as mode `100755`
+- Added a direct-execution regression test that fails for mode `0644` and passes for mode `0755`
+- Preserved the executable-mode correction as an explicit required tree entry for supervised
+  publication because the local reconstruction already contained the correct mode and therefore
+  cannot express it as a new mode-only diff against its synthetic parent
+
+### Verified Results
+- Intended failure: with the worker changed to mode `0644`, the new focused test failed because
+  `os.access(..., os.X_OK)` returned false
+- After restoration to mode `0755`, the executable regression and append-only mutation regression
+  passed 2/2
+- Locked release declaration, Ruff format across 377 files, Ruff lint, and strict mypy across 194
+  source files passed
+- Locked pytest collected 2,976 tests and completed with 2,923 passed, 52 applicable real-service
+  skips, and only the known synthetic-history topology failure; branch coverage passed at 90.03%
+- Node route authorization passed 9/9
+- The clean package gate passed: sdist SHA-256
+  `c04ab2744c94bdd11918d3d8647ecbe805fda7a5f5da09e9067edd06e55729e9`; wheel SHA-256
+  `5a41b418e69ddbf315a4e59b9476bbbe389a593638012cddce00c970738c5100`
+- The first direct governance run passed 35/36: its sole failure compared the repaired historical
+  separator with the immediately preceding synthetic checkpoint. A final clean-head rerun is
+  required after this append-only run record is committed; no governance pass is claimed yet
+
+### Remaining Work
+- Re-run direct governance and package gates from the clean final local head
+- During directly supervised publication, construct the GitHub tree with
+  `scripts/af_epic_worker` mode `100755`; updating file contents alone cannot repair Git mode
+- Obtain exact-head independent review and resolve both P1 findings before any bounded merge
+- Continue issue #21 with authenticated real-service evidence ingress/normalization and complete
+  criterion-mapped qualification; this repair does not close issue #21
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- After committing the repair and its append-only record, direct governance passed 36/36 from a
+  clean head; this supersedes the interim 35/36 result without rewriting it
+- The clean package gate passed again with the same sdist and wheel digests recorded above
+
+---
+
+## Run #063 - Exact-Head Resource-Permit Review Repair
+**Date**: 2026-08-18
+**Agent**: Codex unattended bounded runner
+**Status**: Review findings repaired in a local checkpoint; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177 and PR #206 at published head
+  `8d694b11b4d823bf9a5e26aa700bd90f60489332`
+- Fresh independent review reported three unresolved findings: retriable failed lease release,
+  non-finite admission quantities, and unchecked asynchronous or malformed permit release results
+- The unattended operator hold remains active; this run did not push, merge, reply, resolve review
+  threads, mutate issue state, or claim issue acceptance
+
+### Outputs
+- Kept failed permit cleanup retryable and retained the latest lease transition so a failed
+  reconciliation can resume without replaying a completed release
+- Serialized concurrent release attempts and marked a permit complete only after reconciliation
+- Rejected NaN and infinite quantities at both worker admission and the resource-lease service
+- Rejected asynchronous permit release methods before queue reservation
+- Closed coroutine results and rejected all awaitable, asynchronous-generator, and non-`None`
+  release results instead of silently treating cleanup as successful
+- Added focused regressions for each reviewed behavior
+
+### Verified Results
+- Intended failures reproduced all three review findings before production changes
+- The four focused modules passed 279/279 after implementation
+- Focused Ruff format/lint and strict mypy passed
+- At clean code commit `c6c9c485b1d21c6fba49ed4981243857a3b2a670`, the locked aggregate passed:
+  2,935 tests passed, 52 explicitly configured real-service profiles skipped, branch coverage was
+  90.04%, Node route authorization passed 9/9, and governance passed 36/36
+- The clean package gate passed: sdist SHA-256
+  `680a5c516ceb28afec03ccceed4303419a2b53261631a9c3fcf3007e97f27620`; wheel SHA-256
+  `e8093c4a23bc3df66abe37c4e88842068ace0c4dbdd9e73cfdcf6d57a8a8b907`
+- The 52 service-profile skips are not represented as passes or real-service qualification
+
+### Remaining Work
+- Re-run the locked aggregate on the final clean checkpoint containing this append-only record
+- Under direct supervision, publish the repair, reply with exact-head evidence, resolve only the
+  three addressed threads, request a fresh exact-head independent review, and merge only if clean
+- Keep issue #21 open for applicable real-service qualification, authenticated measurement and
+  normalization ingress, and criterion-level closure reconciliation
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+---
+
+## Run #064 - Authenticated Worker Measurement Ingress
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, open PRs, issue-named branches,
+  assignments, and thread-aware review state
+- PR #206 remains the only open pull request, issue #21 remains the active assigned frontier, and
+  three published-head review findings remain unresolved although their repairs are preserved in
+  local checkpoint `b83b5f8572bb989f4e574a593a475a621f209eed`
+- Issue #177's unattended operator hold remains active; no GitHub mutation, publication, merge,
+  thread resolution, issue mutation, or acceptance claim was authorized
+- PR #206 explicitly identifies authenticated measurement/normalization ingress as remaining
+  production work
+
+### Outputs
+- Added exact-target operator authorization before measurement iteration or authentication
+- Added canonical measurement documents committing qualifications, runtime values, issuer, raw
+  completed-job, elapsed-time, and cost counts
+- Added per-issuer HMAC-SHA256 authentication, minimum 256-bit keys, evidence-digest binding, and
+  defensive key-map copying
+- Added deterministic rational/integer normalization for throughput, zero-finding sample confidence,
+  and cost efficiency without accepting externally supplied indices
+- Rejected target drift, stale/synthetic/failure-bearing evidence, duplicate evidence, malformed
+  raw units, tampering, unknown issuers, and asynchronous or value-returning authenticators
+
+### Verified Results
+- Intended test collection failed because the ingress module did not exist
+- The asynchronous/value-returning authenticator regressions then failed against the initial
+  implementation and passed after synchronous-result enforcement
+- The final focused ingress suite passed 14/14
+- Qualification, selection, promotion, issue-boundary, and ingress composition passed 201/201
+- Focused Ruff format/lint and strict mypy passed
+- No real service was contacted and no production qualification, publication, merge, issue
+  acceptance, or closure is claimed by these local results
+
+### Remaining Work
+- Commit the bounded checkpoint and run the locked aggregate, direct governance, and package gates
+  from its exact clean head
+- Under direct supervision, publish the accumulated repair and ingress checkpoint, resolve only
+  findings supported at the published head, and obtain fresh independent review
+- Run applicable real-service profiles and reconcile every issue #21 acceptance criterion against
+  immutable merged evidence before closure
+
+### Related References
+- SPEC-063
+- DEC-078
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The first locked aggregate executed all tests but stopped at the coverage gate: 2,949 passed,
+  52 explicitly configured real-service profiles skipped, and total branch coverage was 89.99%
+  against the unchanged 90% requirement. Package and governance stages therefore did not run, and
+  no aggregate pass was claimed.
+- Added boundary coverage for authenticated evidence-digest drift, duplicate evidence, zero-cost
+  normalization, key-set validation, composition, time, target, and bounded-input contracts.
+- The expanded ingress suite passed 20/20 with 92.67% module branch coverage; focused Ruff and
+  strict mypy continued to pass. The aggregate threshold was not weakened.
+- The second locked aggregate completed from exact clean code/test head `4e3e05a`: Python passed
+  2,955/2,955 executed tests with 52 explicitly configured real-service profiles skipped; total
+  branch coverage passed at 90.04%; Node passed 9/9; and governance passed 36/36 including the
+  append-only check.
+- The clean package gate passed: sdist SHA-256
+  `e8909a0717f293b9eacfd15ffa20b42bb0c71885c2904acd70a797db026b3f93`; wheel SHA-256
+  `eb2cbc89115ef9b0fdbe44cb5d899b301dcc17eb1bfc3988817e7a0c2f9ae702`.
+- These results qualify the bounded local slice only. The 52 service-profile skips remain skips;
+  no real-service qualification, publication, merge, issue acceptance, or closure is claimed.
+
+---
+
+## Run #065 - Observable Long-Running Worker Heartbeats
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, assignments, reviews,
+  and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains at published head `8d694b11b4`, and
+  its three latest review findings remain unresolved although repaired in the accumulated local
+  checkpoint
+- Issue #21 requires heartbeat and observable worker state; the current heartbeat interval only
+  updated a private timestamp during admission and produced no evidence during a long-running job
+
+### Outputs
+- Added interval-driven structured worker health signals for the long-running polling lifecycle
+- Kept heartbeat production independent of handler execution
+- Added ready, busy, saturated, draining, and terminal stopped readiness/liveness evidence
+- Bounded attributes to lifecycle and occupancy buckets with no job or tenant identity
+- Preserved polling and settlement when optional telemetry delivery fails
+
+### Verified Results
+- Intended heartbeat specifications failed because no `queue.worker.heartbeat` signals existed
+- Focused heartbeat specifications passed 6/6 after implementation
+- Worker kernel, runtime, process-supervision, and stale-worker recovery specifications passed
+  167/167
+- Focused Ruff and strict mypy passed
+- The locked aggregate, package, and governance gates remain to be run from the final clean
+  checkpoint; no aggregate pass is claimed yet
+
+### Remaining Work
+- Run the exact-head locked aggregate, package, and governance gates
+- Under direct supervision, publish the accumulated checkpoint, reply to and resolve only repaired
+  review findings, obtain a fresh exact-head independent review, and merge only if clean
+- Run applicable real-service qualification and reconcile all four issue #21 acceptance criteria
+  against immutable merged evidence before closure
+
+### Related References
+- SPEC-064
+- DEC-079
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from exact clean implementation head `ed836f9`.
+- Python passed 2,959/2,959 executed tests with 52 explicitly configured real-service profiles
+  skipped; total branch coverage passed at 90.07% against the unchanged 90% requirement.
+- Node passed 9/9; governance passed 36/36 including the append-only check; package validation
+  passed.
+- Package hashes: sdist SHA-256
+  `e21ed9673a4b504335d5e91f296c4dcd3a2e1b87918f4010fbfb919eb8803880`; wheel SHA-256
+  `461b62d7cd1e7650d01113ef5e92f180615d78b7e0d625d5f7f95cd634f215d6`.
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed.
+
+---
+
+## Run #066 - Monotonic Worker Runtime Measurement
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local slice implemented; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, reviews, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `8d694b11b4`, with three unresolved findings already repaired in the accumulated local checkpoint
+- Issue #21 requires observable runtime; current production code derived elapsed duration from UTC
+  wall-clock subtraction
+
+### Outputs
+- Replaced wall-clock duration subtraction with monotonic elapsed measurement
+- Retained UTC wall time for telemetry observation timestamps
+- Bound cumulative runtime and delivery telemetry to the same elapsed value
+- Added backward and forward clock-correction regression specifications
+
+### Verified Results
+- Intended regressions failed because both clock-correction cases reported zero instead of 250 ms
+- Focused monotonic runtime specifications passed 3/3 after implementation
+- Worker kernel, runtime, process-supervision, and stale-worker recovery specifications passed
+  170/170
+- Focused Ruff and strict mypy passed
+- Locked aggregate, package, and governance results remain to be recorded from the final clean
+  checkpoint; no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record exact-head locked aggregate, package, and governance gates
+- Under direct supervision, publish the accumulated checkpoint, resolve only repaired findings with
+  exact-head evidence, obtain independent review, and merge only if clean
+- Complete applicable real-service qualification and criterion-level merged-evidence reconciliation
+  before issue #21 closure
+
+### Related References
+- SPEC-065
+- DEC-080
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from exact clean implementation head `f05aadc`.
+- Python passed 2,961/2,961 executed tests with 52 explicitly configured real-service profiles
+  skipped; total branch coverage passed at 90.07% against the unchanged 90% requirement.
+- Node passed 9/9; governance passed 36/36 including the append-only check; package validation
+  passed.
+- Package hashes: sdist SHA-256
+  `8923fa5d00a142b6262c567536ef3cdf733f42cdece0023c51cf64ee080db83d`; wheel SHA-256
+  `ecb526310788d051f616facf74acde73b184050477ad3294fdfee0b07b0e4c6c`.
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed.
+
+---
+
+## Run #067 - Revoked Permit and Legacy Dead-Letter Recovery
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Blocking review findings repaired locally; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains open and mergeable at published
+  head `4a42d9dc4988a2258858298b1a14da23578a6856`
+- The only unresolved PR findings were externally revoked permit cleanup and legacy dead-letter
+  rows whose zero attempt count made inspection and replay fail
+
+### Outputs
+- Permit cleanup now adopts an externally persisted `REVOKED` lease and reconciles it using the
+  current fence instead of retrying release with a stale active fence
+- Database queue installation now idempotently normalizes legacy terminal rows from zero to one
+  attempt before dead-letter inspection and replay enforce their positive-attempt invariant
+- Added intended-failure regression specifications for both findings
+
+### Verified Results
+- Both new specifications failed before their production fixes and passed afterward
+- Resource-admission, database-queue, and issue-boundary specifications passed 214/214
+- The complete resource-admission and queue-driver suites passed 77/77
+- Focused Ruff format/lint, strict mypy, and `git diff --check` passed
+- The locked aggregate passed from implementation commit `fbbacdf62b5ef8dad3336b20d1590b1c0b0b8a65`:
+  Python passed 2,990 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.08%; Node passed 9/9; governance passed 36/36; package and
+  append-only gates passed
+- Package hashes: sdist SHA-256
+  `1fc58d6df769eccf0be5fe8f9828f98b24223631d9ac2df282a22f5709ade522`; wheel SHA-256
+  `a5a5cbbf0503d1f3e68860376629ccfe743ad0ceb4f5270e4a79beed172ce59c`
+
+### Remaining Work
+- Under direct supervision, publish this accumulated checkpoint, resolve the two repaired review
+  findings with exact-head evidence, obtain a fresh independent review, and merge only if clean
+- Restore GitHub Actions job execution or provide reachable PostgreSQL, MySQL, MariaDB,
+  Elasticsearch, and OpenSearch service URLs, then rerun all five exact-head qualification suites
+- Reconcile all four issue #21 acceptance criteria against immutable merged evidence before closure
+
+### Blockers
+- The 52 service-profile tests remain unqualified because their five required service URLs are not
+  configured locally and the corresponding GitHub Actions runs fail before executing any step
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+- Local implementation commit `fbbacdf62b5ef8dad3336b20d1590b1c0b0b8a65`
+
+---
+
+## Run #068 - Interrupted Lease-Expiry Recovery
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local shutdown-safety repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Permit cleanup adopted persisted release, revocation, and reconciliation states, but not a
+  persisted expiry left behind when expiry committed and reconciliation was interrupted
+
+### Outputs
+- Permit cleanup now adopts the current `EXPIRED` fence instead of retrying release with its stale
+  active fence
+- Persisted expiry is reconciled through the same restart-safe terminal-state path as release and
+  revocation
+- Added an intended-failure regression for interrupted external expiry cleanup
+
+### Verified Results
+- The new specification failed before implementation with `LeaseFenceTokenStale`, proving cleanup
+  retried release using fence 2 after persisted expiry advanced the fence to 3
+- Resource-admission, lease-sweeper, and issue-boundary specifications passed 159/159 after the fix
+- Focused Ruff format/lint, strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, and merge only if clean
+- Complete applicable real-service qualification and criterion-level merged-evidence reconciliation
+  before issue #21 closure
+
+### Blockers
+- PostgreSQL, MySQL, MariaDB, Elasticsearch, and OpenSearch qualification remains unavailable
+  locally, and the corresponding GitHub Actions jobs have failed before executing any step
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean checkpoint
+  `7110ee07fe586c1e5fe9c26e6326284458cd7560`
+- Python passed 2,991 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `3c92c939ba046b8023b012d8e9eab16d80c248c0fdd4e34973ed7cc770987525`; wheel SHA-256
+  `c5162637a6126d99b7846847cbeecd80155d7a55b1f0402ce93f1c3dc817e7cd`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #069 - Fail-Closed Worker Lane Admission
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local safety repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, workflow
+  runs, and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Invalid worker lanes reached resource admission before the queue driver's canonical identifier
+  validation, allowing an avoidable privileged capacity side effect before rejection
+
+### Outputs
+- Worker admission now validates a requested lane before retained-permit cleanup or the resource
+  gate can perform side effects
+- Added an intended-failure regression proving an invalid lane leaves admission, queue contents,
+  and delivery attempts untouched
+
+### Verified Results
+- The new specification failed before implementation because no exception was raised and the
+  admission gate was called
+- The regression passed after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 280/280
+- Focused Ruff and strict mypy passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow has a failed job record but zero steps and no retrievable job log; the
+  local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-066
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `03f9b7fd12eda0411c73d14eb94ba5b5c24091d6`
+- Python passed 2,992 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `596f219d6e5a6006bdf2c58a7a80f0c6500c37b6bf3eb424d5630567c9f1d4eb`; wheel SHA-256
+  `cacb3a4862d0e5a49a2bb87367cbd2ef43474d4a20c010f1154196cd8e8a8f4b`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #070 - Fail-Closed Worker Capacity Facts
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local safety repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, workflow
+  runs, and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- The public fenced-resource admission boundary trusted caller-supplied active-job and concurrency
+  facts, allowing negative or boolean values to reach privileged lease acquisition
+
+### Outputs
+- Fenced resource admission now rejects negative or boolean active-job counts and non-positive or
+  boolean maximum-concurrency values before capacity or lease processing
+- Added intended-failure regressions proving all four malformed fact classes leave the lease
+  repository untouched
+
+### Verified Results
+- All four new cases failed before implementation because no validation error was raised
+- The complete resource-admission unit file passed 25/25 after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 284/284
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- An additional test-module mypy invocation reported two pre-existing annotation errors at
+  `tests/unit/test_worker_resource_admission.py:588` and `:597`; no test-module mypy pass is claimed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow has a failed job record but zero steps and no retrievable job log; the
+  local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-067
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `7e476741507fccf6954f94d398933b9367d10a82`
+- Python passed 2,996 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.08% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `9df080bc10bf4e0260189bf2c6db695c1e4a0121032b553861de3172b38bffb3`; wheel SHA-256
+  `127f62bc1f377d7947fb660dd395c8f73bed8fbd7bde240f4b7e2a1566ac5961`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #071 - Terminal Resource-Permit Release Boundary
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local concurrency repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, workflow
+  runs, and thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Permit release excluded the owned renewal coordinator but allowed a concurrent direct `renew()`
+  to advance the fence after terminal cleanup had captured its persisted lease
+
+### Outputs
+- Permit renewal now rejects calls after release begins, before any lease-service transition
+- Added a deterministic intended-failure race proving release retains its fence and reconciles
+  without retaining the permit
+
+### Verified Results
+- The new race failed before implementation because renewal was accepted after release began
+- The complete resource-admission unit file passed 26/26 after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 285/285
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow still has a failed job record with zero executed steps and no job log;
+  the local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-068
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `d4ef28d482fe5b975cb15729b31e776f7595e60e`
+- Python passed 2,997 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.10% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `63ca755440b030ef978b59e6bdc1afa0c6bf737f2b9ce32aecaa2ee6dfe64606`; wheel SHA-256
+  `256558559fb3124dbf19fb869d88bd160b529978d84d3f6132ccf49f428f880a`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #072 - Uncertain Renewal-Coordinator Startup Cleanup
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local lifecycle repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR at published head
+  `4a42d9dc4988a2258858298b1a14da23578a6856`
+- Permit construction propagated `Thread.start()` failure without stopping a renewal coordinator
+  that had actually started before reporting an uncertain result
+
+### Outputs
+- Permit construction now signals stop and joins a renewal thread with an assigned identity before
+  propagating startup failure
+- Simultaneous startup and thread-cleanup errors retain both causes
+- Added a real-thread intended-failure regression proving no coordinator survives the failed
+  admission and the activated lease is reconciled
+
+### Verified Results
+- The new regression failed before implementation because the renewal thread remained alive
+- The complete resource-admission unit file passed 27/27 after implementation
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 286/286
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- Each real-service workflow still has a failed job record with zero executed steps and no job log;
+  the local runtime has none of the five required services or URLs
+- The unattended operator hold prohibits publication, review-thread mutation, merge, and closure
+
+### Related References
+- SPEC-069
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `2e15b64039ef137721ee5855c5554ee748645db8`
+- Python passed 2,998 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `954cbf7f1a3a00eb8fb5a6d5ca0691b7f1b1043ab1b4ef104cfcf77f4f0b504e`; wheel SHA-256
+  `ccdbf775f5848b5b098e5d146a6edbac6e9d6b49c95f94da076406eb4268ea67`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #073 - Uncertain Resource-Lease Activation Cleanup
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local capacity-containment repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open PRs, issue-named branches, ownership, and
+  thread-aware review state
+- Issue #177's unattended hold remains active; PR #206 remains the only open PR
+- Lease activation cleanup reused the reservation fence after an activation could have committed
+  and advanced the persisted fence before reporting an uncertain failure
+
+### Outputs
+- Failed activation cleanup now reloads the persisted lease and continues from its actual state
+- Added an intended-failure regression proving a committed activation cannot strand active
+  capacity after the activation result becomes uncertain
+
+### Verified Results
+- The regression failed before implementation with a two-cause exception group: the original
+  activation error and `LeaseFenceTokenStale` from cleanup using fence one against fence two
+- The target regression passed after implementation
+- The complete resource-admission unit file passed 28/28
+- Worker kernel, fenced-resource-admission, and issue-boundary suites passed 287/287
+- Focused Ruff format/lint, production strict mypy, and `git diff --check` passed
+- The locked aggregate, package, and governance gates remain to be run from the clean checkpoint;
+  no aggregate pass is claimed yet
+
+### Remaining Work
+- Run and record the clean exact-head locked aggregate
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Under direct supervision, publish the accumulated checkpoint, resolve repaired review findings,
+  obtain a fresh exact-head independent review, merge if clean, and reconcile all four acceptance
+  criteria against immutable merged evidence before closure
+
+### Blockers
+- The local runtime has none of the five required services or URLs, so the configured real-service
+  profiles cannot presently qualify those integrations
+- The unattended operator hold prohibits autonomous publication, review-thread mutation, merge,
+  and closure
+
+### Related References
+- SPEC-070
+- Issue #177
+- Issue #21
+- PR #206
+
+### Validation Addendum
+- The locked aggregate completed successfully from clean implementation checkpoint
+  `155c815e5937ae0af43a493a1ad96f3fe7e47733`
+- Python passed 2,999 executed tests with 52 explicitly configured real-service profiles skipped;
+  total branch coverage passed at 90.09% against the unchanged 90% requirement
+- Node passed 9/9; governance passed 36/36 including the append-only check; Ruff format/lint,
+  strict mypy, package validation, and release validation passed
+- Package hashes: sdist SHA-256
+  `03ae0d5a6c3a5e83953e85a74c9ae5230535a5de03c1be0be7408ebb6511817b`; wheel SHA-256
+  `ca5df8a9b727c7adba5a3f5e6cf7ee1e0bdfa346a51d8b0eebc653115a448b13`
+- The 52 service-profile skips remain skips. No real-service qualification, publication, merge,
+  issue acceptance, or closure is claimed
+
+---
+
+## Run #074 - Operator Revocation and Renewal Race
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local lifecycle repair; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, issue comments, open pull-request search,
+  issue-named branches, ownership, and thread-aware review state
+- Issue #177's unattended operator hold remains active; PR #206 remains open and issue #21 remains
+  assigned to the maintainer and Copilot
+- The two unresolved PR review findings are already implemented in the accumulated local branch;
+  their exact regressions passed 2/2
+- All 52 configured real-service profiles were invoked and skipped because none of the five
+  required service URLs, containers, or local service daemons is available
+
+### Outputs
+- Permit cleanup now accepts the stale renewal fence caused specifically by an authoritative
+  operator revocation after reconciling the persisted revoked lease
+- Unrelated renewal failures remain observable after revoked-lease reconciliation
+- Reused one shared dormant-thread test double instead of duplicating coordinator scaffolding
+
+### Verified Results
+- The revocation/renewal regression failed before implementation with `LeaseFenceTokenStale` after
+  the lease had already reconciled, then passed after implementation
+- The fail-closed companion regression failed while unrelated renewal failures were over-broadly
+  suppressed, then passed after suppression was restricted to `LeaseFenceTokenStale`
+- Target regressions passed 2/2; the resource-admission file passed 30/30; worker kernel,
+  resource-admission, and issue-boundary suites passed 289/289
+- Exact implementation checkpoint: `7e389f308b8c3e35706e313740495d1085a2620d`
+- Locked aggregate passed: 3,001 executed Python tests, 52 explicit real-service skips, and 90.06%
+  total branch coverage against the unchanged 90% requirement
+- Node route gate passed 9/9; governance passed 36/36; Ruff format/lint, strict mypy, release
+  validation, package build, and package smoke validation passed
+- Package hashes: sdist SHA-256
+  `c6dcfa57ef61d5c9d5d44fd4bd691e5b475e53acf5fe6e0395c9dc085aaf4935`; wheel SHA-256
+  `2b3d7412f80465ba19bb41ace3e930fae5b7c231e55b8c668b8b87bb6a4bd57b`
+
+### Remaining Work
+- Restore execution for the five real-service workflows or provide reachable PostgreSQL, MySQL,
+  MariaDB, Elasticsearch, and OpenSearch service URLs, then run the 52 configured profiles
+- Publish the accumulated checkpoint only through the repository's supervised path, reconcile the
+  two stale review findings against the published exact head, and obtain a fresh independent review
+- Merge only a bounded non-closing slice while issue acceptance remains incomplete; close issue #21
+  only after criterion-level merged evidence and applicable qualification exist
+
+### Blockers
+- No PostgreSQL, MySQL, MariaDB, Elasticsearch, or OpenSearch endpoint or daemon is available in
+  this runtime; the 52 profiles therefore remain skips, not passes or failures
+- The unattended operator hold prohibits autonomous publication, review-thread mutation, merge,
+  status mutation, and closure
+
+### Related References
+- SPEC-071
+- Issue #177
+- Issue #21
+- PR #206
+
+---
+
+## Run #075 - Long-Job Control-Plane Evidence
+**Date**: 2026-08-19
+**Agent**: Codex supervised bounded runner
+**Status**: Seven-TODO contract slice implemented; issue #21 remains open
+
+### Inputs
+- Re-read issue #177, issue #21, and all issue #21 comments; the seven TODOs are the seven
+  recommended long-job control-plane additions in issue comment `5052086506`
+- Preserved #49 ownership of durable DAG and checkpoint state; this slice carries and validates
+  worker-side evidence without claiming an authoritative workflow engine
+- Reused the existing admission, cooperative-cancellation, fenced-lease, stale-worker recovery,
+  per-job isolation, and bounded telemetry implementations
+
+### Outputs
+- Added immutable workflow/run/node/checkpoint coordinates and persisted them losslessly through
+  relational queue job tags, while retaining compatibility with legacy tag records
+- Added progress snapshots for units, bytes, active unit, update time, stable blocked reason, and
+  optional evidence-backed ETA ranges
+- Added ETA lower/upper bounds with observed throughput, bounded assumptions, confidence, and
+  freshness; unknown ETA remains `None` and zero-duration estimates fail closed
+- Added exact checkpoint compatibility evidence over schema, runtime, and verified artifact digest
+- Added bounded CPU, RAM, VRAM, storage, queue-wait, runtime, retry, and saturation telemetry
+  projection with fixed cardinality buckets
+
+### Verified Results
+- Tests-only commit: `f6642cf20e2988035499271a3a83b391c5886448`
+- Implementation commit: `ce029e723dd9ceac0a2096b24ad38d07535a083a`
+- Validation-boundary commit: `e6953baeaa8804756886791844a4427ab020ea09`
+- Focused queue/worker regression set passed 259/259; long-job and queue-driver set passed 76/76
+- Exact clean-head locked aggregate passed 3,020 executed Python tests with 52 explicitly
+  configured real-service profiles skipped; total branch coverage passed at 90.07%
+- Node route gate passed 9/9; governance passed 36/36; Ruff format/lint, strict mypy, release
+  validation, package build, and package smoke validation passed
+- Package hashes: sdist SHA-256
+  `d8dbb827600b7a10a214280d620ac353f0b184411f061ef98f834be39720deeb`; wheel SHA-256
+  `c7019c71d2ce8b60c0d8e568b64db4bbd022d2f51dab1881bdc102f7988191aa`
+
+### Remaining Work
+- Obtain a fresh independent review and publish/merge only through the supervised path
+- Restore the five real-service workflows or provide reachable service URLs, then qualify the 52
+  configured profiles on the exact publishable head
+- Keep issue #21 open until every acceptance criterion has merged, criterion-mapped evidence and
+  every material review finding is disposed
+
+### Blockers
+- The 52 PostgreSQL, MySQL, MariaDB, Elasticsearch, and OpenSearch profiles remain environment
+  skips, not passes or failures
+- The unattended operator hold still prohibits autonomous publication, review-thread mutation,
+  merge, status mutation, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206
+
+---
+
+## Run #076 - Isolated Long-Job Observation Registry
+**Date**: 2026-08-19
+**Agent**: Codex unattended bounded runner
+**Status**: Bounded local control-plane implementation; issue #21 remains open
+
+### Inputs
+- Refreshed issue #177, issue #21, PR #206, open pull requests, issue-named branches, ownership,
+  and thread-aware review state
+- The unattended hold remains active; PR #206 remains open at published head `4a42d9d`
+- The two unresolved PR findings are already repaired on the accumulated local branch and no new
+  review finding was present
+
+### Outputs
+- Added a bounded thread-safe registry for immutable long-job progress and resource observations
+- Keyed observations by complete workflow, run, node, and checkpoint identity to prevent state
+  leakage between equal nodes in different runs
+- Made progress updates monotonic across observation time, completed units, completed bytes, and
+  declared totals; invalid transitions fail closed
+- Made capacity explicit and fail closed until the caller deliberately forgets a terminal run
+
+### Verified Results
+- Tests-only commit: `6640ef0e06e37ea28ea626933908e4b09e31c7e9`
+- Implementation commit: `1ac538509687eff59a9aafc2041b5526a6e13db8`
+- Focused queue, worker, resource-admission, and long-job suites passed 277/277
+- Exact clean-head locked aggregate passed 3,024 executed Python tests with 52 explicit
+  real-service skips and 90.03% total branch coverage
+- Node route gate passed 9/9; governance passed 36/36; Ruff format/lint, strict mypy, release
+  validation, package build, and package smoke validation passed
+- Package hashes: sdist SHA-256
+  `1c51612dd74f82e6d5ee441457b5ce4c4ce79f1d1959c0d9ea4d03eac1ed4c40`; wheel SHA-256
+  `1cd7ab9e476636fce2f89ca204cd7e926881c0d0cc9c3bedae220d8b11cb548f`
+
+### Remaining Work
+- Publish only through the supervised path, reconcile the two stale review threads against the
+  published exact head, and obtain fresh independent review
+- Restore the five real-service workflows or provide reachable service URLs, then qualify the 52
+  configured profiles
+- Keep issue #21 open until all four criteria have merged criterion-mapped evidence
+
+### Blockers
+- The 52 PostgreSQL, MySQL, MariaDB, Elasticsearch, and OpenSearch profiles remain environment
+  skips, not passes or failures
+- The unattended operator hold prohibits autonomous publication, review-thread mutation, merge,
+  status mutation, and closure
+
+### Related References
+- Issue #177
+- Issue #21
+- PR #206

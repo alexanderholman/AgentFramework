@@ -3102,3 +3102,1057 @@ inference, and expose durable progress for work that can take ten minutes or lon
 ### Output References
 - Added: `docs/agentframework-v1.md`
 - Runtime implementation and release evidence: in progress
+
+
+---
+
+## [DEC-055] Separate Host Resource Admission from Queue Reservation
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex under direct operator instruction
+
+### Context
+The queue worker already bounded concurrency and queue reservations, while issue #46 supplied a
+separate host-resource lease lifecycle. Issue #21 still required an explicit resource-admission
+boundary. Reserving a job before determining host capacity would consume a delivery attempt and
+could create renewal and settlement work for a job that was never eligible to execute.
+
+### Decision
+1. Add a narrow `WorkerAdmissionGate` protocol to the queue worker kernel.
+2. Evaluate the gate outside the worker condition lock and before calling the queue driver.
+3. Pass only bounded scheduling facts: lane, active-job count, and maximum concurrency.
+4. Require an exact boolean result and fail closed on exceptions or malformed values.
+5. Reacquire the worker condition and recheck shutdown, drain, and concurrency before reserving.
+6. Keep lease creation, authorization, persistence, renewal, and reconciliation outside the queue
+   kernel; adapters may project their current admissibility into this gate without making the
+   worker a second resource manager.
+
+### Consequences
+**Positive:**
+- Capacity denial does not consume an attempt or temporarily remove a job from its queue.
+- Resource policy can be injected without coupling queue contracts to one lease backend.
+- Concurrent drain and shutdown decisions remain authoritative after a gate allows admission.
+
+**Negative:**
+- The gate sees a snapshot and cannot itself reserve capacity atomically; a production adapter
+  must use its own fenced lease or admission primitive.
+- Denial currently shares the worker's ordinary no-work polling path and does not yet expose a
+  distinct operator metric.
+
+### Output References
+- Updated: `src/af/queue/worker.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_worker.py`
+- Related: issues #21 and #46
+
+---
+
+## [DEC-056] Retain Reservation Generations Across Dead-Letter Replay
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex under direct operator instruction
+
+### Context
+The relational queue already retained terminal jobs but offered no supported inspection or replay
+path. Re-dispatching the same message conflicts with its stable primary key, while deleting and
+reinserting it could reset the fencing generation and make an old settlement capability meaningful
+again.
+
+### Decision
+1. Keep dead-letter recovery on the durable relational driver where terminal state is authoritative.
+2. Expose bounded, deterministically ordered inspection with a redacted public representation.
+3. Replay by one conditional transaction that clears terminal and ownership state and resets only
+   the delivery-attempt series.
+4. Preserve `reservation_generation` across replay so the next reservation receives a strictly
+   newer fencing token.
+5. Fail closed unless exactly one currently terminal record is selected and updated.
+
+### Consequences
+- Operators can inspect and recover failed work without direct SQL or payload leakage through logs.
+- Replayed work receives its configured retry budget again without reviving stale ownership tokens.
+- This slice intentionally does not add transport or CLI authorization for recovery operations.
+
+### Output References
+- Updated: `src/af/queue/contracts.py`, `src/af/queue/database.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_drivers.py`
+- Related: issue #21
+
+## [DEC-059] Make Every Resource-Lease Transition an Exact-Fence Compare-and-Swap
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner
+
+### Context
+The resource-lease application service previously read a lease and then unconditionally saved its
+replacement. Two actors could therefore transition the same fence successfully, and a token from
+the future was accepted because validation rejected only lower values. A worker permit cannot
+truthfully own capacity if its capability can be overwritten or predicted.
+
+### Decision
+1. Add atomic insert and compare-and-swap operations to the lease repository boundary.
+2. Require the provided fencing value to equal the repository's current value exactly.
+3. Build immutable replacements and persist them only when the expected fence still owns the row.
+4. Treat a lost compare-and-swap race as a stale-fence failure and report the current fence when it
+   can be observed.
+5. Bind worker permits to authorization evidence, carry the newest fence through renewal, and
+   release then reconcile on worker settlement.
+6. Keep this checkpoint on the in-memory reference repository; durable cross-process capacity
+   accounting remains separate work and is not claimed here.
+
+### Consequences
+- Duplicate lease identities cannot overwrite existing capacity ownership.
+- Concurrent use of one fence has one winner, and neither stale nor future capabilities can mutate
+  the lease.
+- The queue worker now has a concrete reference adapter for the held-permit lifecycle.
+- A durable repository and aggregate capacity accounting are still required before distributed
+  production qualification.
+
+### Output References
+- Updated: `src/af/domain/resources.py`, `src/af/application/resource_leases.py`,
+  `src/af/infrastructure/resource_leases.py`, `src/af/application/worker_resource_admission.py`
+- Tested by: `tests/unit/test_worker_resource_admission.py`,
+  `tests/integration/test_resource_leases.py`, `tests/unit/test_queue_worker.py`
+- Related: issues #21 and #46
+
+---
+
+## [DEC-058] Make Resource Admission a Held Capability, Not a Boolean Snapshot
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner
+
+### Context
+The first resource-admission slice consulted policy before reservation but returned only a boolean.
+A boolean can reject overload, but it cannot prove that capacity remains owned while a delivery is
+reserved and executed. Connecting issue #46's fenced leases directly to that snapshot would create
+a check-then-act race and could leak capacity on empty queues or exceptional settlement paths.
+
+### Decision
+1. Extend the admission result with a narrow `WorkerAdmissionPermit` release capability while
+   retaining strict literal booleans for policy-only gates.
+2. Acquire before queue reservation, transfer ownership to the admitted delivery, and release after
+   its terminal settlement.
+3. Release immediately on empty queues and every post-gate refusal or reservation failure.
+4. Treat malformed permits as fail-closed pre-reservation errors.
+5. Preserve simultaneous delivery and release failures in a `BaseExceptionGroup`.
+6. Keep lease acquisition, fencing, authorization, renewal, and backend persistence in an adapter;
+   the queue kernel owns only the permit lifecycle.
+
+### Consequences
+- A production adapter can hold real capacity rather than reporting a stale eligibility snapshot.
+- Boolean gates remain backward compatible.
+- The next slice must supply the concrete fenced lease adapter and prove renewal/release behavior.
+
+### Output References
+- Updated: `src/af/queue/worker.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_worker.py`
+- Related: issues #21 and #46
+
+---
+
+## [DEC-057] Bind Worker Tags to Existing Envelope Security Context
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner
+
+### Context
+Issue #21 requires correlation, tenant-safe, agent, task, and capability identifiers on jobs.
+Treating tags as an arbitrary string map would let routing metadata conflict with the signed or
+policy-evaluated envelope and would make payload leakage and unbounded metric cardinality likely.
+
+### Decision
+1. Add an immutable `QueueJobTags` contract rather than an unrestricted mapping.
+2. Permit agent, task, and capability identifiers only in canonical bounded form.
+3. Require correlation and opaque tenant references to equal the envelope's existing policy or
+   telemetry context; provide a payload-blind derivation constructor.
+4. Redact every tag value from representations and keep identifiers out of low-cardinality worker
+   metric attributes.
+5. Persist a canonical bounded JSON representation beside the envelope in the relational queue,
+   with a nullable compatibility migration for existing tables.
+6. Preserve tags across dead-letter recovery and preserve monotonically increasing reservation
+   generations.
+
+### Consequences
+- Handlers and authorized recovery code receive stable worker identities after restart and replay.
+- Tags cannot silently create a second tenant or correlation authority.
+- Arbitrary user labels remain outside this contract until they have an explicit bounded and
+  authorization-aware design.
+
+### Output References
+- Updated: `src/af/queue/contracts.py`, `src/af/queue/database.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_drivers.py`
+- Related: issue #21
+
+---
+
+## [DEC-060] Recycle Only Worker-Owned Connections After Queue Settlement
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner
+
+### Context
+Issue #21 requires connection recycling for long-lived workers. AF managers already implement
+capability re-verification and `purge()` for lazy reconstruction, but the worker had no lifecycle
+point that invoked that contract. Purging application-shared managers from a concurrent job would
+also risk closing connections still used by another delivery.
+
+### Decision
+1. Add a synchronous `WorkerConnectionRecycler` port to the worker kernel.
+2. Invoke it only after the reserved delivery has settled, preventing a cleanup failure from
+   silently converting an acknowledged job into a retry.
+3. Keep the delivery registered as active and retain its resource permit until recycling finishes,
+   so graceful shutdown waits for the entire cleanup boundary.
+4. Surface recycler failures to stop the affected worker loop while preserving any delivery and
+   permit-release failures.
+5. Provide `OwnedManagerConnectionRecycler` as the concrete bridge to existing manager `purge()`
+   methods, attempting all configured managers.
+6. Require composition roots to pass only managers owned exclusively by that worker kernel;
+   application-shared concurrent managers are outside this adapter's safe contract.
+
+### Consequences
+- Long-lived workers can rebuild verified backend connections between deliveries without duplicating
+  manager-specific disposal logic.
+- A cleanup failure is visible and stops continued polling, while already settled queue state is
+  not rewritten.
+- Shutdown cannot close the queue driver while the recycler or permit release is still running.
+- Backend-specific manager ownership and optimization registration remain follow-up composition
+  work; this slice does not claim every backend is wired or certified.
+
+### Output References
+- Updated: `src/af/queue/worker.py`, `src/af/queue/runtime.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_worker.py`, `tests/unit/test_queue_worker_runtime.py`
+- Related: issue #21
+
+---
+
+## [DEC-061] Supervise Fresh Runtime Generations With a Fail-Closed Restart Budget
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner
+
+### Context
+The owned runtime already stopped sibling threads after an exception, but a kernel loop could return
+without a shutdown request and be mistaken for health. Deployment code also had no reusable policy
+for replacing a failed runtime, and replacing one before its kernel closed could overlap queue,
+lease, or connection ownership.
+
+### Decision
+1. Treat an unexpected worker-loop return as the same fatal infrastructure boundary as an exception.
+2. Add a blocking, code-controlled `WorkerSupervisor` around factories for complete
+   `WorkerRuntime` generations.
+3. Use explicit maximum restarts, restart delay, liveness polling, shutdown timeout, and external
+   stop event rather than hidden global configuration or unbounded retry.
+4. Close every failed generation before replacement; a cleanup timeout or kernel-close failure
+   consumes no restart and terminates the supervisor fail closed.
+5. Preserve the chronological failure history and expose generation and completed-restart counts.
+6. Keep OS process spawning, signal translation, stale-heartbeat fencing, and real-service crash
+   qualification outside this bounded slice instead of presenting thread generations as process
+   isolation.
+
+### Consequences
+- A deployment entrypoint can run deterministic supervision without duplicating retry and cleanup
+  rules.
+- A silently vanished worker can no longer leave a runtime reporting `running`.
+- Restart storms are bounded and cleanup uncertainty cannot create overlapping ownership.
+- A follow-on slice must provide the process adapter and crash/restart evidence before issue #21's
+  supervision/isolation scope can be considered complete.
+
+### Output References
+- Updated: `src/af/queue/runtime.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_worker_runtime.py`
+- Related: issue #21
+
+---
+
+## [DEC-062] Compose Worker Supervisors Inside Spawned Children
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner
+
+### Context
+Runtime-generation supervision bounds failures within one interpreter, but it does not isolate
+worker threads, managers, connection pools, or catastrophic interpreter exits from the parent.
+Forking an already active application would copy unsafe thread and connection state, while forceful
+termination on routine shutdown could abandon reservations and fenced resource permits.
+
+### Decision
+1. Add a one-shot `SpawnWorkerProcess` that always uses Python's `spawn` context by default.
+2. Pass a supervisor factory across the process boundary and invoke it only in the child, preserving
+   fresh runtime, kernel, scope, and manager composition.
+3. Generalize the supervisor stop input to a structural `WorkerStopSignal` implemented by both
+   thread and multiprocessing events.
+4. Install explicit child-local `SIGTERM` and `SIGINT` handlers that set the shared stop signal, and
+   restore previous handlers even when supervision fails.
+5. Keep parent shutdown cooperative and bounded; report a timeout without automatically calling
+   `terminate()` or `kill()`.
+6. Preserve PID and exit code as inspectable evidence and translate nonzero/missing exits to sticky
+   queue-process failure state.
+
+### Consequences
+- Worker composition no longer needs to inherit a live parent interpreter's mutable runtime state.
+- Normal service signals flow through the same cancellation, release, drain, and close boundaries as
+  programmatic shutdown.
+- Operators retain authority over destructive process escalation after a cooperative timeout.
+- Parent-level crash replacement, heartbeat/fence reconciliation, and real backend qualification
+  remain follow-on work and issue #21 remains open.
+
+### Output References
+- Added: `src/af/queue/process.py`
+- Updated: `src/af/queue/runtime.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_worker_process.py`, `tests/unit/test_queue_worker_runtime.py`
+- Related: issue #21
+
+---
+
+## [DEC-063] Restart Only After the Prior Child Is Observably Dead
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner
+
+### Context
+The spawn adapter established a fresh interpreter boundary but deliberately remained one-shot. A
+parent reconciler is needed to replace an unexpectedly exited child. Process creation can also fail
+after launching a child, so merely observing a startup exception is not proof that creating another
+generation is safe.
+
+### Decision
+1. Add a blocking, parent-level `WorkerProcessSupervisor` around factories for complete
+   `SpawnWorkerProcess` generations.
+2. Treat unexpected clean exit and nonzero exit as process loss when shutdown was not requested.
+3. Bound restart count, delay, liveness watch, and cooperative retirement explicitly.
+4. Retire each failed child before replacement and require `alive == False` as the minimum
+   process-generation no-overlap proof.
+5. If startup or cleanup fails while the child may still be alive, preserve the failure and stop
+   without invoking the factory again.
+6. Keep restart delay responsive to the external stop signal and preserve chronological failure,
+   generation, restart, and terminal-state evidence.
+7. Do not interpret process death as clearance of durable leases or resource permits; stale work
+   requires backend-visible heartbeat and fencing rules before another process can safely settle or
+   renew it.
+
+### Consequences
+- Parent deployments can replace crashed worker processes without unbounded restart loops.
+- A partial launch cannot silently create overlapping child process generations.
+- Normal external shutdown remains cooperative and prevents a delayed replacement.
+- Process-generation non-overlap does not yet prove cross-process resource ownership safety; stale
+  heartbeat fencing and real-service crash recovery remain required for issue #21.
+
+### Output References
+- Updated: `src/af/queue/process.py`, `src/af/queue/__init__.py`
+- Tested by: `tests/unit/test_queue_worker_process.py`
+- Related: issue #21
+
+---
+
+## [DEC-064] Reuse Durable Reservation Fences and Reject Late Resource Heartbeats
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The database queue already persists and atomically rotates a reservation generation, worker-owner
+identity, and per-renewal acquisition identity. Its transitions reject expired and superseded
+handles, but that safety had only driver-level and fake-worker evidence. Separately, resource-lease
+renewal validated state, authorization, and fence while allowing an `active` record to renew after
+its deadline, making a missed resource heartbeat recoverable by the stale owner.
+
+### Decision
+1. Keep the database reservation capability as the authoritative work fence across worker-process
+   generations; do not introduce a competing process-local generation authority.
+2. Add cross-layer recovery coverage in which a paused worker misses renewal, a fresh driver takes
+   over and completes the delivery, and the predecessor then resumes.
+3. Reject resource-lease renewal when the persisted expiry is less than or equal to the application
+   clock, before constructing or persisting any replacement.
+4. Report the expired heartbeat as an `active -> expired` transition failure while leaving explicit
+   expiry and reconciliation to their existing lifecycle operations.
+5. Keep durable aggregate capacity accounting, automatic leaked-lease reconciliation, and
+   real-service/physical-host crash qualification as follow-on evidence.
+
+### Consequences
+- A delayed resource heartbeat can no longer revive its ownership after the deadline.
+- Queue renewal and settlement remain guarded by one durable compare-and-swap authority.
+- The SQLite recovery specification demonstrates the intended two-worker boundary but cannot be
+  claimed passing until the environment's native SQLite SIGBUS is resolved.
+- Issue #21 remains open for cross-process capacity/reconciliation and remaining control-plane work.
+
+### Output References
+- Updated: `src/af/application/resource_leases.py`
+- Tested by: `tests/unit/test_worker_resource_admission.py`,
+  `tests/integration/test_queue_worker_recovery.py`
+- Related: issue #21
+
+---
+
+## [DEC-065] Put Aggregate Lease Admission Behind One Repository Decision
+**Date**: 2026-08-17
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+Per-request validation prevented one lease from exceeding its declared budget, but creation still
+used an unconditional unique insert. Two workers could therefore reserve quantities that were each
+valid in isolation while exceeding the shared resource budget in aggregate. Performing a list and
+then an insert in the application would preserve the same race and could not be made safe across
+processes by an application lock.
+
+### Decision
+1. Replace lease creation's raw insert with a `reserve` repository port that returns an explicit
+   admitted, duplicate, capacity-exceeded, or concurrency-exceeded disposition.
+2. Define `reserved` and `active` records with the same complete `ResourceIdentity` as the
+   capacity-consuming set.
+3. Require each repository to calculate aggregate use and insert the candidate within one atomic
+   operation, while preserving exact availability and concurrency evidence on rejection.
+4. Translate the result in `ResourceLeaseService` to existing typed AF failures; do not leak a
+   persistence-specific exception into the application contract.
+5. Implement the reference behavior under the in-memory repository's lock and explicitly retain
+   the durable transactional adapter as follow-on issue #21 work.
+
+### Consequences
+- Competing same-process reservations cannot overcommit quantity or concurrency through the normal
+  lease service.
+- The repository port now makes the isolation requirement explicit for a future SQL or other
+  durable adapter instead of allowing a check-then-insert implementation.
+- This slice does not survive process restart, coordinate independent processes, sweep leaked
+  leases, or qualify a real backend; issue #21 remains open.
+
+### Output References
+- Updated: `src/af/domain/resources.py`, `src/af/application/resource_leases.py`,
+  `src/af/infrastructure/resource_leases.py`
+- Tested by: `tests/unit/test_worker_resource_admission.py`
+- Related: issue #21
+
+### DEC-065 Verification Addendum
+- A review probe demonstrated that candidate-only limits allowed a second caller to widen an active
+  identity's budget. Aggregate admission now uses the minimum applicable quantity and concurrency
+  limits from the candidate and every capacity-consuming record, and reports the effective limit.
+
+---
+
+## [DEC-066] Certify Durable Lease Admission on SQLite Before Generalizing Dialects
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The atomic repository port made aggregate admission explicit, but its lock-backed reference state
+was lost on restart and could not coordinate independent workers. AF's generic relational port
+exposes transactions but does not yet declare a portable serializable-write or identity-lock
+capability. A nominally generic repository could therefore pass on SQLite while retaining a
+check-then-insert race on a different database isolation level.
+
+### Decision
+1. Add an explicitly named `SQLiteLeaseRepository` rather than claiming cross-dialect safety.
+2. Reuse `SQLiteDriver` and its `BEGIN IMMEDIATE` writer boundary so aggregate read, non-widening
+   limit calculation, and insert form one database transaction across connections and processes.
+3. Persist an exact deterministic JSON lease snapshot plus the bounded scalar columns required for
+   transactional admission, filtering, ordering, and exact-fence compare-and-swap.
+4. Treat malformed durable state and impossible row counts as sanitized integrity failures.
+5. Require each future relational implementation to demonstrate an equivalent isolation strategy
+   before it can share the repository contract or production qualification.
+
+### Consequences
+- SQLite workers now retain lease/fence state across process and application restart.
+- Competing spawned processes cannot both reserve one full SQLite-backed resource budget.
+- The adapter is usable through the existing application service without introducing SQLite types
+  into the domain or application layers.
+- Automatic leaked-lease expiry/reconciliation, configured bootstrap selection, and other database
+  dialects remain follow-on issue #21 work.
+
+### Output References
+- Added: `src/af/infrastructure/sqlite_resource_leases.py`
+- Tested by: `tests/integration/test_sqlite_resource_leases.py`
+- Related: issue #21
+
+---
+
+## [DEC-067] Keep Durable Resource Leases Explicit and Lifecycle-Owned
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The SQLite lease repository proved durable, cross-connection admission, but application bootstrap
+still always supplied an in-memory repository unless a caller manually constructed an adapter.
+Reusing the task database implicitly would couple unrelated schemas and could silently change
+deployment behavior. Constructing a SQLite repository without lifecycle-owned driver registration
+would also leave connection cleanup outside AF's boot and shutdown guarantees.
+
+### Decision
+1. Add a typed `memory | sqlite` lease-backend setting and keep `memory` as the default.
+2. Require an explicit filesystem path for the SQLite selection and reject `:memory:` as a false
+   durable configuration.
+3. Register the configured SQLite driver and repository in application scope, eagerly resolve the
+   repository during boot, and let the existing resource registry close the driver on shutdown.
+4. Preserve caller injection as the highest-precedence, externally owned repository composition.
+5. Keep this selector specific to the certified SQLite adapter; do not advertise unproven
+   cross-dialect durability.
+
+### Consequences
+- Deployments can now select restart-safe resource leases without custom bootstrap code.
+- Existing deployments retain in-memory behavior until they opt in.
+- Configuration and schema failures surface during application boot, and owned drivers participate
+  in normal shutdown.
+- Expiry sweeping, leaked-capacity reconciliation, other database providers, and real-service
+  qualification remain issue #21 work.
+
+### Output References
+- Updated: `src/af/config.py`, `src/af/bootstrap.py`
+- Tested by: `tests/unit/test_config.py`, `tests/unit/test_bootstrap_lifecycle.py`
+- Related: issue #21
+
+---
+
+## [DEC-068] Reconcile Leaked Capacity as Two Durable Fenced Transitions
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+Durable admission preserved capacity and fences across crashes, but a crashed owner could leave a
+`reserved` or `active` row consuming capacity indefinitely. Deleting the row or changing it directly
+to `reconciled` would erase the lifecycle boundary and make it harder to prove that the obsolete
+owner was fenced before capacity became reusable. A single read followed by an unconditional save
+would also overwrite a renewal that won the race with the sweeper.
+
+### Decision
+1. Give every finite reservation an explicit deadline and reject activation at the exact deadline.
+2. Retain a derived deadline for older persisted reservations that predate the explicit field.
+3. Use the repository's existing exact-fence compare-and-swap to persist `reserved|active ->
+   expired`, rotating the fence before capacity is released.
+4. Persist `expired -> reconciled` as a second compare-and-swap so a crash between transitions is
+   visible and recoverable by a later sweep.
+5. Return distinct expired, reconciled, and conflicted IDs; a lost race is evidence, not success.
+6. Keep the orchestration in the application service so all repository implementations retain the
+   same lifecycle semantics and SQLite remains only the durable adapter.
+
+### Consequences
+- A stale active owner or reservation holder cannot use its previous fence after a successful sweep.
+- Durable capacity becomes reusable without deleting audit history.
+- An interrupted reconciliation is idempotently finishable after restart.
+- The public sweep still requires startup/periodic runtime composition and observable cadence; this
+  slice does not claim an autonomous production reaper or real-service qualification.
+
+### Output References
+- Updated: `src/af/application/resource_leases.py`
+- Tested by: `tests/integration/test_sqlite_resource_leases.py`
+- Related: issue #21
+
+---
+
+## [DEC-069] Own Lease Maintenance in the Blocking Worker Supervisor Loop
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+Run #051 made leaked-capacity sweeping safe and restartable, but it remained a manually invoked
+application operation. A separate daemon reaper would introduce another lifecycle, shutdown race,
+and failure channel outside the code-owned worker generation. Running maintenance inside individual
+worker threads could duplicate sweeps by concurrency count and couple reconciliation to delivery
+availability.
+
+### Decision
+1. Add a synchronous `WorkerSupervisorMaintenance` boundary to the blocking supervisor.
+2. Run maintenance before each runtime factory call and periodically from the same supervisor loop.
+3. Treat maintenance failure like generation failure: retire any running generation before restart,
+   or fail closed when the restart budget is exhausted.
+4. Reject asynchronous or value-returning maintenance so the supervisor never leaks awaitables or
+   silently ignores an unintended result.
+5. Adapt `ResourceLeaseService.sweep_expired_leases` through a dedicated application object that
+   retains exact local evidence and publishes only bounded low-cardinality telemetry.
+6. Keep telemetry best-effort while keeping the reconciliation operation authoritative and
+   fail-closed.
+
+### Consequences
+- Expired capacity is reconciled before a supervised worker generation can admit work and continues
+  to be swept at an explicit operator-visible cadence.
+- Maintenance shares the supervisor's existing stop, restart, and safe-generation-retirement rules;
+  no independent background thread or shutdown owner is introduced.
+- Operators can inspect exact last-run evidence locally without placing lease IDs into telemetry.
+- Deployment-specific supervisor construction must still provide the maintenance adapter, host
+  scope, cadence, and telemetry publisher; real-service qualification remains outstanding.
+
+### Output References
+- Updated: `src/af/application/resource_leases.py`, `src/af/queue/runtime.py`, `src/af/queue/__init__.py`
+- Added: `tests/unit/test_resource_lease_sweeper.py`
+- Tested by: `tests/unit/test_queue_worker_runtime.py`
+- Related: issue #21
+
+---
+
+## [DEC-070] Compose Lease Maintenance at the Application Boundary
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The supervisor could safely run lease maintenance, but deployments still had to construct its
+adapter manually. That left the most important production wiring optional at precisely the boundary
+where a host supplies worker runtimes and stop signals. Starting a worker automatically during
+application boot would instead hide thread/process ownership inside the service container and make
+shutdown ordering harder to prove.
+
+### Decision
+1. Bind an application-scoped `WorkerSupervisorFactory` to the boot-owned resource-lease service.
+2. Configure only the maintenance scope and cadence centrally, with an all-host 30-second default
+   and a finite positive one-day maximum.
+3. Have every factory call create a fresh maintenance adapter and inject it into the supervisor.
+4. Keep runtime construction, telemetry destination, restart tuning, and the stop signal explicit at
+   the deployment call site.
+5. Do not start maintenance, threads, processes, or worker runtimes merely by booting the application.
+
+### Consequences
+- Hosts using the application composition surface cannot silently forget crashed-lease recovery.
+- Each supervisor keeps independent last-run evidence while sharing the authoritative lease service.
+- Distributed deployments can reduce sweep contention with an exact host scope, while the safe
+  compatibility default reconciles every due lease.
+- A concrete executable/daemon entrypoint and applicable real-service qualification remain outside
+  this bounded slice; failed-job administration and other issue #21 control-plane work also remain.
+
+### Output References
+- Added: `src/af/application/worker_supervision.py`
+- Updated: `src/af/config.py`, `src/af/bootstrap.py`
+- Added: `tests/unit/test_worker_supervision_composition.py`
+- Tested by: `tests/unit/test_config.py`
+- Related: issue #21
+
+---
+
+## [DEC-071] Promote Failed-Job Operations Through Verified Queue Capabilities
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The relational queue driver already retained terminal deliveries and implemented deterministic
+inspection plus transactional replay, but those operations were only reachable by downcasting to
+the concrete driver. That bypassed `QueueManager` connection selection and capability verification,
+so an operator-facing control plane could not use them without coupling to one backend.
+
+### Decision
+1. Add separate dead-letter inspection and replay capabilities to `QueueFeature`.
+2. Route both operations through `QueueManager.connection(..., requires=...)`.
+3. Keep the operations optional on the base driver protocol and validate the runtime structural
+   boundary plus every returned control-plane value.
+4. Certify both capabilities in the database registration and bump its manifest version to 1.4.0.
+5. Leave the sync driver without either capability so unsupported control-plane calls fail closed.
+
+### Consequences
+- Hosts can inspect and replay failed jobs through a named, backend-neutral manager surface.
+- Capability evidence now distinguishes normal retry support from terminal-delivery administration.
+- Existing relational ordering, filtering, redaction, atomic replay, and fencing behavior is reused
+  rather than reimplemented in the application layer.
+- Authorization/presentation policy, queue-wait alerts, and broader failed-job telemetry remain
+  follow-on issue #21 work.
+
+### Output References
+- Updated: `src/af/queue/manager.py`, `src/af/queue/database.py`,
+  `src/af/queue/database_manager.py`
+- Tested by: `tests/unit/test_queue_drivers.py`
+- Related: issue #21
+
+---
+
+## [DEC-072] Make Queue-Wait Alerts Edge-Triggered Per Worker Generation
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The worker already emitted a low-cardinality wait alert whenever a reserved delivery exceeded its
+configured threshold. A sustained backlog therefore produced one alert per delivery, creating an
+unbounded alert-rate failure exactly when the queue was unhealthy, and operators received no
+explicit recovery transition.
+
+### Decision
+1. Retain one boolean wait-alert state inside each worker kernel.
+2. Emit only on the normal-to-exceeded and exceeded-to-recovered edges.
+3. Serialize transition decisions through the worker's existing lifecycle condition so concurrent
+   delivery completions cannot produce duplicate edges.
+4. Keep lag and threshold bucketed, and add only the bounded `exceeded|recovered` status.
+5. Keep telemetry best-effort and independent from acknowledgement, retry, rejection, release, and
+   cleanup semantics.
+6. Reset alert state with each fresh supervised kernel generation rather than introducing durable
+   alert state into queue transport or workflow persistence.
+
+### Consequences
+- A long backlog generates one actionable breach event rather than one log per delivery, followed
+  by one recovery event when queue wait returns within policy.
+- Fresh worker generations establish their own observed baseline and can report a still-active
+  breach without relying on stale process-local state.
+- This closes the bounded wait-alert policy gap but does not certify external alert routing,
+  retention, dashboards, or real-service queue behavior.
+
+### Output References
+- Updated: `src/af/queue/worker.py`
+- Tested by: `tests/unit/test_queue_worker.py`
+- Related: issue #21
+
+---
+
+## [DEC-073] Authorize Failed-Job Control Before Projection or Mutation
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+`QueueManager` now routes failed-job inspection and replay through verified capabilities, but direct
+manager calls still return the full recoverable `QueueJob`. Exposing those methods from CLI, HTTP,
+or another operator interface would permit existence disclosure and payload access unless every
+adapter independently implemented the same authorization and redaction rules.
+
+### Decision
+1. Add one transport-neutral `QueueControlService` in the application layer.
+2. Reuse the central default-deny `Gate`, require operator-evaluation scope, and authorize the exact
+   connection plus lane/message resource before touching the queue backend.
+3. Return dedicated payload-blind inspection and replay projections rather than passing
+   `QueueDeadLetter` or `QueueJob` objects to adapters.
+4. Retain the exact allowing `GateDecision` alongside each result for downstream evidence.
+5. Emit only bucketed success/failure telemetry with safe execution-context projection.
+6. Preserve backend failures and queue semantics exactly; telemetry remains optional evidence.
+
+### Consequences
+- Future operator adapters have one shared boundary that prevents authorization-after-disclosure and
+  accidental envelope serialization.
+- Queue transport and verified driver code remain independent of principals, policies, and interface
+  presentation concerns.
+- An operator interface and deployment policy still must explicitly compose this service; its
+  existence does not authorize unauthenticated access or claim a finished control-plane product.
+
+### Output References
+- Added: `src/af/application/queue_control.py`
+- Added: `tests/unit/test_queue_control.py`
+- Related: issue #21
+
+---
+
+## [DEC-074] Pin Worker Optimization to Verified Backend Evidence
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+Issue #21 requires backend-specific optimization and connection recycling. The worker kernel and
+runtime already accepted explicit concurrency and cadence values, but no production boundary tied
+those values to a verified backend. Naively resolving a driver from an application-owned manager
+would also let `WorkerKernel.close()` dispose that driver behind the manager, leaving stale ownership
+state, while recycling the queue manager after each job would close the active transport itself.
+
+### Decision
+1. Add a worker-generation factory that accepts a factory for a fresh queue manager rather than a
+   shared manager instance.
+2. Resolve reservation capability and current evidence before selecting an optimizer by exact driver
+   identity.
+3. Require providers to return a fully bounded explicit runtime optimization; do not supply an
+   allegedly optimal backend default without profiler or wizard evidence.
+4. Provide a pinned provider that binds profiled values to backend identity, the complete capability
+   binding, and a profiling-artifact digest.
+5. Add an injectable worker driver-close boundary and route generation shutdown through
+   `QueueManager.close()` so ownership and disposal remain coherent.
+6. Reuse `OwnedManagerConnectionRecycler` only for explicitly worker-owned handler-side managers and
+   reject all queue managers from that collection.
+7. Reject pre-resolved managers without closing them; after accepting a fresh manager, roll it back
+   on every later composition failure and retain cleanup failures.
+
+### Consequences
+- Backend tuning cannot silently survive changes to driver artifacts, dependency graph, connection
+  configuration, deployment profile, or policy.
+- A future profiler/wizard can emit explicit pinned profiles without duplicating worker construction
+  or claiming that generic defaults are benchmark results.
+- Each worker generation has one coherent queue-manager lifecycle, while per-delivery handler
+  connection recycling cannot terminate its queue transport.
+- Bootstrap policy still must supply concrete manager factories and qualified profiles for each
+  deployed backend; this slice does not claim real-service performance qualification.
+
+### Output References
+- Added: `src/af/application/worker_generation.py`
+- Updated: `src/af/framework/managers.py`, `src/af/queue/worker.py`,
+  `src/af/queue/runtime.py`, `src/af/queue/__init__.py`
+- Added: `tests/unit/test_worker_generation.py`
+- Related: issue #21
+
+---
+
+## [DEC-075] Never Re-Pin Worker Tuning During Bootstrap
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The generation factory can enforce an exact pinned capability binding, but bootstrap could defeat
+that protection by constructing a new pin from whichever backend happened to be configured at
+startup. The database manager binding also covered only the queue driver declaration while the
+actual SQLite path was closed over by its factory. A profile could therefore survive a storage
+change without evidence that its safety or performance had been re-qualified.
+
+### Decision
+1. Keep worker bootstrap disabled unless both a durable SQLite queue path and a profile artifact are
+   explicitly configured.
+2. Load a small exact-schema JSON profile that already declares the complete qualified binding and
+   every bounded runtime value; compute its artifact digest but never generate its binding at boot.
+3. Add an optional storage-identity digest to the database queue registration and connection
+   configuration, and advance that registration contract to version 1.5.0.
+4. Derive the SQLite storage identity from the resolved target without placing its path in profile
+   or telemetry evidence.
+5. Build an inert manager during provider boot, compare its expected binding and backend to the
+   profile, and close it without resolving a driver or opening the database.
+6. Bind the application-scoped generation factory only after that comparison succeeds; retain the
+   fresh-manager and manager-owned shutdown rules from DEC-074.
+
+### Consequences
+- Changing a queue file, driver artifact, dependency environment, deployment profile, or policy now
+  invalidates the existing profile rather than silently blessing old tuning values.
+- Default AF applications incur no queue storage, profile I/O, or worker binding.
+- A profiler or wizard must deliberately emit a profile for the exact target it qualified. Building
+  that qualification and recording pipeline remains follow-on work.
+- This bootstrap is currently a durable SQLite implementation; other backends require their own
+  storage identity and real-service qualification before registration.
+
+### Output References
+- Added: `src/af/infrastructure/worker_optimization.py`
+- Updated: `src/af/config.py`, `src/af/bootstrap.py`,
+  `src/af/queue/database_manager.py`, `src/af/application/worker_generation.py`
+- Added: `tests/unit/test_worker_optimization_profile.py`
+- Updated: `tests/unit/test_config.py`, `tests/unit/test_queue_drivers.py`
+- Related: issue #21
+
+---
+
+## [DEC-076] Keep Qualification Evidence Inside the Runtime Profile
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The exact-binding bootstrap from DEC-075 could consume a hand-authored version-one profile. Although
+that profile was pinned to backend and storage identity, it contained no evidence provenance,
+freshness, sample count, real-service declaration, or safety findings. Treating a local benchmark or
+generic default as production qualification would therefore remain possible outside bootstrap.
+
+### Decision
+1. Introduce an immutable worker qualification record for externally measured evidence and the
+   exact runtime values selected from it; the record itself does not execute benchmarks.
+2. Supersede the profile document with an exact version-two schema that embeds evidence and
+   environment digests, observation and expiry, sample count, a real-service flag, and explicit
+   correctness, settlement, and reservation-loss counts.
+3. Refuse to record or load a profile unless it declares real-service evidence, remains fresh, and
+   has zero findings in all three safety categories.
+4. Record canonical documents through a flushed same-directory mode-0600 temporary file and atomic
+   replacement so a failed promotion cannot corrupt the last usable profile.
+5. Retain the external qualification digest separately from the exact profile-file digest on the
+   pinned provider.
+6. Do not turn AF's existing deterministic benchmark exports into production certification; those
+   exports deliberately report `certifies_production == False`. Applicable real-service runners
+   and operator policy remain follow-on work.
+
+### Consequences
+- Bootstrap can reject legacy, stale, synthetic, or failure-bearing profiles rather than trusting
+  opaque tuning values.
+- Profile evidence is self-describing and traceable while remaining bound to the concrete backend,
+  dependencies, configuration, deployment, policy, and queue storage identity.
+- The recorder provides the safe output boundary for a future wizard/profiler but does not choose
+  an objective, run services, authenticate evidence, or establish issue acceptance by itself.
+- Existing local version-one profile fixtures must migrate to version two; the feature remains
+  opt-in and no released default behavior is changed.
+
+### Output References
+- Added: `src/af/application/worker_qualification.py`
+- Updated: `src/af/infrastructure/worker_optimization.py`,
+  `src/af/application/worker_generation.py`
+- Added: `tests/unit/test_worker_optimization_qualification.py`
+- Related: issue #21
+
+---
+
+## [DEC-077] Make Worker Trade-Offs Explicit Before Selection
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+DEC-076 established a safe recording boundary for one externally qualified profile, but did not
+decide among multiple valid profiles. Silently choosing a fastest, cheapest, or most conservative
+candidate would encode an operator trade-off as an undocumented framework default. Comparing
+candidates measured against different backends or environments would also produce a misleading
+ranking even if each profile were independently valid.
+
+### Decision
+1. Represent the wizard's performance, safety, and cost priorities as integer percentages totalling
+   exactly one hundred; do not infer priorities from deployment type or user identity.
+2. Accept externally normalized bounded indices for each candidate while keeping measurement and
+   normalization outside the selector.
+3. Reject the entire comparison unless all candidates are fresh, real-service, zero-finding
+   qualifications for the same exact backend, capability binding, and environment.
+4. Use deterministic integer weighted scoring and document a safety-first tie order followed by
+   performance, cost efficiency, and evidence identity.
+5. Produce an audit digest over all policy inputs, exact candidate qualification/runtime values,
+   and the selected evidence digest so later composition can record the decision without relying on
+   input order or mutable presentation state.
+6. Keep authorization, evidence authentication, profiler execution, profile recording, and
+   operator presentation as separate boundaries.
+
+### Consequences
+- A wizard can express Alexander's intended performance/safety/cost trade-off without the framework
+  pretending there is one universally best runtime.
+- Unsafe candidates cannot win through a high performance or cost score; they are ineligible before
+  objective weighting.
+- Replaying the same candidate set and priorities yields the same selection and digest.
+- A future protected operator service still must authorize the request, obtain trustworthy
+  normalized measurements, record the selected profile and decision digest, and qualify applicable
+  real services.
+
+### Output References
+- Updated: `src/af/application/worker_qualification.py`
+- Added: `tests/unit/test_worker_optimization_selection.py`
+- Related: issue #21
+
+---
+
+## [DEC-078] Authorize Worker Optimization Before Candidate Inspection
+**Date**: 2026-08-18
+**Status**: Accepted
+**Decision Maker**: Codex bounded runner under operator hold
+
+### Context
+The deterministic selector could compare safe qualified candidates, but callers still had to join
+authorization, target binding, selection, and recording themselves. That allowed an interface to
+inspect candidate evidence or promote a profile without proving operator authority for the exact
+backend environment.
+
+### Decision
+1. Add an application-layer `WorkerOptimizationControlService` behind the central `Gate`.
+2. Require the caller to declare the canonical driver and environment digest being authorized.
+3. Authorize that exact target before candidate iteration so default denial leaks no candidate
+   information and causes no recorder effect.
+4. Reuse the existing selector and reject any selected target that differs from the authorized
+   declaration.
+5. Inject a synchronous recorder receiving the complete selection and priorities, preserving the
+   selection digest without coupling the application layer to a filesystem or presentation.
+6. Treat every asynchronous or value-returning recorder as a contract violation and propagate
+   recorder failures without issuing success evidence.
+
+### Consequences
+- A wizard or operator interface now has one fail-closed promotion boundary instead of manually
+  composing policy and selection.
+- Pure selection remains deterministic and infrastructure-neutral; recording storage and evidence
+  authentication remain separate adapters.
+- This slice does not fabricate normalized measurements or qualify any real service, and issue #21
+  remains open for those gates and independent review.
+
+### Output References
+- Added: `src/af/application/worker_optimization_control.py`
+- Added: `tests/unit/test_worker_optimization_control.py`
+- Related: SPEC-062 and issue #21
+
+---
+
+## [DEC-079] Authenticate Raw Measurements Before Deriving Optimization Indices
+**Date**: 2026-08-19
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner under operator hold
+
+### Context
+The authorized promotion boundary could still only consume candidates containing externally
+supplied normalized indices. It could not prove who produced the underlying measurements or derive
+the indices itself, so exposing that type directly at an operator interface would allow callers to
+substitute arbitrary scores.
+
+### Decision
+1. Add a separate application-layer ingress protected by exact driver/environment authorization
+   before measurement iteration or authentication.
+2. Authenticate canonical measurement documents with configured per-issuer HMAC-SHA256 keys of at
+   least 256 bits and bind the computed payload digest to qualification evidence identity.
+3. Accept only current, zero-finding real-service qualifications matching the authorized target.
+4. Derive performance from completed jobs per elapsed time, safety confidence from the number of
+   zero-finding samples, and cost efficiency from completed jobs per exact cost using rational and
+   integer arithmetic only.
+5. Normalize each dimension against the best authenticated observation to the selector's existing
+   zero-to-one-million range; treat authenticated zero cost explicitly rather than inventing a
+   denominator.
+6. Keep service execution, key provisioning and rotation, operator presentation, selection,
+   recording, and real-service qualification as separate boundaries.
+
+### Consequences
+- Protected interfaces no longer need to trust caller-supplied optimization indices.
+- Tampering with a runtime value, qualification field, issuer, raw count, or evidence identity
+  invalidates authentication before a candidate is returned.
+- This adapter can verify measurement documents produced by applicable service runners, but its
+  unit tests do not themselves establish that any service was contacted or qualified.
+- Issue #21 remains open for actual applicable real-service runs, exact-head independent review,
+  publication, and criterion-level closure reconciliation.
+
+### Output References
+- Added: `src/af/application/worker_evidence_ingress.py`
+- Added: `tests/unit/test_worker_evidence_ingress.py`
+- Related: SPEC-063 and issue #21
+
+---
+
+## [DEC-080] Drive Worker Heartbeats Independently of Job Execution
+**Date**: 2026-08-19
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner under operator hold
+
+### Context
+The worker accepted a heartbeat interval and updated a private timestamp only when attempting
+admission. That value was neither externally observable nor refreshed while a synchronous handler
+was running, so a healthy long-running job and a stalled worker were indistinguishable to the
+control plane.
+
+### Decision
+1. Start one daemon heartbeat coordinator for the lifetime of `WorkerKernel.run_loop` when a
+   telemetry publisher is configured.
+2. Emit structured `HEALTH` signals immediately and on the configured interval from the coordinator,
+   independently of queue polling and handler execution.
+3. Derive liveness/readiness from a lock-protected worker snapshot and expose only bounded active-job,
+   saturation, and lifecycle buckets.
+4. Set live freshness to two heartbeat intervals and emit an explicit stopped/not-ready terminal
+   signal when the polling lifecycle exits.
+5. Preserve telemetry as optional evidence: construction and delivery failures cannot alter worker
+   execution or settlement.
+
+### Consequences
+- Operators can detect stale heartbeat evidence while a legitimate long-running job remains visibly
+  live, busy, or saturated.
+- The signal is adapter-neutral and can be forwarded to existing telemetry sinks without exposing
+  message or tenant identifiers.
+- This slice does not provide a durable remote heartbeat store or real-service qualification and
+  does not by itself complete issue #21.
+
+### Output References
+- Updated: `src/af/queue/worker.py`
+- Updated: `tests/unit/test_queue_worker.py`
+- Related: SPEC-064 and issue #21
+
+---
+
+## [DEC-081] Separate Worker Duration From Wall Time
+**Date**: 2026-08-19
+**Status**: Accepted
+**Decision Maker**: Codex unattended bounded runner under operator hold
+
+### Context
+Worker runtime was calculated by subtracting two UTC wall-clock readings. NTP correction, manual
+clock changes, or virtualization drift could therefore make a successful job appear to have a
+negative, zero, or greatly inflated duration, corrupting both cumulative metrics and optimization
+measurements.
+
+### Decision
+1. Measure delivery duration with Python's monotonic clock around the admitted execution,
+   settlement, and cleanup lifecycle.
+2. Continue using the injected aware UTC clock for observation timestamps, queue lag, idle policy,
+   and evidence identity where civil time is required.
+3. Feed one monotonic elapsed value to cumulative runtime statistics and bounded delivery telemetry.
+4. Preserve every existing settlement and cleanup path without making metric publication
+   authoritative over queue correctness.
+
+### Consequences
+- Runtime remains stable across backward and forward civil-time corrections.
+- Qualification and optimization adapters receive trustworthy duration inputs when sourced from
+  worker statistics.
+- This slice does not create real-service evidence or complete issue #21 publication and closure
+  gates.
+
+### Output References
+- Updated: `src/af/queue/worker.py`
+- Updated: `tests/unit/test_queue_worker.py`
+- Related: SPEC-065 and issue #21

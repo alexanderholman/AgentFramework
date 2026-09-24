@@ -21,7 +21,14 @@ from af.queue.contracts import (
     QueueOperationError,
     QueueReservation,
 )
-from af.queue.runtime import ContainerJobHandlerFactory, WorkerRuntime, WorkerRuntimeState
+from af.queue.runtime import (
+    ContainerJobHandlerFactory,
+    OwnedManagerConnectionRecycler,
+    WorkerRuntime,
+    WorkerRuntimeState,
+    WorkerSupervisor,
+    WorkerSupervisorState,
+)
 from af.queue.worker import WorkerKernel
 
 _NOW = datetime(2026, 8, 9, 12, tzinfo=UTC)
@@ -83,8 +90,8 @@ def _running(runtime: WorkerRuntime, *, release: Event | None = None) -> Iterato
 
 
 def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() -> None:
-    observations: list[tuple[int, int, int, object]] = []
-    closed: list[int] = []
+    observations: list[tuple[object, object, int, object]] = []
+    closed: list[object] = []
 
     class Dependency:
         pass
@@ -96,7 +103,7 @@ def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() 
         def __call__(self, job: QueueJob) -> None:
             del job
             context = current_context()
-            observations.append((id(self), id(self._dependency), get_ident(), context))
+            observations.append((self, self._dependency, get_ident(), context))
             assert context.correlation_id == "correlation"
             assert context.causation_id == "cause"
             assert context.deadline == _NOW + timedelta(minutes=1)
@@ -111,7 +118,7 @@ def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() 
             with pytest.raises(PlatformError) as unavailable:
                 current_context()
             assert unavailable.value.reason is PlatformReason.CONTEXT_UNAVAILABLE
-            closed.append(id(self))
+            closed.append(self)
 
     root = Container()
     root.bind(Dependency, lambda _: Dependency(), scope=Scope.INVOCATION)
@@ -137,8 +144,8 @@ def test_container_job_handler_uses_fresh_job_scope_and_projects_safe_context() 
 
     assert scope_kinds == [InvocationKind.JOB, InvocationKind.JOB]
     assert [observation[2] for observation in observations] == [calling_thread, calling_thread]
-    assert observations[0][0] != observations[1][0]
-    assert observations[0][1] != observations[1][1]
+    assert observations[0][0] is not observations[1][0]
+    assert observations[0][1] is not observations[1][1]
     assert observations[0][3] is not observations[1][3]
     assert closed == [observations[0][0], observations[1][0]]
 
@@ -276,6 +283,49 @@ def test_container_job_handler_rejects_adapter_resolved_as_handler() -> None:
 
     with pytest.raises(TypeError, match="recursive"):
         adapter(_job())
+
+
+def test_owned_manager_connection_recycler_purges_every_manager() -> None:
+    lifecycle: list[str] = []
+
+    class Manager:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def purge(self) -> None:
+            lifecycle.append(self.name)
+
+    recycler = OwnedManagerConnectionRecycler(Manager("database"), Manager("cache"))
+
+    recycler.recycle()
+
+    assert lifecycle == ["database", "cache"]
+
+
+def test_owned_manager_connection_recycler_preserves_all_purge_failures() -> None:
+    lifecycle: list[str] = []
+    first_error = RuntimeError("database purge failed")
+    second_error = OSError("cache purge failed")
+
+    class Manager:
+        def __init__(self, name: str, error: BaseException) -> None:
+            self.name = name
+            self.error = error
+
+        def purge(self) -> None:
+            lifecycle.append(self.name)
+            raise self.error
+
+    recycler = OwnedManagerConnectionRecycler(
+        Manager("database", first_error),
+        Manager("cache", second_error),
+    )
+
+    with pytest.raises(BaseExceptionGroup) as captured:
+        recycler.recycle()
+
+    assert captured.value.exceptions == (first_error, second_error)
+    assert lifecycle == ["database", "cache"]
 
 
 class _Kernel:
@@ -1161,9 +1211,288 @@ def test_queue_public_api_exports_owned_runtime() -> None:
         WorkerRuntime,
         WorkerRuntimeKernel,
         WorkerRuntimeState,
+        WorkerSupervisor,
+        WorkerSupervisorMaintenance,
+        WorkerSupervisorState,
     )
 
     assert ContainerJobHandlerFactory is not None
     assert WorkerRuntime is not None
     assert WorkerRuntimeKernel is not None
     assert WorkerRuntimeState is not None
+    assert WorkerSupervisor is not None
+    assert WorkerSupervisorMaintenance is not None
+    assert WorkerSupervisorState is not None
+
+
+def test_runtime_marks_unexpected_kernel_return_as_worker_loss() -> None:
+    class ReturningKernel(_Kernel):
+        def run_loop(self, handler: object, **kwargs: Any) -> None:
+            del handler, kwargs
+            self.started += 1
+            self.all_started.set()
+
+    kernel = ReturningKernel()
+    runtime = WorkerRuntime(kernel, lambda job: None)
+
+    runtime.start()
+    assert runtime.wait(timeout=timedelta(seconds=1))
+
+    failure = runtime.failure
+    assert isinstance(failure, QueueOperationError)
+    assert failure.reason is PlatformReason.SHUTDOWN_FAILED
+    assert failure.stage == "queue.runtime.worker-exit"
+    assert runtime.state is WorkerRuntimeState.FAILED
+    assert kernel.drains == 1
+    with pytest.raises(QueueOperationError) as sticky:
+        runtime.close(timeout=timedelta(seconds=1))
+    assert sticky.value is failure
+
+
+def test_supervisor_restarts_failed_runtime_generation_within_budget() -> None:
+    worker_failure = RuntimeError("first generation failed")
+    first_kernel = _Kernel()
+    first_kernel.failures.append(worker_failure)
+    second_kernel = _Kernel()
+    runtimes = [
+        WorkerRuntime(first_kernel, lambda job: None),
+        WorkerRuntime(second_kernel, lambda job: None),
+    ]
+    factory_calls = 0
+
+    def runtime_factory() -> WorkerRuntime:
+        nonlocal factory_calls
+        runtime = runtimes[factory_calls]
+        factory_calls += 1
+        return runtime
+
+    stop = Event()
+    supervisor = WorkerSupervisor(
+        runtime_factory,
+        max_restarts=1,
+        watch_interval=timedelta(milliseconds=5),
+    )
+    failures: list[BaseException] = []
+
+    def supervise() -> None:
+        try:
+            supervisor.run(stop_event=stop)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=supervise)
+    thread.start()
+    try:
+        assert second_kernel.all_started.wait(timeout=1)
+        assert supervisor.state is WorkerSupervisorState.RUNNING
+        stop.set()
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+
+        assert failures == []
+        assert supervisor.state is WorkerSupervisorState.STOPPED
+        assert supervisor.generation_count == 2
+        assert supervisor.restart_count == 1
+        assert supervisor.failures == (worker_failure,)
+        assert first_kernel.closes == 1
+        assert second_kernel.closes == 1
+    finally:
+        stop.set()
+        if thread.ident is not None:
+            thread.join(timeout=1)
+
+
+def test_supervisor_runs_maintenance_before_workers_and_at_bounded_cadence() -> None:
+    lifecycle: list[str] = []
+    periodic = Event()
+
+    class Maintenance:
+        def run(self) -> None:
+            lifecycle.append(f"maintenance-{len(lifecycle) + 1}")
+            if lifecycle.count("worker-started") == 1:
+                periodic.set()
+
+    class ObservedKernel(_Kernel):
+        def run_loop(self, handler: object, **kwargs: Any) -> None:
+            lifecycle.append("worker-started")
+            super().run_loop(handler, **kwargs)
+
+    kernel = ObservedKernel()
+    stop = Event()
+    supervisor = WorkerSupervisor(
+        lambda: WorkerRuntime(kernel, lambda job: None),
+        maintenance=Maintenance(),
+        maintenance_interval=timedelta(milliseconds=5),
+        watch_interval=timedelta(milliseconds=5),
+    )
+    failures: list[BaseException] = []
+
+    def supervise() -> None:
+        try:
+            supervisor.run(stop_event=stop)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=supervise)
+    thread.start()
+    try:
+        assert kernel.all_started.wait(timeout=1)
+        assert periodic.wait(timeout=1)
+        stop.set()
+        thread.join(timeout=1)
+
+        assert not thread.is_alive()
+        assert failures == []
+        assert lifecycle[0] == "maintenance-1"
+        assert lifecycle.index("maintenance-1") < lifecycle.index("worker-started")
+        assert supervisor.maintenance_run_count >= 2
+        assert supervisor.maintenance_interval == timedelta(milliseconds=5)
+        assert supervisor.state is WorkerSupervisorState.STOPPED
+    finally:
+        stop.set()
+        if thread.ident is not None:
+            thread.join(timeout=1)
+
+
+def test_supervisor_fails_before_worker_creation_when_startup_maintenance_fails() -> None:
+    maintenance_failure = RuntimeError("resource reconciliation failed")
+    factory_calls = 0
+
+    class Maintenance:
+        def run(self) -> None:
+            raise maintenance_failure
+
+    def runtime_factory() -> WorkerRuntime:
+        nonlocal factory_calls
+        factory_calls += 1
+        return WorkerRuntime(_Kernel(), lambda job: None)
+
+    supervisor = WorkerSupervisor(runtime_factory, maintenance=Maintenance())
+
+    with pytest.raises(RuntimeError, match="resource reconciliation failed") as captured:
+        supervisor.run(stop_event=Event())
+
+    assert captured.value is maintenance_failure
+    assert factory_calls == 0
+    assert supervisor.generation_count == 0
+    assert supervisor.maintenance_run_count == 0
+    assert supervisor.state is WorkerSupervisorState.FAILED
+
+
+def test_supervisor_fails_closed_when_restart_budget_is_exhausted() -> None:
+    worker_failures = (RuntimeError("generation one"), OSError("generation two"))
+    kernels = [_Kernel(), _Kernel()]
+    for kernel, failure in zip(kernels, worker_failures, strict=True):
+        kernel.failures.append(failure)
+    runtimes = [WorkerRuntime(kernel, lambda job: None) for kernel in kernels]
+    factory_calls = 0
+
+    def runtime_factory() -> WorkerRuntime:
+        nonlocal factory_calls
+        runtime = runtimes[factory_calls]
+        factory_calls += 1
+        return runtime
+
+    supervisor = WorkerSupervisor(
+        runtime_factory,
+        max_restarts=1,
+        watch_interval=timedelta(milliseconds=5),
+    )
+
+    with pytest.raises(BaseExceptionGroup) as captured:
+        supervisor.run(stop_event=Event())
+
+    assert captured.value.message == "queue worker restart budget exhausted"
+    assert captured.value.exceptions == worker_failures
+    assert supervisor.failure is captured.value
+    assert supervisor.failures == worker_failures
+    assert supervisor.state is WorkerSupervisorState.FAILED
+    assert supervisor.generation_count == 2
+    assert supervisor.restart_count == 1
+    assert factory_calls == 2
+    assert [kernel.closes for kernel in kernels] == [1, 1]
+
+
+def test_supervisor_never_restarts_before_failed_generation_is_closed() -> None:
+    worker_failure = RuntimeError("generation failed")
+    kernel_close_failure = RuntimeError("kernel close failed")
+
+    class CloseFailingKernel(_Kernel):
+        def close(self, *, timeout: timedelta | None = None) -> None:
+            del timeout
+            self.closes += 1
+            raise kernel_close_failure
+
+    kernel = CloseFailingKernel()
+    kernel.failures.append(worker_failure)
+    runtime = WorkerRuntime(kernel, lambda job: None)
+    factory_calls = 0
+
+    def runtime_factory() -> WorkerRuntime:
+        nonlocal factory_calls
+        factory_calls += 1
+        if factory_calls > 1:
+            raise AssertionError("unsafe overlapping generation")
+        return runtime
+
+    supervisor = WorkerSupervisor(runtime_factory, max_restarts=2)
+
+    with pytest.raises(BaseExceptionGroup) as captured:
+        supervisor.run(stop_event=Event())
+
+    assert captured.value.message == "queue worker and kernel close both failed"
+    assert captured.value.exceptions == (worker_failure, kernel_close_failure)
+    assert supervisor.failure is captured.value
+    assert supervisor.failures == (captured.value,)
+    assert supervisor.state is WorkerSupervisorState.FAILED
+    assert supervisor.generation_count == 1
+    assert supervisor.restart_count == 0
+    assert factory_calls == 1
+    assert kernel.closes == 1
+
+
+def test_supervisor_stop_during_restart_delay_prevents_new_generation() -> None:
+    worker_failure = RuntimeError("generation failed")
+    kernel = _Kernel()
+    kernel.failures.append(worker_failure)
+    runtime = WorkerRuntime(kernel, lambda job: None)
+    factory_calls = 0
+
+    def runtime_factory() -> WorkerRuntime:
+        nonlocal factory_calls
+        factory_calls += 1
+        return runtime
+
+    stop = Event()
+    supervisor = WorkerSupervisor(
+        runtime_factory,
+        max_restarts=2,
+        restart_delay=timedelta(seconds=1),
+        watch_interval=timedelta(milliseconds=5),
+    )
+    failures: list[BaseException] = []
+
+    def supervise() -> None:
+        try:
+            supervisor.run(stop_event=stop)
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=supervise)
+    thread.start()
+    try:
+        assert _wait_until(lambda: kernel.closes == 1)
+        stop.set()
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+
+        assert failures == []
+        assert factory_calls == 1
+        assert supervisor.generation_count == 1
+        assert supervisor.restart_count == 0
+        assert supervisor.failures == (worker_failure,)
+        assert supervisor.state is WorkerSupervisorState.STOPPED
+    finally:
+        stop.set()
+        if thread.ident is not None:
+            thread.join(timeout=1)
