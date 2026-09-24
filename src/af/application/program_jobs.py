@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 from uuid import uuid4
 
 from af.framework.context import CancellationToken
@@ -31,13 +31,21 @@ class ProgramQueueDispatcher(Protocol):
 class ProgramJobService:
     """Submit bounded host programs to AF's configured durable queue."""
 
-    def __init__(self, queues: ProgramQueueDispatcher, events: JobEventRepository) -> None:
+    def __init__(
+        self,
+        queues: ProgramQueueDispatcher,
+        events: JobEventRepository,
+        results: ProgramJobResultRepository,
+    ) -> None:
         self._queues = queues
         self._events = events
+        self._results = results
 
     def submit(self, request: ProgramRequest, *, correlation_id: str | None = None) -> str:
         if not isinstance(request, ProgramRequest):
             raise TypeError("program job requires a ProgramRequest")
+        if request.environment is not None:
+            raise ValueError("durable program jobs do not accept raw environment overrides")
         job_id = str(uuid4())
         now = datetime.now(UTC)
         envelope = MessageEnvelope.create(
@@ -55,7 +63,6 @@ class ProgramJobService:
                 "working_directory": str(request.working_directory),
                 "timeout_seconds": request.budget.timeout.total_seconds(),
                 "max_output_bytes": request.budget.max_output_bytes,
-                "environment": dict(request.environment) if request.environment is not None else None,
             },
         )
         self._events.append(job_id, JobState.QUEUED, stage="queue.dispatch")
@@ -74,6 +81,9 @@ class ProgramJobService:
 
     def events_after(self, job_id: str, *, sequence: int = 0, limit: int = 100) -> list[JobEvent]:
         return self._events.list_after(job_id, sequence=sequence, limit=limit)
+
+    def result(self, job_id: str) -> ProgramJobResult | None:
+        return self._results.get(job_id)
 
 
 class ProgramJobHandler:
@@ -108,14 +118,13 @@ class ProgramJobHandler:
         cwd = payload.get("working_directory")
         timeout = payload.get("timeout_seconds")
         max_output = payload.get("max_output_bytes")
-        environment = payload.get("environment")
         if (
             not isinstance(argv, list)
             or any(type(value) is not str for value in argv)
             or type(cwd) is not str
             or type(timeout) not in {int, float}
             or type(max_output) is not int
-            or (environment is not None and not isinstance(environment, Mapping))
+            or set(payload) != {"argv", "working_directory", "timeout_seconds", "max_output_bytes"}
         ):
             raise ValueError("program job payload is invalid")
         request = ProgramRequest(
@@ -124,9 +133,6 @@ class ProgramJobHandler:
             budget=ProgramBudget(
                 timeout=timedelta(seconds=timeout),
                 max_output_bytes=max_output,
-            ),
-            environment=(
-                cast(dict[str, str], dict(environment)) if environment is not None else None
             ),
         )
         self._events.append(job_id, JobState.RUNNING, stage="program.execute")
