@@ -5,18 +5,18 @@ from pathlib import Path
 from threading import Barrier, Thread
 
 from af.infrastructure.database import Database
-from af.infrastructure.worker_evidence_replay import SqlAlchemyWorkerMeasurementReplayLedger
+from af.infrastructure.worker_evidence_replay import (\n    SqlAlchemyWorkerMeasurementReplayLedger,\n)
 
 _NOW = datetime(2026, 8, 19, tzinfo=UTC)
 _ISSUER = "qualification-runner"
 _DIGEST = "a" * 64
 
 
-def test_replay_ledger_persists_consumed_measurements_across_instances(tmp_path: Path) -> None:
+def test_replay_ledger_persists_consumed_measurements_across_instances(\n    tmp_path: Path,\n) -> None:
     url = f"sqlite:///{tmp_path / 'replays.sqlite3'}"
     first_db = Database(url)
     first = SqlAlchemyWorkerMeasurementReplayLedger(first_db)
-    assert first.consume_batch(((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW)
+    assert first.consume_batch(\n        ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW\n    )
     first_db.close()
 
     second_db = Database(url)
@@ -65,7 +65,7 @@ def test_replay_ledger_allows_only_one_concurrent_consumer() -> None:
     def consume() -> None:
         barrier.wait()
         outcomes.append(
-            ledger.consume_batch(((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW)
+            ledger.consume_batch(\n                ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW\n            )
         )
 
     workers = [Thread(target=consume) for _ in range(2)]
