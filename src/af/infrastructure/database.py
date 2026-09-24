@@ -72,6 +72,15 @@ class JobEventRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class WorkerMeasurementReplayRow(Base):
+    __tablename__ = "af_worker_measurement_replays"
+
+    issuer: Mapped[str] = mapped_column(String(127), primary_key=True)
+    evidence_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ProgramJobResultRow(Base):
     __tablename__ = "af_program_job_results"
 
