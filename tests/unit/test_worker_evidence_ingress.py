@@ -390,6 +390,7 @@ def test_ingress_rejects_invalid_composition(
         WorkerOptimizationMeasurementIngress(
             authenticator,  # type: ignore[arg-type]
             gate=gate,  # type: ignore[arg-type]
+            replay_ledger=_ReplayLedger(),
             clock=clock,  # type: ignore[arg-type]
         )
 
