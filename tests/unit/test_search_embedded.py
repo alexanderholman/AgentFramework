@@ -6,9 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 
-import pytest
-
 import af.search.embedded as embedded_module
+import pytest
 from af.framework.errors import PlatformReason
 from af.search.contracts import (
     ResourceEnvelope,
