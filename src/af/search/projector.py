@@ -73,6 +73,7 @@ class SearchProjectionDelivery:
     kind: SearchProjectionKind
     resource: ResourceEnvelope | None = None
     identity: ResourceIdentity | None = None
+    # Selects a SearchManager connection, not a logical index or alias.
     target_name: str | None = None
 
     def __post_init__(self) -> None:
