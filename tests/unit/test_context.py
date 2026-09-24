@@ -59,6 +59,21 @@ def test_context_values_are_frozen_and_validate_deadlines() -> None:
     assert "tenant-one" not in repr(value)
 
 
+def test_cancellation_and_completion_have_one_terminal_winner() -> None:
+    completed = CancellationToken()
+    effects: list[str] = []
+
+    assert completed.commit_completion(lambda: effects.append("completed"))
+    completed.cancel()
+    assert completed.cancelled is False
+    assert effects == ["completed"]
+
+    cancelled = CancellationToken()
+    cancelled.cancel()
+    assert not cancelled.commit_completion(lambda: effects.append("unexpected"))
+    assert effects == ["completed"]
+
+
 def test_cancellation_token_propagates_state_and_waiters() -> None:
     async def scenario() -> None:
         token = CancellationToken()
