@@ -71,7 +71,8 @@ class SqlAlchemyWorkerMeasurementReplayLedger(WorkerOptimizationMeasurementRepla
                     )
                 )
                 for issuer, digest, expires_at in normalized:
-                    if session.get(WorkerMeasurementReplayRow, (issuer, digest)) is not None:
+                    existing = session.get(WorkerMeasurementReplayRow, (issuer, digest))
+                    if existing is not None:
                         raise _ReplayDetected
                     session.add(
                         WorkerMeasurementReplayRow(
