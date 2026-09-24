@@ -8,7 +8,9 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
-__all__ = ("JobEvent", "JobEventRepository", "JobState")
+from af.framework.programs import ProgramResult
+
+__all__ = ("JobEvent", "JobEventRepository", "JobState", "ProgramJobResult", "ProgramJobResultRepository")
 
 _IDENTIFIER = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _STAGE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]{0,62}[a-z0-9])?$")
@@ -72,3 +74,25 @@ class JobEventRepository(Protocol):
     ) -> JobEvent: ...
 
     def list_after(self, job_id: str, *, sequence: int = 0, limit: int = 100) -> list[JobEvent]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramJobResult:
+    job_id: str
+    result: ProgramResult
+    finished_at: datetime
+
+    def __post_init__(self) -> None:
+        if type(self.job_id) is not str or _IDENTIFIER.fullmatch(self.job_id) is None:
+            raise ValueError("job_id must be a UUID")
+        if not isinstance(self.result, ProgramResult):
+            raise ValueError("result must be a ProgramResult")
+        if not isinstance(self.finished_at, datetime) or self.finished_at.utcoffset() is None:
+            raise ValueError("finished_at must be timezone-aware")
+        object.__setattr__(self, "finished_at", self.finished_at.astimezone(UTC))
+
+
+class ProgramJobResultRepository(Protocol):
+    def save(self, value: ProgramJobResult) -> None: ...
+
+    def get(self, job_id: str) -> ProgramJobResult | None: ...
