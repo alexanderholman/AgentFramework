@@ -46,12 +46,17 @@ def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None
     queue = RecordingQueue()
     service = ProgramJobService(queue, events, results)
     request = ProgramRequest(
-        argv=(sys.executable, "-c", "from pathlib import Path; Path('job-runs.txt').open('a').write('x'); print('job-output')"),
+        argv=(
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('job-runs.txt').open('a').write('x'); print('job-output')",
+        ),
         working_directory=tmp_path,
         budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
     )
 
     job_id = service.submit(request, correlation_id="phone-request-1")
+    assert queue.jobs[0].timeout is None
     assert queue.jobs[0].envelope.metadata.correlation_id == "phone-request-1"
     handler = ProgramJobHandler(AsyncSubprocessExecutor(), events, results)
     handler.invoke(queue.jobs[0], cancellation=CancellationToken())
@@ -100,7 +105,6 @@ def test_program_job_rejects_malformed_timeout_payload(tmp_path: Path) -> None:
 
     assert [event.state for event in service.events_after(job_id)] == [JobState.QUEUED]
     database.close()
-
 
 
 def test_timed_out_program_job_reports_budget_exhausted(tmp_path: Path) -> None:
