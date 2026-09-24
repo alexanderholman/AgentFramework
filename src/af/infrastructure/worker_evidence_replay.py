@@ -65,14 +65,12 @@ class SqlAlchemyWorkerMeasurementReplayLedger(WorkerOptimizationMeasurementRepla
             normalized.append((issuer, digest, expires_at.astimezone(UTC)))
         try:
             with self._database.sessions.begin() as session:
-                for issuer, digest, expires_at in normalized:
-                    session.execute(
-                        delete(WorkerMeasurementReplayRow).where(
-                            WorkerMeasurementReplayRow.issuer == issuer,
-                            WorkerMeasurementReplayRow.evidence_digest == digest,
-                            WorkerMeasurementReplayRow.expires_at <= normalized_now,
-                        )
+                session.execute(
+                    delete(WorkerMeasurementReplayRow).where(
+                        WorkerMeasurementReplayRow.expires_at <= normalized_now
                     )
+                )
+                for issuer, digest, expires_at in normalized:
                     if session.get(WorkerMeasurementReplayRow, (issuer, digest)) is not None:
                         raise _ReplayDetected
                     session.add(
