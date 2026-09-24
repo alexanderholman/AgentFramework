@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Barrier, Thread
 
 from af.infrastructure.database import Database
@@ -11,7 +12,7 @@ _ISSUER = "qualification-runner"
 _DIGEST = "a" * 64
 
 
-def test_replay_ledger_persists_consumed_measurements_across_instances(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_replay_ledger_persists_consumed_measurements_across_instances(tmp_path: Path) -> None:
     url = f"sqlite:///{tmp_path / 'replays.sqlite3'}"
     first_db = Database(url)
     first = SqlAlchemyWorkerMeasurementReplayLedger(first_db)
@@ -21,7 +22,9 @@ def test_replay_ledger_persists_consumed_measurements_across_instances(tmp_path)
     second_db = Database(url)
     second = SqlAlchemyWorkerMeasurementReplayLedger(second_db)
     try:
-        assert not second.consume_batch(((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW)
+        assert not second.consume_batch(
+            ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW
+        )
     finally:
         second_db.close()
 
@@ -46,7 +49,9 @@ def test_replay_ledger_allows_expired_evidence_to_be_consumed_again() -> None:
     try:
         assert ledger.consume_batch(((_ISSUER, _DIGEST, old_expiry),), now=_NOW)
         later = _NOW + timedelta(seconds=2)
-        assert ledger.consume_batch(((_ISSUER, _DIGEST, later + timedelta(hours=1)),), now=later)
+        assert ledger.consume_batch(
+            ((_ISSUER, _DIGEST, later + timedelta(hours=1)),), now=later
+        )
     finally:
         database.close()
 
@@ -59,7 +64,9 @@ def test_replay_ledger_allows_only_one_concurrent_consumer() -> None:
 
     def consume() -> None:
         barrier.wait()
-        outcomes.append(ledger.consume_batch(((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW))
+        outcomes.append(
+            ledger.consume_batch(((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW)
+        )
 
     workers = [Thread(target=consume) for _ in range(2)]
     try:
