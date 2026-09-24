@@ -28,6 +28,7 @@ __all__ = (
     "WorkerOptimizationMeasurement",
     "WorkerOptimizationMeasurementAuthenticator",
     "WorkerOptimizationMeasurementIngress",
+    "WorkerOptimizationMeasurementReplayLedger",
     "canonical_worker_measurement_payload",
 )
 
@@ -134,6 +135,17 @@ class WorkerOptimizationMeasurementAuthenticator(Protocol):
     def authenticate(self, measurement: WorkerOptimizationMeasurement) -> object: ...
 
 
+class WorkerOptimizationMeasurementReplayLedger(Protocol):
+    """Atomically consume signed evidence identities until their expiry."""
+
+    def consume_batch(
+        self,
+        entries: tuple[tuple[str, str, datetime], ...],
+        *,
+        now: datetime,
+    ) -> bool: ...
+
+
 class HmacWorkerMeasurementAuthenticator:
     """Authenticate canonical measurement documents with per-issuer HMAC-SHA256 keys."""
 
@@ -234,16 +246,20 @@ class WorkerOptimizationMeasurementIngress:
         authenticator: WorkerOptimizationMeasurementAuthenticator,
         *,
         gate: Gate,
+        replay_ledger: WorkerOptimizationMeasurementReplayLedger,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         if not isinstance(authenticator, WorkerOptimizationMeasurementAuthenticator):
             raise TypeError("worker measurement authenticator is invalid")
         if not isinstance(gate, Gate):
             raise TypeError("worker measurement ingress gate is invalid")
+        if not isinstance(replay_ledger, WorkerOptimizationMeasurementReplayLedger):
+            raise TypeError("worker measurement replay ledger is invalid")
         if not callable(clock):
             raise TypeError("worker measurement ingress clock must be callable")
         self._authenticator = authenticator
         self._gate = gate
+        self._replay_ledger = replay_ledger
         self._clock = clock
 
     def authenticate_and_normalize(
@@ -300,6 +316,17 @@ class WorkerOptimizationMeasurementIngress:
             if qualification.evidence_digest in evidence_digests:
                 raise InvalidProviderConfiguration("worker measurement evidence must be unique")
             evidence_digests.add(qualification.evidence_digest)
+
+        replay_entries = tuple(
+            (
+                measurement.issuer,
+                measurement.qualification.evidence_digest,
+                measurement.qualification.expires_at,
+            )
+            for measurement in available
+        )
+        if not self._replay_ledger.consume_batch(replay_entries, now=current):
+            raise InvalidProviderConfiguration("worker measurement evidence was replayed")
 
         performance = _ratio_indices(
             tuple(
