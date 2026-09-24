@@ -155,7 +155,6 @@ def test_program_job_records_dispatch_failure(tmp_path: Path) -> None:
             self.job = job
             raise RuntimeError("queue unavailable")
 
-
     queue = FailingQueue()
     service = ProgramJobService(queue, events, results)
     request = ProgramRequest(
