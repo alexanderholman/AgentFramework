@@ -147,6 +147,20 @@ class FencedResourceLeasePermit:
                 lease = self._lease
             persisted = self._service.get_lease(lease.id)
             externally_revoked = persisted.state is LeaseState.REVOKED
+            owned_token = lease.fence_token
+            persisted_token = persisted.fence_token
+            if (
+                isinstance(renewal_failure, LeaseFenceTokenStale)
+                and persisted.state is LeaseState.ACTIVE
+                and owned_token is not None
+                and persisted_token is not None
+                and persisted_token.value != owned_token.value
+            ):
+                # The persisted active lease belongs to a newer fencing generation.
+                # Relinquish this local permit without mutating the other owner's lease.
+                with self._lock:
+                    self._released = True
+                raise renewal_failure
             if persisted.state in {
                 LeaseState.EXPIRED,
                 LeaseState.RELEASED,
