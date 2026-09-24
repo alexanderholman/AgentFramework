@@ -24,6 +24,19 @@ NOW = datetime(2026, 8, 19, tzinfo=UTC)
 KEY = b"k" * 32
 
 
+class _ReplayLedger:
+    def __init__(self) -> None:
+        self._consumed: set[tuple[str, str]] = set()
+
+    def consume_batch(self, entries, *, now):  # type: ignore[no-untyped-def]
+        del now
+        keys = {(issuer, digest) for issuer, digest, _expiry in entries}
+        if len(keys) != len(entries) or keys & self._consumed:
+            return False
+        self._consumed.update(keys)
+        return True
+
+
 def _context() -> ExecutionContext:
     return ExecutionContext(
         principal=Principal("operator-1", "user", roles=("operator",)),
@@ -114,6 +127,7 @@ def _service(
         HmacWorkerMeasurementAuthenticator({"qualification-runner": KEY}),
         gate=_allowing_gate(requests),
         clock=lambda: NOW,
+        replay_ledger=_ReplayLedger(),
     )
 
 
@@ -126,6 +140,7 @@ def test_ingress_denies_before_measurement_iteration_or_authentication() -> None
         HmacWorkerMeasurementAuthenticator({"qualification-runner": KEY}),
         gate=Gate(policy_version="policy-v1", policies=()),
         clock=lambda: NOW,
+        replay_ledger=_ReplayLedger(),
     )
 
     with pytest.raises(PlatformError) as denied:
@@ -309,6 +324,15 @@ def test_ingress_rejects_asynchronous_or_value_returning_authenticators(kind: st
         )
 
 
+def test_ingress_rejects_replay_across_calls() -> None:
+    service = _service([])
+    measurement = _measurement()
+    kwargs = dict(context=_context(), driver_name="database", environment_digest="e" * 64)
+    service.authenticate_and_normalize((measurement,), **kwargs)
+    with pytest.raises(InvalidProviderConfiguration, match="replayed"):
+        service.authenticate_and_normalize((measurement,), **kwargs)
+
+
 def test_ingress_rejects_evidence_digest_drift_and_duplicate_documents() -> None:
     measurement = _measurement()
     drifted = replace(
@@ -374,6 +398,7 @@ def test_ingress_rejects_invalid_time_target_and_collection_boundaries() -> None
         HmacWorkerMeasurementAuthenticator({"qualification-runner": KEY}),
         gate=_allowing_gate([]),
         clock=lambda: datetime(2026, 8, 19),
+        replay_ledger=_ReplayLedger(),
     )
     with pytest.raises(InvalidProviderConfiguration, match="time"):
         invalid_clock.authenticate_and_normalize(
