@@ -34,6 +34,20 @@ class RecordingQueue:
         )
 
 
+class FailingQueue:
+    def __init__(self) -> None:
+        self.job: QueueJob | None = None
+
+    def dispatch(self, job: QueueJob, *, name: str | None = None) -> QueueDispatchReceipt:
+        self.job = job
+        raise RuntimeError("queue unavailable")
+
+
+class FailingExecutor:
+    async def execute(self, request: ProgramRequest) -> None:
+        raise RuntimeError("executor failed")
+
+
 def _dependencies(tmp_path: Path):
     database = Database(f"sqlite:///{tmp_path / 'program-jobs.sqlite3'}")
     events = SqlAlchemyJobEventRepository(database)
@@ -148,13 +162,6 @@ def test_program_job_rejects_environment_overrides(tmp_path: Path) -> None:
 def test_program_job_records_dispatch_failure(tmp_path: Path) -> None:
     database, events, results = _dependencies(tmp_path)
 
-    class FailingQueue:
-        job: QueueJob | None = None
-
-        def dispatch(self, job: QueueJob, *, name: str | None = None) -> QueueDispatchReceipt:
-            self.job = job
-            raise RuntimeError("queue unavailable")
-
     queue = FailingQueue()
     service = ProgramJobService(queue, events, results)
     request = ProgramRequest(
@@ -186,10 +193,6 @@ def test_program_job_records_executor_failure(tmp_path: Path) -> None:
             budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
         )
     )
-
-    class FailingExecutor:
-        async def execute(self, request: ProgramRequest) -> None:
-            raise RuntimeError("executor failed")
 
     handler = ProgramJobHandler(FailingExecutor(), events, results)
     with pytest.raises(RuntimeError, match="executor failed"):
