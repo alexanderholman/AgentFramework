@@ -161,9 +161,7 @@ class FencedResourceLeasePermit:
                     self._released = True
                 if renewal_failure is not None:
                     raise renewal_failure
-                raise LeaseFenceTokenStale(
-                    lease.id, persisted_token.value, owned_token.value
-                )
+                raise LeaseFenceTokenStale(lease.id, persisted_token.value, owned_token.value)
             if persisted.state in {
                 LeaseState.EXPIRED,
                 LeaseState.RELEASED,
