@@ -10,7 +10,12 @@ import pytest
 
 import af.search.embedded as embedded_module
 from af.framework.errors import PlatformReason
-from af.search.contracts import ResourceEnvelope, ResourceKind, SearchFilter, SearchQuery
+from af.search.contracts import (
+    ResourceEnvelope,
+    ResourceKind,
+    SearchFilter,
+    SearchQuery,
+)
 from af.search.embedded import EmbeddedSearchDriver, SearchDriverIneligible
 
 
@@ -22,6 +27,7 @@ def _resource(
     acl: tuple[str, ...] = ("group:research",),
     text: str = "bounded searchable energy content",
     projection_version: int = 1,
+    attributes: dict[str, str] | None = None,
 ) -> ResourceEnvelope:
     return ResourceEnvelope(
         resource_id=resource_id,
@@ -33,7 +39,7 @@ def _resource(
         acl=acl,
         provenance=("sha256:" + resource_id[-1] * 64,),
         text=text,
-        attributes={"language": "en"},
+        attributes={"language": "en"} if attributes is None else attributes,
     )
 
 
@@ -71,6 +77,80 @@ def test_embedded_search_indexes_every_canonical_source_and_persists(tmp_path: P
 
     assert [hit.resource_id for hit in hits] == [hit.resource_id for hit in persisted]
     assert {hit.resource_id for hit in hits} == {item.resource_id for item in resources}
+    assert all(hit.tenant_id == "tenant-a" for hit in hits)
+    assert all(hit.acl_evidence == ("group:research",) for hit in hits)
+    assert all(hit.provenance for hit in hits)
+
+
+def test_representative_source_fixtures_enter_the_canonical_search_api(tmp_path: Path) -> None:
+    fixtures = (
+        (
+            ResourceKind.MARKDOWN,
+            "# Interface notes\nEnergy interface fixture",
+            {"format": "markdown", "heading": "interface-notes"},
+        ),
+        (
+            ResourceKind.RELATIONAL,
+            "row id=record-1 value=energy",
+            {"table_name": "materials", "row_id": "record-1"},
+        ),
+        (
+            ResourceKind.BSON,
+            '{"document_type":"bson","summary":"energy"}',
+            {"format": "bson", "document_type": "material"},
+        ),
+        (
+            ResourceKind.GRAPH,
+            "node material connected by interface edge energy",
+            {"node_label": "material", "edge_label": "interface"},
+        ),
+        (
+            ResourceKind.CACHE,
+            "cache key=material:1 value=energy",
+            {"cache_key": "material-1", "encoding": "text"},
+        ),
+        (
+            ResourceKind.BLOB,
+            "media extract OCR transcription energy",
+            {"media_type": "image/png", "extractor": "ocr"},
+        ),
+        (
+            ResourceKind.EVENT,
+            "event type=material.updated energy",
+            {"event_type": "material.updated", "sequence": "42"},
+        ),
+        (
+            ResourceKind.TIME_SERIES,
+            "2026-09-24T12:00:00Z temperature 300K energy",
+            {"series": "temperature", "timestamp": "2026-09-24T12:00:00Z"},
+        ),
+        (
+            ResourceKind.TEXT,
+            "plain text document energy",
+            {"language": "en", "format": "text"},
+        ),
+        (
+            ResourceKind.VECTOR,
+            "embedding 0.1 0.2 0.3 energy",
+            {"dimensions": "3", "encoding": "float32"},
+        ),
+    )
+    resources = tuple(
+        _resource(
+            f"fixture-{index}",
+            kind=kind,
+            text=text,
+            attributes=attributes,
+        )
+        for index, (kind, text, attributes) in enumerate(fixtures, start=1)
+    )
+
+    with EmbeddedSearchDriver(tmp_path / "canonical-source-fixtures.sqlite3") as driver:
+        assert driver.upsert(resources) == len(fixtures)
+        hits = driver.search(_query("energy"))
+
+    assert {hit.resource_id for hit in hits} == {item.resource_id for item in resources}
+    assert {item.kind for item in resources} == set(ResourceKind)
     assert all(hit.tenant_id == "tenant-a" for hit in hits)
     assert all(hit.acl_evidence == ("group:research",) for hit in hits)
     assert all(hit.provenance for hit in hits)
