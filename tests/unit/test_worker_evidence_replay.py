@@ -21,7 +21,8 @@ def test_replay_ledger_persists_consumed_measurements_across_instances(
     first_db = Database(url)
     first = SqlAlchemyWorkerMeasurementReplayLedger(first_db)
     assert first.consume_batch(
-        ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW
+        ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),),
+        now=_NOW,
     )
     first_db.close()
 
@@ -56,7 +57,8 @@ def test_replay_ledger_allows_expired_evidence_to_be_consumed_again() -> None:
         assert ledger.consume_batch(((_ISSUER, _DIGEST, old_expiry),), now=_NOW)
         later = _NOW + timedelta(seconds=2)
         assert ledger.consume_batch(
-            ((_ISSUER, _DIGEST, later + timedelta(hours=1)),), now=later
+            ((_ISSUER, _DIGEST, later + timedelta(hours=1)),),
+            now=later,
         )
     finally:
         database.close()
@@ -72,7 +74,8 @@ def test_replay_ledger_allows_only_one_concurrent_consumer() -> None:
         barrier.wait()
         outcomes.append(
             ledger.consume_batch(
-                ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),), now=_NOW
+                ((_ISSUER, _DIGEST, _NOW + timedelta(hours=1)),),
+                now=_NOW,
             )
         )
 
