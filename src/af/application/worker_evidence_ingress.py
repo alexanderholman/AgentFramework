@@ -135,6 +135,7 @@ class WorkerOptimizationMeasurementAuthenticator(Protocol):
     def authenticate(self, measurement: WorkerOptimizationMeasurement) -> object: ...
 
 
+@runtime_checkable
 class WorkerOptimizationMeasurementReplayLedger(Protocol):
     """Atomically consume signed evidence identities until their expiry."""
 
