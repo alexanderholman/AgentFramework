@@ -69,7 +69,7 @@ def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None
 def test_cancelling_program_job_stops_process_and_persists_state(tmp_path: Path) -> None:
     database, events, results = _dependencies(tmp_path)
     queue = RecordingQueue()
-    service = ProgramJobService(queue, events)
+    service = ProgramJobService(queue, events, results)
     job_id = service.submit(
         ProgramRequest(
             argv=(sys.executable, "-c", "import time; time.sleep(30)"),
