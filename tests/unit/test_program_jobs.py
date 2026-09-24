@@ -6,12 +6,13 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from af.application.program_jobs import ProgramJobHandler, ProgramJobService
 from af.framework.context import CancellationToken
 from af.framework.jobs import JobState
 from af.framework.programs import ProgramBudget, ProgramRequest, ProgramState
 from af.infrastructure.database import Database
-from af.messaging.envelopes import MessageEnvelope
 from af.infrastructure.job_events import SqlAlchemyJobEventRepository
 from af.infrastructure.program_job_results import SqlAlchemyProgramJobResultRepository
 from af.infrastructure.programs import AsyncSubprocessExecutor
@@ -67,10 +68,7 @@ def test_program_job_runs_from_queue_and_persists_result(tmp_path: Path) -> None
     database.close()
 
 
-
 def test_program_job_rejects_malformed_timeout_payload(tmp_path: Path) -> None:
-    import pytest
-
     database, events, results = _dependencies(tmp_path)
     queue = RecordingQueue()
     service = ProgramJobService(queue, events, results)
