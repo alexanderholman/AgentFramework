@@ -147,6 +147,7 @@ def test_program_job_rejects_environment_overrides(tmp_path: Path) -> None:
 
 def test_program_job_records_dispatch_failure(tmp_path: Path) -> None:
     database, events, results = _dependencies(tmp_path)
+
     class FailingQueue:
         job: QueueJob | None = None
 
@@ -166,7 +167,8 @@ def test_program_job_records_dispatch_failure(tmp_path: Path) -> None:
         service.submit(request)
 
     assert queue.job is not None
-    assert [event.state for event in service.events_after(queue.job.envelope.metadata.message_id)] == [
+    job_id = queue.job.envelope.metadata.message_id
+    assert [event.state for event in service.events_after(job_id)] == [
         JobState.QUEUED,
         JobState.FAILED,
     ]
@@ -200,6 +202,8 @@ def test_program_job_records_executor_failure(tmp_path: Path) -> None:
     ]
     assert results.get(job_id) is None
     database.close()
+
+
 def test_cancelling_program_job_stops_process_and_persists_state(tmp_path: Path) -> None:
     database, events, results = _dependencies(tmp_path)
     queue = RecordingQueue()
