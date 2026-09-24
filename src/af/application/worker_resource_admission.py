@@ -150,8 +150,7 @@ class FencedResourceLeasePermit:
             owned_token = lease.fence_token
             persisted_token = persisted.fence_token
             if (
-                isinstance(renewal_failure, LeaseFenceTokenStale)
-                and persisted.state is LeaseState.ACTIVE
+                persisted.state is LeaseState.ACTIVE
                 and owned_token is not None
                 and persisted_token is not None
                 and persisted_token.value != owned_token.value
@@ -160,7 +159,11 @@ class FencedResourceLeasePermit:
                 # Relinquish this local permit without mutating the other owner's lease.
                 with self._lock:
                     self._released = True
-                raise renewal_failure
+                if renewal_failure is not None:
+                    raise renewal_failure
+                raise LeaseFenceTokenStale(
+                    lease.id, persisted_token.value, owned_token.value
+                )
             if persisted.state in {
                 LeaseState.EXPIRED,
                 LeaseState.RELEASED,
