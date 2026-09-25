@@ -428,6 +428,50 @@ def test_memcached_release_claims_a_cas_marker_before_delete(
     cache.close()
 
 
+def test_memcached_release_does_not_delete_replacement_owner_after_marker_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = Clock()
+    client = RecordingMemcachedClient(clock=clock)
+    cache = MemcachedCacheDriver(client=client, clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:release-expiry-race")
+    first = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-a"),
+        ttl=timedelta(seconds=5),
+    )
+    assert first is not None
+    original_delete = client.delete
+    replacement: object = None
+
+    def delayed_delete(lock_key: bytes, noreply: bool = False) -> bool:
+        nonlocal replacement
+        clock.now += timedelta(seconds=61)
+        replacement = cache.acquire_lock(
+            namespace,
+            key,
+            LockOwner("owner-b"),
+            ttl=timedelta(seconds=5),
+        )
+        return original_delete(lock_key, noreply=noreply)
+
+    monkeypatch.setattr(client, "delete", delayed_delete)
+
+    assert cache.release_lock(namespace, key, first)
+    assert replacement is not None
+    renewed = cache.renew_lock(
+        namespace,
+        key,
+        cast(object, replacement),
+        ttl=timedelta(seconds=5),
+    )
+    assert renewed is not None
+    assert cache.release_lock(namespace, key, renewed)
+    cache.close()
+
+
 def test_memcached_lock_handles_expired_missing_and_unclaimed_paths() -> None:
     clock = Clock()
     client = RecordingMemcachedClient(clock=clock)
