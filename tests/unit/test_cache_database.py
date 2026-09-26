@@ -248,6 +248,33 @@ def test_database_lock_is_owner_fenced_across_driver_instances(tmp_path: Path) -
     second.close()
 
 
+
+def test_database_lock_release_preserves_fencing_progression(tmp_path: Path) -> None:
+    clock = Clock()
+    cache = DatabaseCacheDriver(url=_url(tmp_path / "cache.sqlite3"), clock=clock)
+    namespace = _namespace()
+    key = CacheKey("lock:release-reacquire")
+
+    first = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-a"),
+        ttl=timedelta(seconds=5),
+    )
+    assert first is not None
+    assert cache.release_lock(namespace, key, first)
+
+    second = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-b"),
+        ttl=timedelta(seconds=5),
+    )
+    assert second is not None
+    assert second.fencing_token > first.fencing_token
+    cache.close()
+
+
 def test_database_cache_registration_routes_through_verified_manager(tmp_path: Path) -> None:
     clock = Clock()
     manager = CacheManager(
