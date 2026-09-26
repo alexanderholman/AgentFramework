@@ -254,7 +254,9 @@ class _SQLiteTransactionContext(AbstractContextManager[_SQLiteTransaction]):
 class SQLiteDriver(AbstractContextManager["SQLiteDriver"]):
     """One SQLite service with serialized explicit transactions."""
 
-    def __init__(self, database: str | Path) -> None:
+    def __init__(
+        self, database: str | Path, *, connection: sqlite3.Connection | None = None
+    ) -> None:
         if isinstance(database, Path):
             path = str(database)
         elif type(database) is str and database:
@@ -264,11 +266,18 @@ class SQLiteDriver(AbstractContextManager["SQLiteDriver"]):
         try:
             if path != ":memory:":
                 Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-            self._connection = sqlite3.connect(
-                path,
-                isolation_level=None,
-                check_same_thread=False,
+            self._owns_connection = connection is None
+            self._connection = (
+                connection
+                if connection is not None
+                else sqlite3.connect(
+                    path,
+                    isolation_level=None,
+                    check_same_thread=False,
+                )
             )
+            if self._connection.in_transaction:
+                raise ValueError("borrowed SQLite connection must not have an active transaction")
             self._connection.execute("PRAGMA foreign_keys = ON")
         except (OSError, sqlite3.Error) as error:
             raise _failure(error, stage="database.connect") from None
@@ -327,7 +336,8 @@ class SQLiteDriver(AbstractContextManager["SQLiteDriver"]):
                     stage="database.shutdown",
                 )
             try:
-                self._connection.close()
+                if self._owns_connection:
+                    self._connection.close()
             except sqlite3.Error as error:
                 raise _failure(error, stage="database.shutdown") from None
             self._closed = True

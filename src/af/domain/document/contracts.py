@@ -9,8 +9,9 @@ plug in without changing domain logic.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import (
     Any,
@@ -124,15 +125,25 @@ class TimeSeriesOptions:
     granularity: str = "hour"
     bucket_max_span_seconds: int | None = None
     bucket_rounding_seconds: int | None = None
+    expire_after_seconds: int | None = None
 
     def validate(self) -> list[str]:
         """Return validation errors (empty list if valid)."""
         errors: list[str] = []
         if not self.time_field:
             errors.append("time_field is required")
-        allowed = {"second", "minute", "hour"}
+        allowed = {"second", "minute", "hour", "seconds", "minutes", "hours"}
         if self.granularity not in allowed:
-            errors.append(f"granularity must be one of {allowed}")
+            errors.append(f"granularity must be one of {sorted(allowed)}")
+        if self.expire_after_seconds is not None and (
+            type(self.expire_after_seconds) is not int or self.expire_after_seconds < 0
+        ):
+            errors.append("expire_after_seconds must be a non-negative integer")
+        custom = (self.bucket_max_span_seconds, self.bucket_rounding_seconds)
+        if any(value is not None for value in custom) and (
+            any(type(value) is not int or value <= 0 for value in custom) or custom[0] != custom[1]
+        ):
+            errors.append("custom bucket span and rounding must be equal positive integers")
         return errors
 
 
@@ -143,7 +154,7 @@ class DocumentChange:
     collection: str
     operation: str  # "insert", "update", "delete", "replace"
     document_id: Any
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -238,6 +249,8 @@ class DocumentDriver(Protocol):
         collection: str,
         document: dict[str, Any],
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult: ...
 
     async def insert_many(
@@ -246,6 +259,8 @@ class DocumentDriver(Protocol):
         documents: list[dict[str, Any]],
         ordered: bool = True,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult: ...
 
     async def find_one(
@@ -254,6 +269,8 @@ class DocumentDriver(Protocol):
         filter: DocumentFilter | None = None,
         projection: DocumentProjection | None = None,
         read_preference: ReadPreference = ReadPreference.PRIMARY,
+        *,
+        session: SessionContext | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def find(
@@ -265,12 +282,16 @@ class DocumentDriver(Protocol):
         limit: int = 0,
         skip: int = 0,
         read_preference: ReadPreference = ReadPreference.PRIMARY,
+        *,
+        session: SessionContext | None = None,
     ) -> QueryResult: ...
 
     async def count_documents(
         self,
         collection: str,
         filter: DocumentFilter | None = None,
+        *,
+        session: SessionContext | None = None,
     ) -> int: ...
 
     async def update_one(
@@ -280,6 +301,8 @@ class DocumentDriver(Protocol):
         update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult: ...
 
     async def update_many(
@@ -289,6 +312,8 @@ class DocumentDriver(Protocol):
         update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult: ...
 
     async def replace_one(
@@ -298,6 +323,8 @@ class DocumentDriver(Protocol):
         replacement: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult: ...
 
     async def delete_one(
@@ -305,6 +332,8 @@ class DocumentDriver(Protocol):
         collection: str,
         filter: DocumentFilter,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult: ...
 
     async def delete_many(
@@ -312,38 +341,59 @@ class DocumentDriver(Protocol):
         collection: str,
         filter: DocumentFilter,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult: ...
 
     async def aggregate(
         self,
         collection: str,
         pipeline: AggregationPipeline,
+        *,
+        session: SessionContext | None = None,
     ) -> list[dict[str, Any]]: ...
 
     async def create_index(
         self,
         collection: str,
         definition: IndexDefinition,
+        *,
+        session: SessionContext | None = None,
     ) -> str: ...
 
     async def list_indexes(
         self,
         collection: str,
+        *,
+        session: SessionContext | None = None,
     ) -> list[dict[str, Any]]: ...
 
     async def drop_index(
         self,
         collection: str,
         index_name: str,
+        *,
+        session: SessionContext | None = None,
     ) -> bool: ...
 
     async def start_session(self) -> SessionContext: ...
+
+    def transaction(self) -> AbstractAsyncContextManager[SessionContext]: ...
+
+    @property
+    def features(self) -> frozenset[DocumentFeature]: ...
+
+    def require(self, feature: DocumentFeature) -> None: ...
+
+    def close(self) -> None: ...
 
     async def bulk_write(
         self,
         collection: str,
         operations: list[BulkOperation],
         ordered: bool = True,
+        *,
+        session: SessionContext | None = None,
     ) -> BulkWriteResult: ...
 
     async def create_time_series_collection(
@@ -407,7 +457,7 @@ class TransactionNotSupportedError(DocumentOperationError):
 
     def __init__(
         self,
-        reason: str = "Single-node MongoDB Community does not support multi-document transactions",
+        reason: str = "Standalone MongoDB deployments do not support multi-document transactions",
     ):
         super().__init__(reason, operation="transaction")
 

@@ -484,6 +484,28 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                 has_selection_grounding=False,
                 metrics=RouteMetrics(cost=0, latency=0, intelligence=0),
             ),
+            ProcedureDescriptor(
+                procedure_id="science-calculate",
+                version="1.0.0",
+                intent="science.calculate",
+                arguments=(
+                    ProcedureArgumentDescriptor(
+                        name="expression",
+                        value_type=ArgumentValueType.TEXT,
+                        min_length=1,
+                        max_length=1024,
+                        allow_blank=False,
+                    ),
+                ),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
+                tier=WorkTier.PROCEDURAL,
+                pure=True,
+                replay_safe=True,
+                has_selection_grounding=False,
+                metrics=RouteMetrics(cost=1, latency=1, intelligence=0),
+            ),
         )
     ]
     assert outcome.route == "character-count"

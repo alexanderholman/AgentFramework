@@ -272,6 +272,29 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
             "has_selection_grounding": False,
             "metrics": {"cost": 0, "latency": 0, "intelligence": 0},
         },
+        {
+            "procedure_id": "science-calculate",
+            "version": "1.0.0",
+            "digest": payload[3]["digest"],
+            "intent": "science.calculate",
+            "arguments": [
+                {
+                    "name": "expression",
+                    "value_type": "text",
+                    "min_length": 1,
+                    "max_length": 1024,
+                    "allow_blank": False,
+                },
+            ],
+            "effect": "read_only",
+            "risk": "none",
+            "requires_confirmation": False,
+            "tier": "procedural",
+            "pure": True,
+            "replay_safe": True,
+            "has_selection_grounding": False,
+            "metrics": {"cost": 1, "latency": 1, "intelligence": 0},
+        },
     ]
     assert all(item["digest"].startswith("sha256:") for item in payload)
     assert all(len(item["digest"]) == len("sha256:") + 64 for item in payload)

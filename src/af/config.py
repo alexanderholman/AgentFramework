@@ -57,15 +57,26 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     mcp_transport: str = "stdio"
+    http_auth_required: bool = False
+    auth_tenant_id: str = "local"
     session_cookie_signing_key: str = "af-local-session-signing-key"
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()
     allow_remote_inference: bool = False
     selector_confidence_threshold: float = 0.8
+    decision_enabled: bool = False
+    decision_model: str = "jev-1.13.0"
+    decision_timeout_seconds: float = 30.0
+    decision_token_price_usd: str = "0.000000042"
+    selector_provider: str = "disabled"
+    selector_model: str | None = None
+    selector_endpoint: str = "http://127.0.0.1:11434"
+    selector_timeout_seconds: float = 600.0
     resource_lease_backend: ResourceLeaseBackend = ResourceLeaseBackend.MEMORY
     resource_lease_sqlite_path: str = "storage/af-resource-leases.sqlite3"
     resource_lease_maintenance_host_id: str | None = None
     resource_lease_maintenance_interval_seconds: float = 30.0
+    schedules_path: str | None = None
     worker_queue_sqlite_path: str | None = None
     worker_optimization_profile_path: str | None = None
 
@@ -156,17 +167,28 @@ _ENV_NAMES = {
     "AF_HOST": "host",
     "AF_PORT": "port",
     "AF_MCP_TRANSPORT": "mcp_transport",
+    "AF_HTTP_AUTH_REQUIRED": "http_auth_required",
+    "AF_AUTH_TENANT_ID": "auth_tenant_id",
     "AF_SESSION_COOKIE_SIGNING_KEY": "session_cookie_signing_key",
     "AF_ALLOWED_HOSTS": "allowed_hosts",
     "AF_ALLOWED_ORIGINS": "allowed_origins",
     "AF_ALLOW_REMOTE_INFERENCE": "allow_remote_inference",
     "AF_SELECTOR_CONFIDENCE_THRESHOLD": "selector_confidence_threshold",
+    "AF_DECISION_ENABLED": "decision_enabled",
+    "AF_DECISION_MODEL": "decision_model",
+    "AF_DECISION_TIMEOUT_SECONDS": "decision_timeout_seconds",
+    "AF_DECISION_TOKEN_PRICE_USD": "decision_token_price_usd",
+    "AF_SELECTOR_PROVIDER": "selector_provider",
+    "AF_SELECTOR_MODEL": "selector_model",
+    "AF_SELECTOR_ENDPOINT": "selector_endpoint",
+    "AF_SELECTOR_TIMEOUT_SECONDS": "selector_timeout_seconds",
     "AF_RESOURCE_LEASE_BACKEND": "resource_lease_backend",
     "AF_RESOURCE_LEASE_SQLITE_PATH": "resource_lease_sqlite_path",
     "AF_RESOURCE_LEASE_MAINTENANCE_HOST_ID": "resource_lease_maintenance_host_id",
     "AF_RESOURCE_LEASE_MAINTENANCE_INTERVAL_SECONDS": (
         "resource_lease_maintenance_interval_seconds"
     ),
+    "AF_SCHEDULES_PATH": "schedules_path",
     "AF_WORKER_QUEUE_SQLITE_PATH": "worker_queue_sqlite_path",
     "AF_WORKER_OPTIMIZATION_PROFILE_PATH": "worker_optimization_profile_path",
 }
@@ -309,6 +331,8 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
         return value
     if name in {
         "selector_confidence_threshold",
+        "selector_timeout_seconds",
+        "decision_timeout_seconds",
         "resource_lease_maintenance_interval_seconds",
     }:
         if textual and isinstance(value, str):
@@ -322,13 +346,15 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
         name
         in {
             "resource_lease_maintenance_host_id",
+            "selector_model",
+            "schedules_path",
             "worker_queue_sqlite_path",
             "worker_optimization_profile_path",
         }
         and value is None
     ):
         return None
-    if name == "allow_remote_inference":
+    if name in {"allow_remote_inference", "decision_enabled", "http_auth_required"}:
         if textual and isinstance(value, str):
             normalized = value.lower()
             if normalized in {"1", "true", "yes", "on"}:
@@ -355,6 +381,30 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
 
 
 def _validate_settings(settings: Settings) -> None:
+    if settings.selector_provider not in {"disabled", "ollama", "openai"}:
+        raise ValueError("selector provider is unsupported")
+    if settings.selector_provider != "disabled" and settings.selector_model is None:
+        raise ValueError("enabled selector requires an explicit model")
+    if settings.selector_model is not None:
+        _validate_single_line(settings.selector_model, "selector_model")
+    _validate_single_line(settings.selector_endpoint, "selector_endpoint")
+    if (
+        type(settings.selector_timeout_seconds) not in {int, float}
+        or not 0 < settings.selector_timeout_seconds <= 600
+    ):
+        raise ValueError("selector timeout must be positive and at most ten minutes")
+    if type(settings.http_auth_required) is not bool:
+        raise ValueError("HTTP authentication required must be boolean")
+    _validate_single_line(settings.auth_tenant_id, "auth_tenant_id")
+    if type(settings.decision_enabled) is not bool:
+        raise ValueError("decision enabled must be boolean")
+    _validate_single_line(settings.decision_model, "decision_model")
+    _validate_single_line(settings.decision_token_price_usd, "decision_token_price_usd")
+    if (
+        type(settings.decision_timeout_seconds) not in {int, float}
+        or not 0 < settings.decision_timeout_seconds <= 600
+    ):
+        raise ValueError("decision timeout must be positive and at most ten minutes")
     if settings.port < 1 or settings.port > 65535:
         raise ValueError("port is outside its supported range")
     threshold = settings.selector_confidence_threshold

@@ -4156,3 +4156,20 @@ measurements.
 - Updated: `src/af/queue/worker.py`
 - Updated: `tests/unit/test_queue_worker.py`
 - Related: SPEC-065 and issue #21
+
+---
+
+## 2026-09-26 — Integrated private v0.1 foundations on the mission branch
+
+The current user mission authorizes reversible repository-wide engineering and useful
+checkpoint publication to `v1/autonomous-completion`; historical worker holds are not
+new approval requirements for this mission. No production deployment or public release
+is authorized by this engineering checkpoint.
+
+Decision: keep a single shared typed implementation behind each transport; make
+optional network decisions fail closed without configuration and one-use consent;
+store reference extension state in the local SQLite database where compatible;
+restore authenticated workflow keys with verified backups; publish honest driver
+capabilities instead of dictionary-backed claims of external graph persistence.
+OpenCode and Copilot now use one concise root engineering contract. The root package
+version remains alpha while integration/release gates and roadmap work continue.

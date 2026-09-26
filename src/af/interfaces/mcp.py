@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
+from asyncio import to_thread
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
-from typing import Literal, cast
+from typing import Annotated, Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from af import __version__
 from af.application.search import SearchController
@@ -21,6 +22,7 @@ from af.application.self_design_execution import (
     SelfDesignExecutionResult,
 )
 from af.application.tasks import TaskController
+from af.application.workflow_control import WorkflowController
 from af.bootstrap import AFApplication, create_application
 from af.domain.agent_routing import (
     AgentRole,
@@ -29,10 +31,13 @@ from af.domain.agent_routing import (
     AgentRouteStatus,
 )
 from af.domain.tasks import Task
+from af.framework.container import InvocationKind
+from af.framework.context import AcceptanceScope, ExecutionContext, maybe_current_context
 from af.framework.errors import AFError, InvalidProviderConfiguration, ServiceNotBound
 from af.framework.routing import ProcedureRegistry
 from af.framework.self_design_operation import SelfDesignOperation
 from af.framework.types import ExecutionOutcome
+from af.framework.workflows import WorkflowRun
 from af.interfaces.http_trust import (
     ParsedHost,
     format_host,
@@ -40,6 +45,7 @@ from af.interfaces.http_trust import (
     parse_host_value,
     parse_origin_value,
 )
+from af.interfaces.workflow_models import WorkflowModel
 
 MCP_INTERNAL_ERROR_MESSAGE = "internal MCP adapter error (MCP_INTERNAL_ERROR)"
 
@@ -204,6 +210,79 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
         stateless_http=True,
         transport_security=transport_security,
     )
+
+    def workflow_operation(
+        operation: Callable[[WorkflowController, ExecutionContext], WorkflowRun],
+    ) -> WorkflowModel:
+        context = maybe_current_context() or ExecutionContext(
+            requested_scope=AcceptanceScope.DETERMINISTIC,
+            effective_scope=AcceptanceScope.DETERMINISTIC,
+        )
+        with resolved.container.invocation_scope(context=context, kind=InvocationKind.MESSAGE):
+            return _invoke_mcp_tool(
+                lambda: WorkflowModel.from_run(
+                    operation(resolved.container.resolve(WorkflowController), context)
+                )
+            )
+
+    @server.tool(
+        name="af_start_workflow",
+        description="Start an installed, durable workflow using bounded JSON input.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    async def af_start_workflow(
+        data: Annotated[str, Field(max_length=65_536)],
+        name: Annotated[str, Field(min_length=1, max_length=128)] = "text.count-total",
+        max_nodes: Annotated[int, Field(ge=1, le=128, strict=True)] = 128,
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation,
+            lambda controller, context: controller.start(
+                name, data.encode(), context, max_nodes=max_nodes
+            ),
+        )
+
+    @server.tool(
+        name="af_get_workflow",
+        description="Inspect an existing workflow checkpoint under the caller's authority.",
+        annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+        structured_output=True,
+    )
+    async def af_get_workflow(
+        run_id: Annotated[str, Field(min_length=1, max_length=128)],
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation, lambda controller, context: controller.inspect(run_id, context)
+        )
+
+    @server.tool(
+        name="af_resume_workflow",
+        description="Resume an installed workflow from its verified checkpoint.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    async def af_resume_workflow(
+        run_id: Annotated[str, Field(min_length=1, max_length=128)],
+        max_nodes: Annotated[int, Field(ge=1, le=128, strict=True)] = 128,
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation,
+            lambda controller, context: controller.resume(run_id, context, max_nodes=max_nodes),
+        )
+
+    @server.tool(
+        name="af_cancel_workflow",
+        description="Cancel unfinished nodes in a caller-owned workflow checkpoint.",
+        annotations=_annotations(read_only=False, destructive=True, idempotent=True),
+        structured_output=True,
+    )
+    async def af_cancel_workflow(
+        run_id: Annotated[str, Field(min_length=1, max_length=128)],
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation, lambda controller, context: controller.cancel(run_id, context)
+        )
 
     @server.tool(
         name="af_hello",

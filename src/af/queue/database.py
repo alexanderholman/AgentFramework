@@ -34,6 +34,8 @@ _FEATURES = frozenset(
     {
         QueueFeature.DEAD_LETTER_INSPECTION,
         QueueFeature.DEAD_LETTER_REPLAY,
+        QueueFeature.DELAY,
+        QueueFeature.PRIORITY,
         QueueFeature.RESERVATION,
         QueueFeature.RESERVATION_RENEWAL,
         QueueFeature.RETRY,
@@ -71,10 +73,6 @@ def _identifier(value: object, field: str) -> str:
 
 
 def _unsupported_feature(job: QueueJob) -> QueueFeature | None:
-    if job.delay is not None:
-        return QueueFeature.DELAY
-    if job.priority is not None:
-        return QueueFeature.PRIORITY
     if job.timeout is not None:
         return QueueFeature.TIMEOUT
     if job.unique_key is not None:
@@ -159,7 +157,11 @@ class DatabaseQueueDriver:
         if len(encoded) > _MAX_ENVELOPE_BYTES:
             raise ValueError("queue envelope exceeds relational storage bounds")
         envelope_text = encoded.decode("utf-8", errors="strict")
-        available_at = job.envelope.metadata.occurred_at
+        if job.priority is not None and not -(2**31) <= job.priority < 2**31:
+            raise ValueError("database queue priority must fit a signed 32-bit integer")
+        available_at = (
+            job.envelope.metadata.occurred_at if job.delay is None else dispatched_at + job.delay
+        )
         try:
             with self._database.transaction() as transaction:
                 transaction.execute(
@@ -173,6 +175,8 @@ class DatabaseQueueDriver:
                             available_at,
                             envelope_text,
                             tags_text,
+                            delay_seconds,
+                            priority,
                             attempt_count,
                             reservation_generation,
                             max_attempts,
@@ -191,6 +195,8 @@ class DatabaseQueueDriver:
                             :available_at,
                             :envelope_text,
                             :tags_text,
+                            :delay_seconds,
+                            :priority,
                             0,
                             0,
                             :max_attempts,
@@ -210,6 +216,10 @@ class DatabaseQueueDriver:
                             "available_at": _timestamp(available_at),
                             "envelope_text": envelope_text,
                             "tags_text": self._encode_tags(job.tags),
+                            "delay_seconds": (
+                                None if job.delay is None else job.delay.total_seconds()
+                            ),
+                            "priority": job.priority,
                             "max_attempts": job.max_attempts,
                             "backoff_seconds": (
                                 None if job.backoff is None else job.backoff.total_seconds()
@@ -260,6 +270,8 @@ class DatabaseQueueDriver:
                             lane,
                             envelope_text,
                             tags_text,
+                            delay_seconds,
+                            priority,
                             attempt_count,
                             reservation_generation,
                             reserved_at,
@@ -268,7 +280,8 @@ class DatabaseQueueDriver:
                             backoff_seconds
                         FROM {_TABLE}
                         WHERE {where}
-                        ORDER BY available_at ASC, occurred_at ASC, message_id ASC
+                        ORDER BY COALESCE(priority, 0) DESC,
+                            available_at ASC, occurred_at ASC, message_id ASC
                         LIMIT 1""",
                         parameters,
                         read_only=True,
@@ -594,6 +607,8 @@ class DatabaseQueueDriver:
                             lane,
                             envelope_text,
                             tags_text,
+                            delay_seconds,
+                            priority,
                             attempt_count,
                             max_attempts,
                             backoff_seconds,
@@ -726,6 +741,8 @@ class DatabaseQueueDriver:
                             available_at VARCHAR(32) NOT NULL,
                             envelope_text TEXT NOT NULL,
                             tags_text TEXT NULL,
+                            delay_seconds REAL NULL,
+                            priority INTEGER NULL,
                             attempt_count INTEGER NOT NULL DEFAULT 0,
                             reservation_generation INTEGER NOT NULL DEFAULT 0,
                             max_attempts INTEGER NOT NULL,
@@ -743,6 +760,7 @@ class DatabaseQueueDriver:
             self._ensure_reservation_owner()
             self._ensure_reservation_id()
             self._ensure_tags()
+            self._ensure_dispatch_options()
             self._backfill_legacy_dead_letter_attempts()
         except DatabaseOperationError as error:
             raise QueueOperationError(
@@ -847,6 +865,26 @@ class DatabaseQueueDriver:
             with self._database.transaction() as transaction:
                 transaction.query(probe)
 
+    def _ensure_dispatch_options(self) -> None:
+        for column, sql_type in (("delay_seconds", "REAL"), ("priority", "INTEGER")):
+            probe = DatabaseStatement(f"SELECT {column} FROM {_TABLE} WHERE 1 = 0", read_only=True)
+            try:
+                with self._database.transaction() as transaction:
+                    transaction.query(probe)
+                continue
+            except DatabaseOperationError:
+                pass
+            try:
+                with self._database.transaction() as transaction:
+                    transaction.execute(
+                        DatabaseStatement(
+                            f"ALTER TABLE {_TABLE} ADD COLUMN {column} {sql_type} NULL"
+                        )
+                    )
+            except DatabaseOperationError:
+                with self._database.transaction() as transaction:
+                    transaction.query(probe)
+
     def _backfill_legacy_dead_letter_attempts(self) -> None:
         with self._database.transaction() as transaction:
             transaction.execute(
@@ -935,6 +973,8 @@ class DatabaseQueueDriver:
             return QueueJob(
                 envelope=envelope,
                 lane=self._stored_text(row["lane"]),
+                delay=self._stored_backoff(row["delay_seconds"]),
+                priority=(None if row["priority"] is None else self._stored_int(row["priority"])),
                 max_attempts=self._stored_int(row["max_attempts"]),
                 backoff=self._stored_backoff(row["backoff_seconds"]),
                 tags=self._decode_tags(row["tags_text"]),

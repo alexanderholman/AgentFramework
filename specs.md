@@ -3345,3 +3345,17 @@ fully reconciled permit, while preserving renewal failures that are unrelated to
 - SPEC-075 (resource permit lifecycle at worker admission)
 - SPEC-101 (terminal resource-permit release boundary)
 - Issue #21
+
+---
+
+## 2026-09-26 — Autonomous completion integration checkpoint
+
+The private completion branch adds executable bounded workflows, consented decision
+providers, typed science/locales, durable scheduling, scoped headless tokens/OAuth,
+verified content/peer execution, and concrete storage/queue/communication adapters.
+Shared application controllers remain authoritative across transports. Imported
+capability declarations, fixture evidence, provider acceptance and protocol conformance
+MUST NOT confer execution authority, verified completion or real-service certification.
+Authenticated backup restoration MUST retain the checkpoint signing identity. Runtime
+admission and self-operation review are separate from repository engineering autonomy.
+This checkpoint is an engineering increment, not completion of the v0.1 release gate.

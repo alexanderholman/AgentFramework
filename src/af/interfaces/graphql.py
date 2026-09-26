@@ -28,12 +28,16 @@ from graphql import (
     SelectionNode,
     parse,
 )
+from strawberry.scalars import JSON
 from strawberry.types import Info
 
 from af.application.tasks import TaskController
+from af.application.workflow_control import WorkflowController
 from af.domain.tasks import Task
+from af.framework.context import ExecutionContext, current_context, maybe_current_context
 from af.framework.errors import AFError, TaskNotFound
 from af.framework.types import TASK_LIST_DEFAULT_LIMIT, TASK_LIST_MAX_LIMIT
+from af.framework.workflows import WorkflowError, WorkflowRun
 from af.interfaces.http_body import (
     BOUNDED_BODY_SCOPE_KEY,
     HTTP_MAX_BODY_BYTES,
@@ -44,6 +48,7 @@ from af.interfaces.http_body import (
     read_bounded_receive,
     validate_content_length_header,
 )
+from af.interfaces.workflow_models import WorkflowModel
 
 GRAPHQL_INTERNAL_ERROR_CODE = "INTERNAL_ERROR"
 GRAPHQL_INTERNAL_ERROR_MESSAGE = "internal GraphQL adapter error"
@@ -129,6 +134,68 @@ class TaskType:
             trace_id=task.trace_id,
             created_at=task.created_at,
             updated_at=task.updated_at,
+        )
+
+
+@strawberry.type
+class WorkflowNodeType:
+    id: str
+    state: str
+    verified: bool
+
+
+@strawberry.type
+class WorkflowOutputType:
+    node: str
+    value: JSON
+
+
+@strawberry.type
+class WorkflowType:
+    schema_version: str
+    run_id: strawberry.ID
+    revision: int
+    complete: bool
+    cancelled: bool
+    nodes: list[WorkflowNodeType]
+    outputs: list[WorkflowOutputType]
+
+    @classmethod
+    def from_run(cls, run: WorkflowRun) -> WorkflowType:
+        summary = WorkflowModel.from_run(run)
+        return cls(
+            schema_version=summary.schema_version,
+            run_id=strawberry.ID(summary.run_id),
+            revision=summary.revision,
+            complete=summary.complete,
+            cancelled=summary.cancelled,
+            nodes=[
+                WorkflowNodeType(id=node.id, state=node.state, verified=node.verified)
+                for node in summary.nodes
+            ],
+            outputs=[
+                WorkflowOutputType(node=output.node, value=cast(JSON, output.value))
+                for output in summary.outputs
+            ],
+        )
+
+
+def _workflow_controller(info: Info[Any, Any]) -> WorkflowController:
+    controller = info.context.get("workflows")
+    if not isinstance(controller, WorkflowController):
+        raise WorkflowError("workflow operations are not configured")
+    return controller
+
+
+def _workflow_context(info: Info[Any, Any]) -> ExecutionContext:
+    context = info.context.get("execution_context")
+    return context if isinstance(context, ExecutionContext) else current_context()
+
+
+def _workflow_limit(max_nodes: int) -> None:
+    if type(max_nodes) is not int or not 1 <= max_nodes <= 128:
+        raise GraphQLError(
+            "Invalid workflow node limit", extensions={"code": GRAPHQL_BAD_REQUEST_CODE}
         )
 
 
@@ -227,6 +294,16 @@ class Query:
 
         return await _run_graphql_operation(load_task)
 
+    @strawberry.field
+    async def workflow_status(self, info: Info[Any, Any], id: strawberry.ID) -> WorkflowType:
+        async def inspect() -> WorkflowType:
+            run = await run_in_threadpool(
+                _workflow_controller(info).inspect, str(id), _workflow_context(info)
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(inspect)
+
 
 @strawberry.type
 class Mutation:
@@ -267,6 +344,62 @@ class Mutation:
     async def delete_task(self, info: Info[Any, Any], id: strawberry.ID) -> bool:
         await _run_graphql_operation(lambda: run_in_threadpool(_controller(info).delete, str(id)))
         return True
+
+    @strawberry.mutation
+    async def start_workflow(
+        self,
+        info: Info[Any, Any],
+        data: str,
+        name: str = "text.count-total",
+        max_nodes: int = 128,
+    ) -> WorkflowType:
+        _workflow_limit(max_nodes)
+        if not name or len(name) > 128 or len(data.encode()) > 65_536:
+            raise GraphQLError(
+                "Invalid workflow input bounds", extensions={"code": GRAPHQL_BAD_REQUEST_CODE}
+            )
+
+        async def start() -> WorkflowType:
+            run = await run_in_threadpool(
+                _workflow_controller(info).start,
+                name,
+                data.encode(),
+                _workflow_context(info),
+                max_nodes=max_nodes,
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(start)
+
+    @strawberry.mutation
+    async def resume_workflow(
+        self,
+        info: Info[Any, Any],
+        id: strawberry.ID,
+        max_nodes: int = 128,
+    ) -> WorkflowType:
+        _workflow_limit(max_nodes)
+
+        async def resume() -> WorkflowType:
+            run = await run_in_threadpool(
+                _workflow_controller(info).resume,
+                str(id),
+                _workflow_context(info),
+                max_nodes=max_nodes,
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(resume)
+
+    @strawberry.mutation
+    async def cancel_workflow(self, info: Info[Any, Any], id: strawberry.ID) -> WorkflowType:
+        async def cancel() -> WorkflowType:
+            run = await run_in_threadpool(
+                _workflow_controller(info).cancel, str(id), _workflow_context(info)
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(cancel)
 
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
@@ -680,6 +813,7 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
 async def _handle_graphql_request(
     request: Request,
     controller: TaskController,
+    workflows: WorkflowController | None = None,
 ) -> JSONResponse:
     try:
         media_type = _graphql_response_media_type(request.headers.get("accept"))
@@ -706,7 +840,11 @@ async def _handle_graphql_request(
     result = await schema.execute(
         payload.query,
         variable_values=payload.variables,
-        context_value={"controller": controller},
+        context_value={
+            "controller": controller,
+            "workflows": workflows,
+            "execution_context": maybe_current_context(),
+        },
         operation_name=payload.operation_name,
     )
     response_body: dict[str, object] = {"data": result.data}
@@ -719,16 +857,18 @@ async def _handle_graphql_request(
     )
 
 
-def create_graphql_router(controller: TaskController) -> APIRouter:
+def create_graphql_router(
+    controller: TaskController, *, workflows: WorkflowController | None = None
+) -> APIRouter:
     router = APIRouter(tags=["graphql"])
 
     @router.get("")
     async def graphql_get(request: Request) -> JSONResponse:
-        return await _handle_graphql_request(request, controller)
+        return await _handle_graphql_request(request, controller, workflows)
 
     @router.post("")
     async def graphql_post(request: Request) -> JSONResponse:
-        return await _handle_graphql_request(request, controller)
+        return await _handle_graphql_request(request, controller, workflows)
 
     return router
 

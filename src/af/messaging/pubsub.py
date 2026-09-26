@@ -409,7 +409,7 @@ class _SubscriptionState:
 
 
 class LocalPubSubDriver:
-    """In-process pub-sub driver with durable replay, consumer groups, and checkpoints."""
+    """In-process pub-sub with volatile replay, consumer groups, and checkpoints."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()

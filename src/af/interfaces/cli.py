@@ -18,6 +18,7 @@ from typer._click.exceptions import Exit as ClickExit
 from typer.core import TyperGroup
 
 from af.application.ideons import InterpretRequest
+from af.application.locales import LocaleSelection, Localizer
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication, create_application
 from af.bootstrap_version_control import create_version_control_controller
@@ -33,11 +34,13 @@ from af.interfaces.cli_commands import (
     install_click_group_command_contributors,
 )
 from af.interfaces.cli_interactions import CliInteraction, NonInteractiveCliInteraction
+from af.interfaces.locale_presenters import localize_outcome
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
     operations_to_dict,
     operations_to_text,
+    outcome_to_dict,
     procedure_descriptor_to_dict,
     search_index_result_to_dict,
     search_result_to_dict,
@@ -419,12 +422,35 @@ def create_cli(
             fail(error)
 
     @cli.command()
-    def ask(prompt: Annotated[str, typer.Argument(help="Natural-language work request")]) -> None:
-        """Classify and execute a request without persisting a Task."""
+    def ask(
+        prompt: Annotated[str, typer.Argument(help="Natural-language work request")],
+        language: Annotated[str | None, typer.Option("--language")] = None,
+        territory: Annotated[str | None, typer.Option("--territory")] = None,
+        as_json: Annotated[bool, typer.Option("--json")] = False,
+    ) -> None:
+        """Execute verified work, with optional independent locale presentation."""
         try:
-            typer.echo(current().tasks.execute(prompt).output)
+            selection = LocaleSelection.parse(language=language or "en", territory=territory)
+            application = current()
+            outcome = application.tasks.execute(prompt)
+            if language is not None or territory is not None:
+                payload = localize_outcome(
+                    outcome, application.container.resolve(Localizer), selection
+                )
+                if as_json:
+                    typer.echo(json.dumps(payload, ensure_ascii=False))
+                else:
+                    presentation = cast(dict[str, object], payload["presentation"])
+                    typer.echo(presentation["text"])
+            elif as_json:
+                typer.echo(json.dumps(outcome_to_dict(outcome), ensure_ascii=False))
+            else:
+                typer.echo(outcome.output)
         except AFError as error:
             fail(error)
+        except ValueError:
+            typer.echo("invalid locale selection", err=True)
+            raise typer.Exit(2) from None
 
     @cli.command("route-agent")
     def route_agent(
@@ -437,8 +463,9 @@ def create_cli(
             fail(error)
 
     @cli.command()
-    def routes() -> None:
+    def routes(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
         """List installed deterministic procedures as JSON."""
+        del as_json
         try:
             registry = current().container.resolve(ProcedureRegistry)
             catalogue = sorted(registry.catalogue(), key=lambda descriptor: descriptor.procedure_id)

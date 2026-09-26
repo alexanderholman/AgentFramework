@@ -6,6 +6,7 @@ from collections.abc import Mapping, Set
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from af.framework.errors import PlatformError, PlatformReason
 from af.framework.managers import CapabilitySet
 from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
 
@@ -100,12 +101,22 @@ class GraphManager:
             if name not in self._drivers:
                 raise KeyError(name)
             entry = self._drivers[name]
-            result[name] = entry.driver.verify_capabilities(required)
+            verified = entry.driver.verify_capabilities(required)
+            result[name] = CapabilitySet(
+                verified.values & {feature.value for feature in entry.capabilities}
+            )
         return result
+
+    def _required(self, name: str, feature: GraphFeature) -> GraphDriver:
+        driver = self.get(name)
+        verified = self.verify_capabilities({name}, {feature})[name]
+        if not verified.supports({feature.value}):
+            raise PlatformError(PlatformReason.CAPABILITY_UNAVAILABLE, stage="graph.capability")
+        return driver
 
     def query(self, query: GraphQuery, driver_name: str) -> list[GraphResult]:
         """Execute a graph query using the named driver."""
-        return self.get(driver_name).query(query)
+        return self._required(driver_name, GraphFeature.QUERY).query(query)
 
     def create_node(
         self,
@@ -115,7 +126,9 @@ class GraphManager:
         driver_name: str,
     ) -> None:
         """Create a node using the named driver."""
-        self.get(driver_name).create_node(node_id, labels, properties)
+        self._required(driver_name, GraphFeature.PERSISTENCE).create_node(
+            node_id, labels, properties
+        )
 
     def create_edge(
         self,
@@ -127,15 +140,17 @@ class GraphManager:
         driver_name: str,
     ) -> None:
         """Create an edge using the named driver."""
-        self.get(driver_name).create_edge(edge_id, source_id, target_id, relation_type, properties)
+        self._required(driver_name, GraphFeature.PERSISTENCE).create_edge(
+            edge_id, source_id, target_id, relation_type, properties
+        )
 
     def delete_node(self, node_id: str, driver_name: str) -> None:
         """Delete a node using the named driver."""
-        self.get(driver_name).delete_node(node_id)
+        self._required(driver_name, GraphFeature.PERSISTENCE).delete_node(node_id)
 
     def delete_edge(self, edge_id: str, driver_name: str) -> None:
         """Delete an edge using the named driver."""
-        self.get(driver_name).delete_edge(edge_id)
+        self._required(driver_name, GraphFeature.PERSISTENCE).delete_edge(edge_id)
 
 
 def bind_graph_manager(

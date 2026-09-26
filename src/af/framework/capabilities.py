@@ -1183,7 +1183,12 @@ class ExactCapabilityMatcher:
             or not set(requirements.required_verifiers).issubset(descriptor.verifier_requirements)
         ):
             return replace(candidate, reason=CapabilityReasonCode.PARTIAL_MATCH, exact_match=False)
-        if self._score(candidate) > self._score_limit(requirements.max_resources):
+        if any(
+            used > allowed
+            for used, allowed in zip(
+                self._score(candidate), self._score_limit(requirements.max_resources), strict=True
+            )
+        ):
             return replace(candidate, reason=CapabilityReasonCode.EXCESSIVE_COST, exact_match=False)
         return replace(candidate, reason=CapabilityReasonCode.MATCH, exact_match=True)
 

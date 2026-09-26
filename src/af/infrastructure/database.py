@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -118,7 +120,41 @@ class Database:
             class_=Session,
             expire_on_commit=False,
         )
-        Base.metadata.create_all(self.engine)
+        if parsed.get_backend_name() == "sqlite":
+            self._migrate_reference_schema()
+        else:
+            Base.metadata.create_all(self.engine)
+
+    def _migrate_reference_schema(self) -> None:
+        from af.framework.migrations import MigrationRunner
+        from af.infrastructure.reference_schema import reference_migrations
+        from af.infrastructure.sqlite import SQLiteDriver
+
+        raw = self.engine.raw_connection()
+        try:
+            connection = raw.driver_connection
+            if not isinstance(connection, sqlite3.Connection):
+                raise TypeError("reference SQLite schema requires a SQLite connection")
+            with SQLiteDriver(":memory:", connection=connection) as driver:
+                runner = MigrationRunner(
+                    driver,
+                    reference_migrations(),
+                    owner_id=f"reference-{uuid4().hex}",
+                    clock=lambda: datetime.now(UTC),
+                )
+                runner.bootstrap()
+                runner.apply_up()
+                runner.verify()
+        except BaseException:
+            self.engine.dispose()
+            raise
+        finally:
+            raw.close()
+
+    def verify_schema(self) -> None:
+        if self.engine.url.get_backend_name() != "sqlite":
+            raise ValueError("reference schema verification requires SQLite")
+        self._migrate_reference_schema()
 
     def close(self) -> None:
         self.engine.dispose()

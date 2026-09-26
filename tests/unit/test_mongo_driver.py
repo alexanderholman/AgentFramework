@@ -43,6 +43,12 @@ def mock_client():
     mock_db = mock_client.return_value.__getitem__.return_value
     mock_collection = mock_db.__getitem__.return_value
 
+    # A modern server with sessions, but no replica-set transaction capability.
+    mock_client.return_value.admin.command.return_value = {
+        "maxWireVersion": 17,
+        "logicalSessionTimeoutMinutes": 30,
+    }
+
     # Default return values
     mock_collection.find.return_value = []
     mock_collection.find_one.return_value = None
@@ -146,7 +152,12 @@ def test_constructor_sanitizes_client_creation_failure() -> None:
 
 def test_constructor_discovers_replica_set_transactions() -> None:
     client = MagicMock()
-    client.return_value.admin.command.return_value = {"hosts": ["mongo-1", "mongo-2"]}
+    client.return_value.admin.command.return_value = {
+        "hosts": ["mongo-1", "mongo-2"],
+        "setName": "rs0",
+        "maxWireVersion": 17,
+        "logicalSessionTimeoutMinutes": 30,
+    }
 
     with patch("af.infrastructure.mongo.driver.MongoClient", client):
         driver = MongoDBDriver(url="mongodb://localhost")
@@ -583,7 +594,12 @@ async def test_create_timeseries_collection_with_meta_field(driver, mock_client)
 async def test_create_timeseries_collection_with_bucket_max_span(driver, mock_client) -> None:
     _, mock_db, _ = mock_client
     mock_db.create_collection.return_value = "timeseries_col"
-    options = TimeSeriesOptions(time_field="ts", granularity="second", bucket_max_span_seconds=60)
+    options = TimeSeriesOptions(
+        time_field="ts",
+        granularity="second",
+        bucket_max_span_seconds=60,
+        bucket_rounding_seconds=60,
+    )
 
     await driver.create_time_series_collection("timeseries_col", options)
     mock_db.create_collection.assert_called_once()
@@ -597,7 +613,7 @@ async def test_timeseries_granularity_mapping_second(driver, mock_client) -> Non
 
     await driver.create_time_series_collection("ts_col", options)
     call_kwargs = mock_db.create_collection.call_args.kwargs
-    assert call_kwargs["timeseries"]["granularity"] == "second"
+    assert call_kwargs["timeseries"]["granularity"] == "seconds"
 
 
 @pytest.mark.asyncio
@@ -608,7 +624,7 @@ async def test_timeseries_granularity_mapping_minute(driver, mock_client) -> Non
 
     await driver.create_time_series_collection("ts_col", options)
     call_kwargs = mock_db.create_collection.call_args.kwargs
-    assert call_kwargs["timeseries"]["granularity"] == "minute"
+    assert call_kwargs["timeseries"]["granularity"] == "minutes"
 
 
 @pytest.mark.asyncio
@@ -619,7 +635,7 @@ async def test_timeseries_granularity_mapping_hour(driver, mock_client) -> None:
 
     await driver.create_time_series_collection("ts_col", options)
     call_kwargs = mock_db.create_collection.call_args.kwargs
-    assert call_kwargs["timeseries"]["granularity"] == "hour"
+    assert call_kwargs["timeseries"]["granularity"] == "hours"
 
 
 @pytest.mark.asyncio
@@ -792,10 +808,12 @@ async def test_closed_driver_raises_error(driver, mock_client) -> None:
         await driver.insert_one("test_collection", {"name": "test"})
 
 
-def test_context_manager_closes_session_and_client(driver, mock_client) -> None:
+@pytest.mark.asyncio
+async def test_context_manager_closes_session_and_client(driver, mock_client) -> None:
     client, _, _ = mock_client
     session = MagicMock()
-    driver._session = session
+    client.return_value.start_session.return_value = session
+    await driver.start_session()
 
     with driver as entered:
         assert entered is driver

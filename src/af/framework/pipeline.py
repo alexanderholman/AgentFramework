@@ -51,11 +51,15 @@ from af.framework.types import (
     is_valid_classifier_id,
     is_valid_procedure_id,
     is_valid_procedure_intent,
+    is_valid_procedure_version,
     normalize_prompt,
     parse_probability,
 )
 
 _HANDOFF_REASON_CODES = {
+    SelectionHandoffReason.CANCELLED: SelectionReasonCode.CANCELLED,
+    SelectionHandoffReason.TIMEOUT: SelectionReasonCode.TIMEOUT,
+    SelectionHandoffReason.MALFORMED: SelectionReasonCode.MALFORMED,
     SelectionHandoffReason.AMBIGUOUS: SelectionReasonCode.AMBIGUOUS,
     SelectionHandoffReason.UNAVAILABLE: SelectionReasonCode.UNAVAILABLE,
     SelectionHandoffReason.UNSUPPORTED: SelectionReasonCode.UNSUPPORTED,
@@ -448,6 +452,18 @@ class PipelineAgent:
                 events=events,
             )
 
+        if (proposal.version is not None and proposal.version != descriptor.version) or (
+            proposal.digest is not None and proposal.digest != descriptor.digest
+        ):
+            self._fail_closed_selection(
+                SelectionReasonCode.STALE_PROCEDURE,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+
         if proposal.intent != descriptor.intent:
             self._fail_closed_selection(
                 SelectionReasonCode.UNSUPPORTED_INTENT,
@@ -580,6 +596,16 @@ class PipelineAgent:
             or type(proposal.intent) is not str
             or not proposal.intent
             or len(proposal.intent) > PROCEDURE_INTENT_MAX_LENGTH
+            or (proposal.version is not None and not is_valid_procedure_version(proposal.version))
+            or (
+                proposal.digest is not None
+                and (
+                    type(proposal.digest) is not str
+                    or len(proposal.digest) != 71
+                    or not proposal.digest.startswith("sha256:")
+                    or any(char not in "0123456789abcdef" for char in proposal.digest[7:])
+                )
+            )
         ):
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_DECISION,
@@ -603,6 +629,8 @@ class PipelineAgent:
                 intent=proposal.intent,
                 arguments=canonical_arguments,
                 confidence=proposal.confidence,
+                version=proposal.version,
+                digest=proposal.digest,
             ),
             None,
         )

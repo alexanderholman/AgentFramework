@@ -52,7 +52,12 @@ class AsyncSubprocessExecutor:
             asyncio.create_task(drain(process.stdout, "stdout")),
             asyncio.create_task(drain(process.stderr, "stderr")),
         ]
-        wait_process = asyncio.create_task(process.wait())
+
+        async def wait_for_capture() -> None:
+            await process.wait()
+            await asyncio.gather(*drains)
+
+        wait_process = asyncio.create_task(wait_for_capture())
         wait_limit = asyncio.create_task(exceeded.wait())
         state = ProgramState.COMPLETED
         try:
@@ -61,7 +66,7 @@ class AsyncSubprocessExecutor:
                 timeout=request.budget.timeout.total_seconds(),
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            if wait_limit in done and exceeded.is_set():
+            if exceeded.is_set():
                 state = ProgramState.OUTPUT_LIMIT
                 await self._terminate(process)
             elif wait_process not in done:
@@ -93,13 +98,10 @@ class AsyncSubprocessExecutor:
 
     @staticmethod
     async def _terminate(process: asyncio.subprocess.Process) -> None:
-        if process.returncode is not None:
-            return
+        # Descendants may keep capture pipes alive after the leader exits.
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
-        try:
-            await asyncio.wait_for(process.wait(), timeout=0.25)
-        except TimeoutError:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            await process.wait()
+        await asyncio.sleep(0.25)
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        await process.wait()

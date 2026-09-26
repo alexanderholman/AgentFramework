@@ -4271,3 +4271,32 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - Issue #177
 - Issue #21
 - PR #206
+
+---
+
+## 2026-09-26 — Autonomous mission integrated foundation checkpoint
+
+### Work
+
+Integrated workflow restart/transport parity, science/locales, machine-readable CLI,
+local model and consented Jev decisions, tokens/OAuth, scheduling, data lifecycle,
+content/runtime/paired peers, real queue protocol adapters and graph/storage repairs.
+Preserved original Git ancestry and the mission branch's newer starting state.
+
+### Evidence
+
+Focused suites passed: cache/queue/graph 595; science/locale/scheduling and neighboring
+CLI/pipeline 303; workflow/self-operation/data 82; headless auth/OAuth 49; storage/mail
+38; paired peer/process runtime 8. These overlap and are not a total suite count.
+Real local Redis 6.2.14 cache/queue qualification passed 3 tests, using a temporary
+server process. Loopback SMTP, content HTTP and paired signed-procedure execution
+were exercised. Strict mypy passed 296 source files; governance passed all 36 checks.
+
+### Continuing work
+
+A complete canonical gate has not yet passed for this enlarged tree. Full integration
+runs during concurrent test-first development encountered transient missing modules;
+remaining stable failures and coverage are being resolved. Account/OIDC/passkey,
+algorithm/problem/interpreter catalogue and engineering/promotion work continues.
+External database/search/graph/cloud qualification is not inferred from fakes. Keep
+this as a recovery checkpoint, retain alpha versioning, and continue the mission.

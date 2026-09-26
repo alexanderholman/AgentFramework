@@ -469,7 +469,7 @@ def test_write_concern_error() -> None:
 
 def test_transaction_not_supported_default() -> None:
     err = TransactionNotSupportedError()
-    assert "Single-node MongoDB Community" in str(err)
+    assert "Standalone MongoDB deployments" in str(err)
     assert err.operation == "transaction"
 
 

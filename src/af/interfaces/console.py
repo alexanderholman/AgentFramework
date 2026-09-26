@@ -9,21 +9,45 @@ from typing import Annotated
 
 import typer
 
+from af.application.authentication import AuthenticationService
+from af.application.capability_preview import CapabilitySnapshot
+from af.application.data_maintenance import DataMaintenanceController
 from af.application.database_setup import (
     DatabaseSetupController,
     DatabaseSetupMode,
     DatabaseSetupRequest,
 )
+from af.application.decisions import DecisionController
+from af.application.introspection import IntrospectionService
+from af.application.oauth_controller import OAuthController
 from af.application.self_design_execution import SelfDesignExecutionController
+from af.application.self_improvement import SelfImprovementService
+from af.application.self_stages import SelfStageController
 from af.application.version_control import VersionControlController
-from af.bootstrap import AFApplication
+from af.application.workflow_control import WorkflowController
+from af.bootstrap import AFApplication, create_offline_improvement_service, diagnose_application
+from af.bootstrap_extensions import peer_qualification_demo, reference_evolution_fixture
+from af.bootstrap_scheduling import SchedulerRuntime
+from af.config import Settings
 from af.framework.errors import AFError, PlatformError, PlatformReason, ServiceNotBound
+from af.framework.routing import ProcedureRegistry
 from af.framework.self_alignment_operation import SelfAlignmentOperation
 from af.framework.self_analysis_operation import SelfAnalysisOperation
 from af.framework.self_design_operation import SelfDesignOperation
+from af.interfaces.authentication import register_authentication_commands
+from af.interfaces.capabilities import register_capability_commands
 from af.interfaces.cli import create_cli as create_base_cli
 from af.interfaces.cli import current_application_from_context
 from af.interfaces.cli_interactions import CliInteraction
+from af.interfaces.data_maintenance import register_data_commands
+from af.interfaces.decisions import register_decision_commands
+from af.interfaces.introspection import register_introspection
+from af.interfaces.oauth_grants import register_oauth_commands
+from af.interfaces.scheduling import register_scheduling_commands
+from af.interfaces.self_improvement import register_self_improvement_commands
+from af.interfaces.self_stages import register_lifecycle_stage_commands
+from af.interfaces.workflows import register_workflow_commands
+from af.search.manager import SearchManager
 
 
 def create_cli(
@@ -45,6 +69,106 @@ def create_cli(
         interaction_factory=interaction_factory,
         version_control=version_control,
     )
+
+    def introspection(context: typer.Context) -> IntrospectionService:
+        current = current_application_from_context(context)
+        return IntrospectionService(
+            current.container.resolve(ProcedureRegistry),
+            current.lifecycle.provider_order,
+            current.container.resolve(SearchManager).driver_manifests,
+        )
+
+    register_introspection(
+        cli,
+        introspection,
+        lambda: diagnose_application(
+            application.settings if application else Settings.from_environment()
+        ),
+    )
+    register_capability_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            CapabilitySnapshot
+        ),
+    )
+    register_authentication_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            AuthenticationService
+        ),
+        lambda context: current_application_from_context(context).settings.auth_tenant_id,
+    )
+    register_data_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            DataMaintenanceController
+        ),
+    )
+    register_decision_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            DecisionController
+        ),
+    )
+    register_workflow_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            WorkflowController
+        ),
+    )
+
+    register_lifecycle_stage_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            SelfStageController
+        ),
+    )
+    register_oauth_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            OAuthController
+        ),
+    )
+    register_scheduling_commands(
+        cli,
+        lambda context: (
+            current_application_from_context(context).container.resolve(SchedulerRuntime).commands
+        ),
+    )
+    register_self_improvement_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            SelfImprovementService
+        ),
+        lambda context: create_offline_improvement_service(
+            current_application_from_context(context)
+        ),
+        reference_evolution_fixture,
+    )
+
+    @cli.command("peer-demo")
+    def peer_demo(execute: bool = typer.Option(False, "--execute")) -> None:
+        """Preview or exercise paired local nodes with installed character counting."""
+        if not execute:
+            typer.echo(
+                json.dumps(
+                    {
+                        "operation": "local-peer-qualification",
+                        "execute": False,
+                        "effects": [
+                            "temporary local files",
+                            "loopback sockets",
+                            "bounded child process",
+                        ],
+                    }
+                )
+            )
+            return
+        try:
+            typer.echo(json.dumps(peer_qualification_demo(), sort_keys=True))
+        except (AFError, ValueError, OSError):
+            typer.echo('{"error":"peer_demo_failed"}', err=True)
+            raise typer.Exit(2) from None
 
     @cli.command("self-align")
     def plan_self_align() -> None:

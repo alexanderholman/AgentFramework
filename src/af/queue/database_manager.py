@@ -29,6 +29,8 @@ _CAPABILITIES = CapabilitySet(
     (
         QueueFeature.DEAD_LETTER_INSPECTION.value,
         QueueFeature.DEAD_LETTER_REPLAY.value,
+        QueueFeature.DELAY.value,
+        QueueFeature.PRIORITY.value,
         QueueFeature.RESERVATION.value,
         QueueFeature.RESERVATION_RENEWAL.value,
         QueueFeature.RETRY.value,
@@ -87,7 +89,7 @@ def database_queue_registration(
     evidence_clock = clock if clock is not None else (lambda: datetime.now(UTC))
     manifest = DriverManifest(
         driver_name="database",
-        version="1.5.0",
+        version="1.6.0",
         artifact_digest=_ARTIFACT_DIGEST,
         dependency_graph_digest=_DEPENDENCY_DIGEST,
         capabilities=_CAPABILITIES,
@@ -126,6 +128,8 @@ def database_queue_registration(
             {
                 QueueFeature.DEAD_LETTER_INSPECTION,
                 QueueFeature.DEAD_LETTER_REPLAY,
+                QueueFeature.DELAY,
+                QueueFeature.PRIORITY,
                 QueueFeature.RESERVATION,
                 QueueFeature.RESERVATION_RENEWAL,
                 QueueFeature.RETRY,

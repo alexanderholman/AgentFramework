@@ -214,6 +214,57 @@ def test_database_queue_persists_jobs_across_driver_restart(tmp_path: Path) -> N
         reopened.close()
 
 
+def test_database_queue_delay_starts_at_dispatch_and_survives_restart(tmp_path: Path) -> None:
+    database = tmp_path / "queue-delay.sqlite3"
+    clock = FakeClock(_NOW + timedelta(days=1))
+    delayed = _job("job-delayed", delay=timedelta(seconds=10), max_attempts=2)
+    first = DatabaseQueueDriver(SQLiteDriver(database), clock=clock)
+    first.dispatch(delayed)
+    first.close()
+    reopened = DatabaseQueueDriver(SQLiteDriver(database), clock=clock)
+    assert reopened.reserve() is None
+    clock.advance(timedelta(seconds=9))
+    assert reopened.reserve() is None
+    clock.advance(timedelta(seconds=1))
+    reserved = reopened.reserve()
+    assert reserved is not None
+    assert reserved.job == delayed
+    reopened.reject(reserved)
+    assert reopened.dead_letters()[0].job == delayed
+    reopened.replay_dead_letter("job-delayed")
+    replayed = reopened.reserve()
+    assert replayed is not None
+    reopened.ack(replayed)
+    reopened.close()
+
+
+def test_database_queue_priority_orders_only_due_jobs_and_preserves_ties(tmp_path: Path) -> None:
+    clock = FakeClock(_NOW)
+    driver = DatabaseQueueDriver(SQLiteDriver(tmp_path / "queue-priority.sqlite3"), clock=clock)
+    for job in (
+        _job("z-low", priority=-1),
+        _job("b-normal"),
+        _job("a-normal", priority=0),
+        _job("high", priority=100),
+        _job("future", priority=200, delay=timedelta(seconds=10)),
+    ):
+        driver.dispatch(job)
+    observed = []
+    for _ in range(4):
+        reservation = driver.reserve()
+        assert reservation is not None
+        observed.append(reservation.job.envelope.metadata.message_id)
+        driver.ack(reservation)
+    assert observed == ["high", "a-normal", "b-normal", "z-low"]
+    assert driver.reserve() is None
+    clock.advance(timedelta(seconds=10))
+    future = driver.reserve()
+    assert future is not None
+    assert future.job.priority == 200
+    driver.ack(future)
+    driver.close()
+
+
 def test_database_queue_recovers_expired_reservation_with_new_fence(tmp_path: Path) -> None:
     database = tmp_path / "queue-lease-recovery.sqlite3"
     clock = FakeClock(_NOW)
@@ -1033,6 +1084,8 @@ def test_database_queue_registration_binds_runtime_identity_and_evidence(tmp_pat
             (
                 QueueFeature.DEAD_LETTER_INSPECTION.value,
                 QueueFeature.DEAD_LETTER_REPLAY.value,
+                QueueFeature.DELAY.value,
+                QueueFeature.PRIORITY.value,
                 QueueFeature.RESERVATION.value,
                 QueueFeature.RESERVATION_RENEWAL.value,
                 QueueFeature.RETRY.value,

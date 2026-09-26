@@ -276,3 +276,17 @@ def test_bind_graph_manager_requires_explicit_registry() -> None:
     """Production composition must never silently bind process-local graph stubs."""
     with pytest.raises(TypeError, match="registry"):
         bind_graph_manager()  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    "declared,supported", [(set(), {GraphFeature.QUERY}), ({GraphFeature.QUERY}, set())]
+)
+def test_graph_manager_requires_both_declared_and_verified_capability(
+    declared: set[GraphFeature], supported: set[GraphFeature]
+) -> None:
+    from af.framework.errors import PlatformError
+
+    driver = _StubGraphDriver(supported)
+    manager = GraphManager({"graph": GraphDriverRegistration(driver, declared)})
+    with pytest.raises(PlatformError):
+        manager.query(GraphQuery("RETURN 1"), "graph")

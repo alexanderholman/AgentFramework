@@ -62,12 +62,19 @@ class ProcedureRisk(StrEnum):
 
 
 class SelectionHandoffReason(StrEnum):
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+    MALFORMED = "malformed"
     AMBIGUOUS = "ambiguous"
     UNSUPPORTED = "unsupported"
     UNAVAILABLE = "unavailable"
 
 
 class SelectionReasonCode(StrEnum):
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+    MALFORMED = "malformed"
+    STALE_PROCEDURE = "stale_procedure"
     AMBIGUOUS = "ambiguous"
     APPROVED = "approved"
     BELOW_THRESHOLD = "below_threshold"
@@ -112,6 +119,8 @@ class SelectionProposal:
     intent: str
     arguments: dict[str, str]
     confidence: float
+    version: str | None = None
+    digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

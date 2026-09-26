@@ -8,12 +8,16 @@ from typing import Literal, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from af import __version__
+from af.application.authentication import AuthenticationService
+from af.application.workflow_control import WorkflowController
 from af.bootstrap import AFApplication, create_application
+from af.framework.authentication import AuthenticationDenied
 from af.framework.container import InvocationKind
 from af.framework.context import AcceptanceScope, ExecutionContext
 from af.framework.errors import (
@@ -46,6 +50,8 @@ from af.interfaces.http_trust import format_host, host_matches, parse_host_value
 from af.interfaces.ideons import create_ideon_router
 from af.interfaces.rest import create_rest_router
 from af.interfaces.web import WebProfile, create_web_router
+from af.interfaces.workflows import create_workflow_router
+from af.interfaces.xml_api import create_xml_router
 
 _WEB_PROFILES = ("basic", "experimental", "pretty")
 
@@ -191,7 +197,36 @@ class _RequestContextMiddleware:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
+        principal = None
+        headers = _scope_header_values(scope, "authorization")
+        if self._application.settings.http_auth_required or headers:
+            try:
+                if (
+                    len(headers) != 1
+                    or not headers[0].startswith("Bearer ")
+                    or len(headers[0]) > 1024
+                ):
+                    raise AuthenticationDenied()
+                authentication = self._application.container.resolve(AuthenticationService)
+                principal = await run_in_threadpool(
+                    authentication.authenticate,
+                    headers[0][7:],
+                    tenant_id=self._application.settings.auth_tenant_id,
+                    required_scopes=("af:read",)
+                    if scope["method"] in {"GET", "HEAD", "OPTIONS"}
+                    else ("af:write",),
+                )
+            except (AuthenticationDenied, ValueError):
+                response = JSONResponse(
+                    status_code=401,
+                    content={"detail": "authentication required"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+                await response(scope, receive, send)
+                return
         context = ExecutionContext(
+            principal=principal,
+            tenant_id=self._application.settings.auth_tenant_id if principal else None,
             correlation_id=str(uuid4()),
             requested_scope=AcceptanceScope.DETERMINISTIC,
             effective_scope=AcceptanceScope.DETERMINISTIC,
@@ -351,7 +386,14 @@ def _assemble_http_app(
     )
     app.include_router(create_rest_router(resolved.tasks, resolved.operations))
     app.include_router(create_ideon_router(resolved.ideons))
-    app.include_router(create_graphql_router(resolved.tasks), prefix="/graphql")
+    app.include_router(create_xml_router(resolved.tasks))
+    app.include_router(create_workflow_router(resolved.container.resolve(WorkflowController)))
+    app.include_router(
+        create_graphql_router(
+            resolved.tasks, workflows=resolved.container.resolve(WorkflowController)
+        ),
+        prefix="/graphql",
+    )
 
     @app.exception_handler(TaskNotFound)
     async def task_not_found(_: Request, error: TaskNotFound) -> JSONResponse:

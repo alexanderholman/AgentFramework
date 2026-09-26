@@ -49,6 +49,10 @@ from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces.mcp import create_mcp_server
 
 EXPECTED_TOOLS = {
+    "af_start_workflow",
+    "af_get_workflow",
+    "af_resume_workflow",
+    "af_cancel_workflow",
     "af_hello",
     "af_ask",
     "af_count_characters",
@@ -349,7 +353,12 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             manifest_result = await session.read_resource("af://manifest")
             manifest = json.loads(manifest_result.contents[0].text)
             assert manifest["version"].endswith("a0")
-            assert manifest["routes"] == ["character-count", "current-time", "hello"]
+            assert manifest["routes"] == [
+                "character-count",
+                "current-time",
+                "hello",
+                "science-calculate",
+            ]
             assert manifest["route_identities"] == [
                 {
                     "procedure_id": "character-count",
@@ -365,6 +374,11 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
                     "procedure_id": "hello",
                     "version": "1.0.0",
                     "digest": manifest["route_identities"][2]["digest"],
+                },
+                {
+                    "procedure_id": "science-calculate",
+                    "version": "1.0.0",
+                    "digest": manifest["route_identities"][3]["digest"],
                 },
             ]
             assert all(

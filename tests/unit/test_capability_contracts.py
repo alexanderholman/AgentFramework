@@ -157,6 +157,21 @@ def test_reason_codes_are_stable_and_complete() -> None:
 
 
 @pytest.mark.parametrize(
+    "resource", ["latency_ms", "memory_mib", "cpu_millis", "accelerator_millis"]
+)
+def test_each_resource_ceiling_applies_even_when_monetary_cost_is_lower(resource: str) -> None:
+    candidate = _candidate(
+        _descriptor("over-budget", CapabilityClass.MODEL, procedure_id=None),
+        estimated_resources=replace(_resources(estimated_cost_micros=0), **{resource: 1_000}),
+    )
+    route = ExactCapabilityMatcher().match(
+        _requirements("limit", CapabilityClass.MODEL), [candidate]
+    )
+    assert route.selected_capability_id is None
+    assert route.reason is CapabilityReasonCode.EXCESSIVE_COST
+
+
+@pytest.mark.parametrize(
     ("suffix", "capability_class", "procedure_id", "workflow_id", "deployment_id"),
     [
         ("static", CapabilityClass.STATIC, None, None, "deployment.local"),
