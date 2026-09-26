@@ -7,6 +7,7 @@ from math import isfinite
 from typing import Never
 from uuid import uuid4
 
+from af.framework.constitution import classification_input, decision_scope, procedure_decision
 from af.framework.contracts import (
     Classifier,
     Procedure,
@@ -24,6 +25,7 @@ from af.framework.errors import (
     VerificationFailed,
 )
 from af.framework.routing import LadderRouter, ProcedureRegistry
+from af.framework.trace_privacy import RedactingTraceRepository
 from af.framework.types import (
     PROCEDURE_ARGUMENT_COUNT_MAX,
     PROCEDURE_ID_MAX_LENGTH,
@@ -87,7 +89,7 @@ class PipelineAgent:
         self._registry = registry
         self._router = router
         self._verifier = verifier
-        self._traces = traces
+        self._traces = RedactingTraceRepository(traces)
         self._regression_gate = regression_gate
         self._reuse_store = reuse_store
         self._selector = selector
@@ -128,7 +130,8 @@ class PipelineAgent:
         events: list[TraceEvent] = []
 
         if classification is None:
-            classification = self._classifier.classify(request)
+            with decision_scope():
+                classification = self._classifier.classify(classification_input(request))
         else:
             events.append(TraceEvent("classify", classification.intent))
         if classification is None:
@@ -156,13 +159,14 @@ class PipelineAgent:
         if not events:
             events.append(TraceEvent("classify", classification.intent))
 
-        classification, selected_procedure_id = self._resolve_classification(
-            request,
-            classification,
-            trace_id=trace_id,
-            created_at=created_at,
-            events=events,
-        )
+        with decision_scope():
+            classification, selected_procedure_id = self._resolve_classification(
+                request,
+                classification,
+                trace_id=trace_id,
+                created_at=created_at,
+                events=events,
+            )
         expected_procedure_id = selected_procedure_id or expected_procedure_id
 
         return self._execute_classification(
@@ -211,6 +215,22 @@ class PipelineAgent:
                 TraceEvent(
                     "select",
                     f"selector proposal did not match routed procedure: {expected_procedure_id}",
+                )
+            )
+            self._record_unsupported_trace(
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+            raise UnsupportedWork(request.prompt, trace_id)
+        constitutional = procedure_decision(descriptor)
+        if not constitutional.allowed:
+            events.append(
+                TraceEvent(
+                    "constitution-policy",
+                    f"{constitutional.reason} constitution={constitutional.constitution_digest}",
                 )
             )
             self._record_unsupported_trace(

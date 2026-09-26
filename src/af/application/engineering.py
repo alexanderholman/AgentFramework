@@ -55,7 +55,11 @@ class LocalEngineeringService:
             raise WorkflowError("engineering_deadline_expired")
 
     def complete(
-        self, request: EngineeringRequest, context: ExecutionContext
+        self,
+        request: EngineeringRequest,
+        context: ExecutionContext,
+        *,
+        expected_source_head: str | None = None,
     ) -> EngineeringCompletion:
         self._active(context)
         admission = self._catalogue.lookup(request.family)
@@ -78,7 +82,10 @@ class LocalEngineeringService:
                 started = time.monotonic()
                 try:
                     admission = self._engineer.engineer(
-                        request.family, context, route_history=evidence.history
+                        request.family,
+                        context,
+                        route_history=evidence.history,
+                        expected_source_head=expected_source_head,
                     )
                     self._active(context)
                     self._catalogue.admit(admission, owner)
@@ -100,6 +107,8 @@ class LocalEngineeringService:
                         raise WorkflowError("engineering_in_progress")
                     time.sleep(0.02)
                     admission = self._catalogue.lookup(request.family)
+        if expected_source_head is not None and admission.source_head != expected_source_head:
+            raise WorkflowError("engineering_source_head_changed")
         return self._execute(admission, request.texts, context, engineered, engineering_seconds)
 
     def execute_admitted(

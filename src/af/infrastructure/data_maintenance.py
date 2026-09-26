@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -38,12 +39,28 @@ def _checksum(path: Path) -> str:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def _private_write(path: Path, payload: bytes) -> None:
+def _unlink_owned(path: Path, owned: os.stat_result) -> None:
+    with suppress(OSError):
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino):
+            path.unlink()
+
+
+def _private_write(path: Path, payload: bytes) -> os.stat_result:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "wb") as output:
-        output.write(payload)
-        output.flush()
-        os.fsync(output.fileno())
+    owned = os.fstat(descriptor)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino):
+            raise OSError("private data destination changed")
+        return owned
+    except BaseException:
+        _unlink_owned(path, owned)
+        raise
 
 
 def _integrity(connection: sqlite3.Connection) -> None:
@@ -85,6 +102,7 @@ class SQLiteDataMaintenance:
         descriptor, temporary_name = tempfile.mkstemp(prefix=".af-backup-", dir=destination.parent)
         os.close(descriptor)
         temporary = Path(temporary_name)
+        owned = temporary.stat(follow_symlinks=False)
         published = False
         try:
             raw = self._database.engine.raw_connection()
@@ -120,7 +138,7 @@ class SQLiteDataMaintenance:
             return BackupReceipt(destination, manifest_path, digest, size, created)
         except BaseException:
             if published:
-                destination.unlink(missing_ok=True)
+                _unlink_owned(destination, owned)
             raise
         finally:
             temporary.unlink(missing_ok=True)
@@ -175,11 +193,11 @@ class SQLiteDataMaintenance:
                 os.fsync(restored.fileno())
             # Verification used the original host key; retain that identity at
             # the restored database's bootstrap location before publishing it.
-            _private_write(key_path, self._key)
+            key_owned = _private_write(key_path, self._key)
             try:
                 os.link(temporary, destination)
             except BaseException:
-                key_path.unlink(missing_ok=True)
+                _unlink_owned(key_path, key_owned)
                 raise
             return destination
         finally:

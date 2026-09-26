@@ -133,6 +133,59 @@ def test_preview_is_pure_repeatable_and_bound_to_exact_snapshot() -> None:
     assert first.to_dict()["execution_performed"] is False
 
 
+def test_revoked_dependency_cannot_make_an_otherwise_valid_route_available() -> None:
+    base = record()
+    dependency_descriptor = replace(
+        base.descriptor, capability_id="revoked", declared_state=CapabilityLifecycle.REVOKED
+    )
+    dependency = replace(
+        base,
+        descriptor=dependency_descriptor,
+        observations=(
+            replace(base.observations[0], descriptor_digest=dependency_descriptor.digest),
+        ),
+    )
+    parent_descriptor = replace(base.descriptor, dependency_ids=("revoked",))
+    parent = replace(
+        base,
+        descriptor=parent_descriptor,
+        observations=(replace(base.observations[0], descriptor_digest=parent_descriptor.digest),),
+    )
+    preview = CapabilityPreviewService(snapshot(parent, dependency)).preview(requirements())
+    assert preview.selected_capability_id is None
+    route = next(item for item in preview.routes if item.capability_id == "model.local")
+    assert route.outcome is PreviewOutcome.UNCERTAIN
+    assert route.reason_codes == ("dependency_policy_denied",)
+
+
+def test_deep_local_dependency_chain_stays_bounded_and_propagates_leaf_denial() -> None:
+    base = record()
+    chain = []
+    for index in range(1050):
+        descriptor = replace(
+            base.descriptor,
+            capability_id=f"model.{index:04d}",
+            dependency_ids=(f"model.{index + 1:04d}",) if index < 1049 else (),
+        )
+        chain.append(
+            replace(
+                base,
+                descriptor=descriptor,
+                kind="model" if index == 0 else "component",
+                observations=(replace(base.observations[0], descriptor_digest=descriptor.digest),),
+            )
+        )
+    service = CapabilityPreviewService(snapshot(*chain))
+    preview = service.preview(requirements())
+    assert preview.outcome is PreviewOutcome.AVAILABLE
+    assert preview.selected_capability_id == "model.0000"
+    chain[-1] = replace(chain[-1], healthy=False)
+    denied = CapabilityPreviewService(snapshot(*chain)).preview(requirements())
+    assert denied.selected_capability_id is None
+    route = next(item for item in denied.routes if item.capability_id == "model.0000")
+    assert route.reason_codes == ("dependency_unavailable",)
+
+
 def test_costly_is_feasible_but_not_task_completion_or_authorization() -> None:
     req = replace(requirements(), max_resources=CapabilityResourceEnvelope(1, 100, 1, 0, 0))
     result = CapabilityPreviewService(snapshot(record())).preview(req)

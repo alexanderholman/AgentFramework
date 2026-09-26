@@ -38,6 +38,35 @@ local notification export is host administration, not proof of mailbox ownership
 
 ## Active work and next action
 
+### Stabilization update — 2026-09-26
+
+User reaffirmed stabilization: freeze speculative features, fix demonstrated v0.1
+blockers, qualify one immutable candidate and preserve all newer work. Live PR #212
+and branch were rechecked at `a1382d8d478f0142c78ab98edbe44f94e6c3a71a`.
+CI logs confirmed one import-order error and two misplaced TUI assertions. Narrow
+fix `4d74e926acea8cfccad5daabb3ecdf666a77ab35` is published. Its exact source tree
+passed the complete local canonical gate: 4,098 passed, 58 skipped, 91.70% branch
+coverage; Ruff, strict mypy (359 source files), nine OpenCode tests, wheel-from-sdist
+validation/installed smoke and all 36 governance checks passed. GitHub AF Python,
+PostgreSQL, MySQL, MariaDB, OpenSearch and Elasticsearch all subsequently completed
+successfully at that head. This proves those tested profiles at that source only,
+not the later stabilization snapshot.
+
+Current working tree contains subsequent demonstrated blocker fixes awaiting a
+separate coherent checkpoint/full gate: API CAS/idempotency/negotiation/SOAP;
+GraphQL persisted operations/batching/deadlines; CSP-compatible local explorers;
+strict settings types and deep capability graphs; terminal ownership and cleanup;
+request-content trace minimization; configured self-development public journey;
+deterministic-route effect policy; pinned source/security inventory/signing tools;
+and runtime-only isolated package installation. Focused evidence is recorded in
+tests; do not describe the mutable tree as release-qualified. All existing workers
+were instructed to finish these concrete fixes and freeze, not expand scope.
+
+The active fixed validation checkout is separate from the working tree. Original
+gate logs are outside Git; reproducible source/tests and the canonical command are
+authoritative. Security advisory lookup encountered DNS failure; no successful
+dependency advisory result or independent security approval has been fabricated.
+
 1. Complete API conditional updates/idempotency and remaining native bridge/release
    tooling integration. Do not confuse native protocol or offline Bare startup with
    successful DHT, relay, cross-platform or physical-model qualification.

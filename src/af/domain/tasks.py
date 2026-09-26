@@ -37,6 +37,13 @@ class TaskRepository(Protocol):
     def delete(self, task_id: str) -> None: ...
 
 
+@runtime_checkable
+class BatchTaskRepository(Protocol):
+    """One bounded read, preserving input order and representing missing IDs."""
+
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]: ...
+
+
 class TaskConflict(AFError):
     """The persisted Task no longer matches the caller's observed version."""
 

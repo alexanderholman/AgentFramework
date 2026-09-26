@@ -55,7 +55,8 @@ def test_operations_dashboard_has_shared_redacted_html_rest_and_terminal_views(a
     assert created.trace_id not in serialized
 
     assert html_response.status_code == 200
-    assert '<main aria-labelledby="operations-title">' in html_response.text
+    assert html_response.text.count("<main ") == 1
+    assert '<section lang="en" dir="ltr" aria-labelledby="operations-title">' in html_response.text
     assert '<table aria-labelledby="recent-title">' in html_response.text
     assert "Operations" in html_response.text
     assert created.id in html_response.text

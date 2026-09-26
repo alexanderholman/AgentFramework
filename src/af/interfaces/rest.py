@@ -177,21 +177,29 @@ def create_rest_router(
     def create_task(
         payload: TaskPrompt,
         response: Response,
+        request: Request,
         selection: LocaleSelection | None = selected_locale,
     ) -> TaskResponse:
         task = controller.create(payload.prompt)
         response.headers["Location"] = f"/api/v1/tasks/{task.id}"
-        response.headers["ETag"] = task_etag(task)
+        if selection is None:
+            response.headers["ETag"] = task_etag(
+                task, getattr(request.state, "af_representation", "json")
+            )
         return present(task, selection)
 
     @router.get("/tasks/{task_id}", response_model=TaskResponse, response_model_exclude_unset=True)
     def get_task(
         task_id: str,
         response: Response,
+        request: Request,
         selection: LocaleSelection | None = selected_locale,
     ) -> TaskResponse:
         task = controller.get(task_id)
-        response.headers["ETag"] = task_etag(task)
+        if selection is None:
+            response.headers["ETag"] = task_etag(
+                task, getattr(request.state, "af_representation", "json")
+            )
         return present(task, selection)
 
     @router.patch(
@@ -213,7 +221,10 @@ def create_rest_router(
         task = controller.update(
             task_id, payload.prompt, expected_version=expected_version(request)
         )
-        response.headers["ETag"] = task_etag(task)
+        if selection is None:
+            response.headers["ETag"] = task_etag(
+                task, getattr(request.state, "af_representation", "json")
+            )
         return present(task, selection)
 
     @router.delete(

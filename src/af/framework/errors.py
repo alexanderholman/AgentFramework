@@ -252,14 +252,14 @@ class UnsupportedWork(AFError):
     def __init__(self, prompt: str, trace_id: str | None = None) -> None:
         self.prompt = prompt
         self.trace_id = trace_id
-        super().__init__(f"no route found for prompt: {prompt!r}")
+        super().__init__("no route found for this request")
 
 
 class VerificationFailed(AFError):
     def __init__(self, trace_id: str, reason: str) -> None:
         self.trace_id = trace_id
         self.reason = reason
-        super().__init__(f"verification failed ({trace_id}): {reason}")
+        super().__init__(f"verification failed ({trace_id})")
 
 
 class TaskNotFound(AFError):

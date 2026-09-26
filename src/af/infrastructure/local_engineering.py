@@ -404,15 +404,24 @@ class GitTemplateEngineer:
         )
 
     def engineer(
-        self, family: str, context: ExecutionContext, *, route_history: tuple[str, ...]
+        self,
+        family: str,
+        context: ExecutionContext,
+        *,
+        route_history: tuple[str, ...],
+        expected_source_head: str | None = None,
     ) -> ComponentAdmission:
         if family != FAMILY:
             raise WorkflowError("unsupported_engineering_family")
+        if expected_source_head is not None and self.observe(context)[0] != expected_source_head:
+            raise WorkflowError("engineering_source_head_changed")
         coordination = GitVersionControlBackend().initialize(
             VersionControlRequest(cwd=self._repository)
         )
         manifest = coordination.manifest
         head = manifest.repository.head_sha
+        if expected_source_head is not None and head != expected_source_head:
+            raise WorkflowError("engineering_source_head_changed")
         identity = hashlib.sha256(f"{family}:{_TEMPLATE_DIGEST}".encode()).hexdigest()[:16]
         worktree = Path(manifest.coordination.worktree_root) / f"engineer-{identity}"
         branch = f"af/engineer-{identity}"
@@ -725,6 +734,15 @@ class GitTemplateEngineer:
             True,
             executor,
         )
+
+    def observe(self, context: ExecutionContext) -> tuple[str, str, bool]:
+        """Read current source identity and overlap without coordination writes."""
+        head = self._git(self._repository, context, "rev-parse", "HEAD")
+        branch = self._git(self._repository, context, "branch", "--show-current")
+        dirty = self._git(
+            self._repository, context, "status", "--porcelain", "--untracked-files=normal"
+        )
+        return head, branch, bool(dirty)
 
 
 def create_local_engineering_service(

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
+from af.framework.constitution import HostRestrictions, decision_scope
 from af.framework.contracts import Procedure
 from af.framework.errors import InvalidRoutingPolicy, UnsupportedWork
 from af.framework.types import (
@@ -39,8 +40,11 @@ class RoutingPolicy:
         OptimisationGoal.CHEAPEST,
         OptimisationGoal.FASTEST,
     )
+    restrictions: HostRestrictions = field(default_factory=HostRestrictions)
 
     def __post_init__(self) -> None:
+        if type(self.restrictions) is not HostRestrictions:
+            raise InvalidRoutingPolicy("host restrictions must be typed and immutable")
         if type(self.goals) is not tuple:
             raise InvalidRoutingPolicy("choose one or two distinct routing goals")
         if any(type(goal) is not OptimisationGoal for goal in self.goals):
@@ -201,9 +205,14 @@ class LadderRouter:
         self._policy = policy
 
     def route(self, classification: Classification, *, prompt: str) -> Procedure:
-        candidates = [
-            procedure for procedure in self._registry.all() if procedure.supports(classification)
-        ]
+        with decision_scope():
+            candidates = [
+                procedure
+                for procedure in self._registry.all()
+                if (descriptor := self._registry.descriptor(procedure.id)) is not None
+                and self._policy.restrictions.permits(descriptor)
+                and procedure.supports(classification)
+            ]
         if not candidates:
             raise UnsupportedWork(prompt)
         return min(candidates, key=self._score)

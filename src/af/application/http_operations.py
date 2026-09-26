@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -28,6 +29,8 @@ class StoredResponse:
         if len(self.headers) > 64 or any(
             not isinstance(key, bytes)
             or not isinstance(value, bytes)
+            or re.fullmatch(rb"[a-z0-9!#$%&'*+.^_`|~-]{1,128}", key) is None
+            or any(char in value for char in (b"\r", b"\n", b"\0"))
             or len(key) > 128
             or len(value) > 8192
             for key, value in self.headers

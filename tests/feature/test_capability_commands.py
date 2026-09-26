@@ -79,11 +79,8 @@ def capability_request() -> dict[str, object]:
     }
 
 
-def test_imported_operational_claims_cannot_authorize_capability_execution(
-    application, tmp_path: Path
-) -> None:
-    requirements = capability_request()
-    descriptor = {
+def capability_descriptor() -> dict[str, object]:
+    return {
         "schema_version": "1.0.0",
         "capability_id": "character-count",
         "asset_id": "count-asset",
@@ -110,10 +107,17 @@ def test_imported_operational_claims_cannot_authorize_capability_execution(
         "locality": "local_only",
         "licence": "MIT",
         "declared_state": "benchmarked",
-        "resource_envelope": requirements["max_resources"],
+        "resource_envelope": capability_request()["max_resources"],
         "dependency_ids": [],
         "fallback_ids": [],
     }
+
+
+def test_imported_operational_claims_cannot_authorize_capability_execution(
+    application, tmp_path: Path
+) -> None:
+    requirements = capability_request()
+    descriptor = capability_descriptor()
     request, catalogue = tmp_path / "request.json", tmp_path / "catalogue.json"
     request.write_text(json.dumps(requirements))
     catalogue.write_text(
@@ -145,6 +149,38 @@ def test_imported_operational_claims_cannot_authorize_capability_execution(
     assert preview["selected_capability_id"] is None
     assert preview["routes"][0]["reason_codes"] == ["policy_denied"]
     assert preview["routes"][0]["evidence"] == []
+    assert application.tasks.list() == []
+
+
+def test_long_dependency_catalogue_previews_and_rejects_cycles_without_recursion_failure(
+    application, tmp_path: Path
+) -> None:
+    records = [
+        {
+            "descriptor": {
+                **capability_descriptor(),
+                "capability_id": f"count.{index:04d}",
+                "dependency_ids": [f"count.{index + 1:04d}"] if index < 1049 else [],
+            }
+        }
+        for index in range(1050)
+    ]
+    catalogue, request = tmp_path / "chain.json", tmp_path / "request.json"
+    catalogue.write_text(json.dumps({"schema_version": "1.0.0", "records": records}))
+    request.write_text(json.dumps(capability_request()))
+    runner, cli = CliRunner(), create_cli(application)
+    arguments = ["capabilities", "--catalogue", str(catalogue), "--request", str(request)]
+    result = runner.invoke(cli, arguments)
+    assert result.exit_code == 0, result.exception
+    preview = json.loads(result.output)
+    assert preview["outcome"] == "policy_denied"
+    assert len(preview["routes"]) == 1050
+    assert preview["execution_performed"] is False
+    records[-1]["descriptor"]["dependency_ids"] = ["count.0000"]
+    catalogue.write_text(json.dumps({"schema_version": "1.0.0", "records": records}))
+    failed = runner.invoke(cli, arguments)
+    assert failed.exit_code == 2
+    assert json.loads(failed.output) == {"error": "invalid_capability_request"}
     assert application.tasks.list() == []
 
 

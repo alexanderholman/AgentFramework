@@ -472,14 +472,23 @@ def test_distribution_inspection_rejects_missing_typing_marker(tmp_path: Path) -
         raise AssertionError("missing typing marker was accepted")
 
 
-def test_distribution_inspection_rejects_runtime_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "runtime_path",
+    [
+        "storage/af.sqlite3",
+        "af/account.workflow-key",
+        "af/private.pem",
+        "af/.env",
+    ],
+)
+def test_distribution_inspection_rejects_runtime_state(tmp_path: Path, runtime_path: str) -> None:
     module = _load_module()
-    sdist, wheel = _write_distribution_fixture(tmp_path, extra_wheel_path="storage/af.sqlite3")
+    sdist, wheel = _write_distribution_fixture(tmp_path, extra_wheel_path=runtime_path)
 
     try:
         module.inspect_distribution(REPO_ROOT, sdist, wheel)
     except module.ManifestError as exc:
-        assert "wheel contains forbidden path: storage/af.sqlite3" in str(exc)
+        assert f"wheel contains forbidden path: {runtime_path}" in str(exc)
     else:
         raise AssertionError("runtime state was accepted in the wheel")
 
@@ -781,6 +790,31 @@ def test_package_build_is_a_dry_run_without_execute() -> None:
     assert "build the wheel from that sdist" in completed.stdout
     assert "uv pip install --offline --no-deps" in completed.stdout
     assert "Dry run only. Re-run with --execute to build and smoke the package." in completed.stdout
+
+
+def test_runtime_install_is_isolated_from_development_packages(tmp_path: Path) -> None:
+    module = _load_module()
+    target = tmp_path / "runtime"
+    target.mkdir()
+    uv = shutil.which("uv")
+    assert uv is not None
+    environment = module._release_environment(tmp_path)
+    module._install_runtime_dependencies(REPO_ROOT, target, uv, environment)
+    script = (
+        "import sys, importlib.util; sys.path.insert(0, sys.argv[1]); "
+        "import fastapi, sqlalchemy, typer; "
+        "assert importlib.util.find_spec('pytest') is None; "
+        "assert importlib.util.find_spec('hatchling') is None; "
+        "assert importlib.util.find_spec('webauthn') is None"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", script, str(target)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_package_execute_returns_two_when_uv_is_unavailable() -> None:

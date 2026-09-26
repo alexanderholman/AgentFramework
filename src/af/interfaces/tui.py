@@ -13,6 +13,7 @@ import typer
 from af.application.locales import LocaleSelection, Localizer
 from af.application.task_tui import TaskTuiApplication
 from af.application.tui import TuiKernel
+from af.framework.constitution import PresentationPreferences
 from af.framework.context import ExecutionContext, maybe_current_context
 from af.framework.errors import ServiceNotBound
 from af.framework.tui import (
@@ -98,10 +99,11 @@ def register_tui_commands(cli: typer.Typer, factory: Callable[[typer.Context], T
             if plain and script is not None:
                 raise ValueError("choose one TUI input mode")
             selected = LocaleSelection.parse(language=language, territory=territory)
+            presentation = PresentationPreferences(plain_text=plain)
             driver = (
                 ScriptedTuiDriver(parse_script(read_json(script)))
                 if script
-                else TerminalTuiDriver(plain=plain)
+                else TerminalTuiDriver(plain=presentation.plain_text)
             )
             inherited = maybe_current_context()
             invocation = ExecutionContext(

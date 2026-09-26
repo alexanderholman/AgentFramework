@@ -15,9 +15,14 @@ not certification of a running cloud or database service.
 | NotificationService / MailManager | Versioned queue jobs; per-recipient/channel consent and current-policy checks; locale templates; quiet hours; attachment references; named, failover and round-robin channels | Unit routing, race, replay, codec, revocation, quiet-hour and failure tests | Provider-specific channels, authenticated feedback webhooks, production queue deployment |
 | SMTPChannel | Explicit TLS/authentication, MIME rendering, one recipient per send, bounded checksum-verified attachments, acceptance/temporary rejection/permanent rejection/unknown outcomes | Actual loopback SMTP wire test and injected TLS/failure tests | Production SMTP service and delivery-feedback profile |
 | Other communication channels | Typed injected `ChannelDriver` extension point for SMS, chat, webhook, push, database and realtime | No-network recording driver | Vendor-specific transport implementations and service evidence |
-| Pub/sub and broadcast | Existing in-process subscription/replay/checkpoint and authorized broadcast implementations | Existing local tests | Durable external event-stream adapters and restart evidence; process-memory replay is not durable storage |
+| Pub/sub, streams and broadcast | Installed SQLite durable streams with restartable cursors, owner-fenced receipts, bounded replay/backpressure and retention gaps; separate volatile local drivers and authorized broadcast | Real SQLite restart, concurrent-owner, stale-receipt and capacity tests | External stream-service adapters and service evidence; volatile process-memory replay remains non-durable |
 
 ## Document registration
+
+The installed local stream contract and its evidence are described in
+[durable streams](durable-streams.md). Graph adapters, portable traversal and projection
+cutover/rollback have a separate [graph support contract](graph.md); neither protocol doubles
+nor SQLite projection metadata certify a live Neo4j/OrientDB deployment.
 
 `DocumentManager` is available from `af.domain.document.manager`.
 `mongo_document_registration` is available from

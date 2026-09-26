@@ -20,6 +20,11 @@ foreign-key integrity, and publishes a private `0600` database plus an authentic
 manifest with its SHA-256 checksum. Existing destination files are never replaced.
 The reference backup bound is 1 GiB.
 
+The snapshot is not encrypted as a whole. When account services share the main
+database, it includes account identifiers, password and token hashes, passkeys,
+encrypted outbox payloads, and TOTP records. Protect the backup as sensitive
+account data; deleting live records does not delete retained backup copies.
+
 Keep the source `.workflow-key` separately with the same access protection as
 the database. Restore authenticates the manifest with that configured key, checks
 the file checksum and SQLite integrity, and publishes a new database plus the

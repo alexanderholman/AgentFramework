@@ -25,7 +25,8 @@ def task_etag(task: Task, representation: str = "json") -> str:
     return f'"{task_version(task)}-{representation}"'
 
 
-def expected_version(request: Request, representation: str = "json") -> str | None:
+def expected_version(request: Request, representation: str | None = None) -> str | None:
+    representation = representation or str(getattr(request.state, "af_representation", "json"))
     values = request.headers.getlist("if-match")
     if not values:
         return None
@@ -80,6 +81,11 @@ class HttpOperationsMiddleware:
             if not keys:
                 await self._app(scope, receive, send)
                 return
+            if not (
+                scope["path"] in {"/api/v1/tasks", "/api/v1/xml/tasks"}
+                or scope["path"].startswith(("/api/v1/tasks/", "/api/v1/xml/tasks/"))
+            ):
+                raise ApiRejection(400, "idempotency_unsupported_resource")
             if (
                 scope["method"] not in {"POST", "PUT", "PATCH", "DELETE"}
                 or len(keys) != 1

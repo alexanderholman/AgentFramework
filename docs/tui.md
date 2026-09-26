@@ -59,10 +59,13 @@ handlers and leaves caller streams open on success, signal, cancellation or
 exception. Run results use 0 for completion or an explicit plain snapshot, 2 for
 invalid configuration/input/budget, 124 for a deadline, 130 for cancellation and
 128 plus the signal number for intercepted signals. Unexpected exceptions produce
-stable sanitized reasons. The terminal driver is intended for one foreground
-session per terminal.
+stable sanitized reasons. A nonblocking advisory lease on the actual POSIX terminal
+device prevents overlapping AF sessions from changing each other's terminal state.
+The lease has its own descriptor and is released even when terminal output fails;
+unrelated programs must also cooperate with the advisory lock.
 
 Evidence: `tests/unit/test_tui.py`, `tests/feature/test_tui_journey.py`, and
 `tests/integration/test_tui_terminal.py` cover per-turn isolation, task CRUD,
 headless/native input, focus/resize, non-TTY behavior, ANSI injection rejection,
-deadlines, cancellation, real POSIX PTY restoration and an actual SIGTERM.
+deadlines, cancellation, real POSIX PTY restoration, overlapping session denial,
+output failure cleanup and an actual SIGTERM.

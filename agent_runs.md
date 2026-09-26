@@ -4322,3 +4322,29 @@ native networking qualification and release tooling remain under active audit.
 No public release, production deployment, external delivery, paid model call or
 issue-closure claim was made. Keep engineering checkpoint evidence separate from
 candidate-bound target-host and maintainer approvals.
+
+## 2026-09-26 — Green CI foundation and stabilization snapshot
+
+Rechecked PR #212 and live branch; preserved a1382d8 and all newer local work.
+Published 4d74e926acea8cfccad5daabb3ecdf666a77ab35 with only import ordering and
+correctly scoped terminal-session assertions. Exact source tree passed 4,098 tests,
+58 skips and 91.70% branch coverage plus the full canonical package/governance gate.
+GitHub AF Python, PostgreSQL, MySQL, MariaDB, OpenSearch and Elasticsearch workflows
+then all completed successfully at that head; service evidence was read from job
+logs, not inferred from mocks.
+
+Subsequent focused verification passed cache fencing/Memcached regressions and
+trace minimization (57 combined regression checks and 196 neighboring privacy
+checks), API/GraphQL controls, policy boundaries and installed self-development
+restart/direct reuse. Added bounded Hypothesis science properties. Runtime-only
+wheel-from-sdist smoke passed with development packages excluded. Classified actual
+secret-scan candidates as exact synthetic fixtures/public metadata; no actual
+credential or independent approval is claimed. Dependency advisory scanning remains
+unproved locally due DNS and must run in CI at the next exact candidate.
+
+Keyword audit of runtime source found abstract provider/procedure methods,
+documented unsupported file-cache locks and isolated flush boundaries, comparison
+NotImplemented sentinels, explicit test doubles, error/status cases and real
+temporary-file cleanup. These were retained rather than mechanically removed.
+The larger stabilization snapshot still requires its own complete fixed-tree gate,
+clean-room journeys and candidate-bound CI before completion can be claimed.

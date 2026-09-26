@@ -12,6 +12,7 @@ from uuid import uuid4
 import typer
 
 from af.application.self_improvement import SelfImprovementService
+from af.framework.context import maybe_current_context
 from af.framework.errors import AFError
 from af.framework.evolution import EvolutionPlan, EvolutionSnapshot, plan_evolution
 from af.framework.self_improvement import ImprovementBudget
@@ -37,13 +38,18 @@ def register_self_improvement_commands(
         """Run configured admitted stage ports under explicit bounded operation limits."""
         try:
             service = fixture_service(context) if fixture else configured_service(context)
+            invocation = maybe_current_context()
+            deadline = datetime.now(UTC) + timedelta(seconds=timeout_seconds)
+            if invocation is not None and invocation.deadline is not None:
+                deadline = min(deadline, invocation.deadline)
             result = service.run(
                 operation_id or f"operation-{uuid4().hex}",
                 ImprovementBudget(
-                    deadline=datetime.now(UTC) + timedelta(seconds=timeout_seconds),
+                    deadline=deadline,
                     maximum_stages=maximum_stages,
                     maximum_cost=maximum_cost,
                 ),
+                cancellation=None if invocation is None else invocation.cancellation,
             )
             payload = result.model_dump(mode="json")
             payload["fixture"] = fixture

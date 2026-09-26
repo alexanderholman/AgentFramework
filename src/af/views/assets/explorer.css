@@ -1,0 +1,9 @@
+textarea, select { font: inherit; padding: .7rem; min-inline-size: 0; inline-size: 100%; box-sizing: border-box; }
+textarea { resize: vertical; font-family: ui-monospace, monospace; }
+.actions { display: flex; gap: .75rem; flex-wrap: wrap; }
+details { border: 1px solid; padding: 1rem; }
+details input { margin-block-end: .75rem; }
+summary { cursor: pointer; min-block-size: 1.5rem; }
+#response-body, #response-headers { padding: 1rem; border: 1px solid; max-block-size: 40rem; overflow: auto; }
+#response-body:empty, #response-headers:empty { display: none; }
+@media (forced-colors: active) { textarea, select { border: 1px solid ButtonText; } }

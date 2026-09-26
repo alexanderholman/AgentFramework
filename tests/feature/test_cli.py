@@ -468,9 +468,8 @@ def test_cli_search_indexes_and_queries_task_and_trace_history() -> None:
 
         assert queried_result.exit_code == 0
         payload = json.loads(queried_result.stdout)
-        assert payload["total"] == 2
+        assert payload["total"] == 1
         assert {item["source_id"] for item in payload["items"]} == {
-            "af_run_traces",
             "af_tasks",
         }
         assert {item["tenant_id"] for item in payload["items"]} == {"af-local"}
@@ -1034,7 +1033,7 @@ def test_cli_reports_expected_errors_without_stdout(application) -> None:  # typ
             ["ask", "a" * (PROMPT_MAX_LENGTH + 1)],
             f"prompt must be at most {PROMPT_MAX_LENGTH} characters\n",
         ),
-        (["ask", "make tea"], "no route found for prompt: 'make tea'\n"),
+        (["ask", "make tea"], "no route found for this request\n"),
         (["tasks", "show", "missing"], "task not found: missing\n"),
         (
             ["tasks", "update", "missing", "how many rs in strawberry"],

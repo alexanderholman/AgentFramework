@@ -122,6 +122,11 @@ class EngineeringCatalogue(Protocol):
 
 class LocalComponentEngineer(Protocol):
     def engineer(
-        self, family: str, context: ExecutionContext, *, route_history: tuple[str, ...]
+        self,
+        family: str,
+        context: ExecutionContext,
+        *,
+        route_history: tuple[str, ...],
+        expected_source_head: str | None = None,
     ) -> ComponentAdmission: ...
     def component(self, admission: ComponentAdmission) -> WorkflowComponent: ...

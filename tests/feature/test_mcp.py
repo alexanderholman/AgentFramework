@@ -342,10 +342,9 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             searched = await session.call_tool("af_search", {"text": "pineapple"})
             assert searched.isError is False
             assert searched.structuredContent is not None
-            assert searched.structuredContent["total"] == 2
+            assert searched.structuredContent["total"] == 1
             assert {item["source_id"] for item in searched.structuredContent["items"]} == {
                 "af_tasks",
-                "af_run_traces",
             }
 
             deleted = await session.call_tool("af_delete_task", {"task_id": task_id})
@@ -593,8 +592,8 @@ def test_mcp_count_characters_uses_typed_route_without_selector() -> None:
                 assert counted.structuredContent["prompt"] == text
                 assert counted.structuredContent["output"] == expected
                 trace = application.traces.get(str(counted.structuredContent["trace_id"]))
-                assert trace.prompt == text
-                assert trace.arguments == {"text": text, "character": character}
+                assert trace.prompt == "[redacted]"
+                assert trace.arguments == {}
 
             too_long = await session.call_tool(
                 "af_count_characters",
@@ -634,7 +633,7 @@ def test_mcp_reports_domain_failures_as_tool_errors(application) -> None:  # typ
                 (
                     "af_create_task",
                     {"prompt": "make tea"},
-                    "no route found for prompt: 'make tea'",
+                    "no route found for this request",
                 ),
                 (
                     "af_ask",

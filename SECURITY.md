@@ -31,3 +31,12 @@ MCP-stdio trust boundary, one-database/one-process limit, prohibition on concurr
 required deployment evidence, and release-blocking security, recovery, and operations controls.
 Every AF network listener, including loopback HTTP and Secure MCP Tunnel, is outside that first
 profile.
+
+## Candidate security evidence
+
+The registered [release security tools](docs/release-security.md) produce a complete
+Python lock SBOM, pinned source/dependency scan reports and explicit-key artifact
+integrity envelopes. Missing tools, findings and unavailable advisory checks block
+those checks; the tools never create maintainer approvals or production
+certification. Follow the documented private-file and backup-data rules when
+retaining reports, account exports, snapshots and signing keys.

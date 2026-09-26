@@ -10,6 +10,7 @@ from enum import StrEnum
 from inspect import isawaitable
 from typing import Protocol, cast
 
+from af.framework.constitution import decision_scope
 from af.framework.context import AcceptanceScope, ExecutionContext, use_context
 from af.framework.errors import AFError, PlatformError, PlatformReason
 
@@ -235,7 +236,9 @@ class Gate:
         decisions: list[GateDecision] = []
         for policy in self._policies:
             try:
-                decision = policy(request, context)
+                with decision_scope(context) as policy_context:
+                    assert policy_context is not None
+                    decision = policy(request, policy_context)
             except PlatformError:
                 raise
             except Exception as error:

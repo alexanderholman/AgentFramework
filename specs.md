@@ -3378,3 +3378,16 @@ Machine setup MUST offer a read-only plan, explicit apply, actual bounded readin
 probes, durable recovery receipts and data-retaining disable operations. Optional
 observational products MUST be removable without changing task semantics and redact
 before persistence. Network host allowlists are not authentication authority.
+
+## 2026-09-26 — Stabilization and candidate qualification
+
+Every deterministic or selected Task route MUST enforce the same descriptor effect
+and risk baseline before execution or reuse. Untyped principal claims and locale
+presentation MUST NOT become routing or authorization signals. Execution traces
+MUST minimize request/argument/output content before invoking a persistence port;
+Task records remain explicit user content. Conditional API writes MUST compare
+atomic versions; idempotency receipts MUST bind authority and preserve uncertain
+outcomes without replay. Package smoke MUST execute with only hash-verified locked
+runtime dependencies and no development or user-site imports. Exact expiring source
+reviews may classify proven synthetic secret candidates, but MUST retain findings,
+reject changed lines and never suppress dependency or static security findings.

@@ -4189,3 +4189,16 @@ an HTTP host/origin allowlist alone cannot authorize exposure. Package smoke for
 Python network/DNS and subprocess egress; this is bounded trusted-runtime evidence,
 not a claim of an operating-system sandbox. Native Bare offline startup and signed
 IPC conformance are distinct from DHT/hole-punch/mobile qualification.
+
+## 2026-09-26 — Stabilize the assembled private v0.1
+
+The user reaffirmed freezing speculative expansion. Published a narrow correction
+for the reviewed Ruff/TUI test failures as 4d74e926acea8cfccad5daabb3ecdf666a77ab35;
+its complete local gate and all six Python/relational/search CI workflows pass.
+Later changes are restricted to reproduced defects and missing live-roadmap
+boundaries already under implementation. Security source reviews bind exact
+candidate fingerprints and line digests, expire within 180 days, retain every
+finding and explicitly identify automated review; they confer no human approval.
+The package smoke uses a fresh target with locked runtime-only dependencies and
+Python -I -S. That is current-host isolated installation evidence, not an OS sandbox
+or cross-platform certification. No release tag, merge or deployment is authorized.

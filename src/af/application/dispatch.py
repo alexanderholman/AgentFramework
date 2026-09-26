@@ -41,6 +41,7 @@ __all__ = (
     "ExecuteTask",
     "GetOperationsSnapshot",
     "GetTask",
+    "GetTasks",
     "InterpretIdeon",
     "ListTasks",
     "RealiseIdeon",
@@ -67,6 +68,11 @@ class CreateTask(Command):
 @dataclass(frozen=True, slots=True)
 class GetTask(Query):
     task_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class GetTasks(Query):
+    task_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +196,9 @@ class _TaskControllerFacade(TaskController):
     def get(self, task_id: str) -> Task:
         return cast(Task, self._dispatcher.dispatch(GetTask(task_id)))
 
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        return cast(list[Task | None], self._dispatcher.dispatch(GetTasks(task_ids)))
+
     def list(
         self,
         *,
@@ -287,6 +296,7 @@ def build_application_endpoints(
     _register(registry, ExecuteTask, lambda message: tasks.execute(message.prompt))
     _register(registry, CreateTask, lambda message: tasks.create(message.prompt))
     _register(registry, GetTask, lambda message: tasks.get(message.task_id))
+    _register(registry, GetTasks, lambda message: tasks.get_many(message.task_ids))
     _register(
         registry,
         ListTasks,

@@ -8,7 +8,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from itertools import islice
-from math import isfinite
 from typing import cast
 
 from af.framework.errors import InvalidProviderConfiguration, PlatformError, PlatformReason
@@ -80,6 +79,7 @@ class Settings:
     resource_lease_maintenance_interval_seconds: float = 30.0
     schedules_path: str | None = None
     engineering_repository: str | None = None
+    self_development_unit: str | None = None
     inspector_enabled: bool = False
     metrics_enabled: bool = False
     worker_queue_sqlite_path: str | None = None
@@ -197,6 +197,7 @@ _ENV_NAMES = {
     ),
     "AF_SCHEDULES_PATH": "schedules_path",
     "AF_ENGINEERING_REPOSITORY": "engineering_repository",
+    "AF_SELF_DEVELOPMENT_UNIT": "self_development_unit",
     "AF_INSPECTOR_ENABLED": "inspector_enabled",
     "AF_METRICS_ENABLED": "metrics_enabled",
     "AF_WORKER_QUEUE_SQLITE_PATH": "worker_queue_sqlite_path",
@@ -362,6 +363,7 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
             "passkey_origin",
             "schedules_path",
             "engineering_repository",
+            "self_development_unit",
             "worker_queue_sqlite_path",
             "worker_optimization_profile_path",
         }
@@ -415,6 +417,8 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("selector timeout must be positive and at most ten minutes")
     if type(settings.http_auth_required) is not bool:
         raise ValueError("HTTP authentication required must be boolean")
+    if type(settings.allow_remote_inference) is not bool:
+        raise ValueError("remote inference setting must be boolean")
     if type(settings.inspector_enabled) is not bool or type(settings.metrics_enabled) is not bool:
         raise ValueError("observability settings must be boolean")
     _validate_single_line(settings.auth_tenant_id, "auth_tenant_id")
@@ -424,8 +428,14 @@ def _validate_settings(settings: Settings) -> None:
         _validate_single_line(settings.passkey_rp_id, "passkey_rp_id")
     if settings.passkey_origin is not None:
         _validate_single_line(settings.passkey_origin, "passkey_origin")
+    if settings.self_development_unit is not None:
+        _validate_single_line(settings.self_development_unit, "self_development_unit")
+        if settings.engineering_repository is None:
+            raise ValueError("self-development requires engineering_repository")
     if settings.engineering_repository is not None:
         _validate_single_line(settings.engineering_repository, "engineering_repository")
+    if settings.schedules_path is not None:
+        _validate_single_line(settings.schedules_path, "schedules_path")
     if type(settings.decision_enabled) is not bool:
         raise ValueError("decision enabled must be boolean")
     _validate_single_line(settings.decision_model, "decision_model")
@@ -435,7 +445,7 @@ def _validate_settings(settings: Settings) -> None:
         or not 0 < settings.decision_timeout_seconds <= 600
     ):
         raise ValueError("decision timeout must be positive and at most ten minutes")
-    if settings.port < 1 or settings.port > 65535:
+    if type(settings.port) is not int or not 1 <= settings.port <= 65535:
         raise ValueError("port is outside its supported range")
     threshold = settings.selector_confidence_threshold
     if parse_probability(threshold) is None:
@@ -444,9 +454,8 @@ def _validate_settings(settings: Settings) -> None:
         )
     maintenance_interval = settings.resource_lease_maintenance_interval_seconds
     if (
-        not isfinite(maintenance_interval)
-        or maintenance_interval <= 0
-        or maintenance_interval > _MAX_MAINTENANCE_INTERVAL_SECONDS
+        type(maintenance_interval) not in {int, float}
+        or not 0 < maintenance_interval <= _MAX_MAINTENANCE_INTERVAL_SECONDS
     ):
         raise ValueError("resource lease maintenance interval is outside its supported range")
     for name in (

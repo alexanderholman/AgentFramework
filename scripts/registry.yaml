@@ -63,6 +63,36 @@ scripts:
       - "exit_code == 0"
     status: "active"
 
+  - id: "release-inventory"
+    intent: ["release", "sbom", "execute"]
+    capabilities: ["locked-dependency-inventory", "artifact-digests"]
+    description: "Preview or write a CycloneDX inventory of all pinned Python lock resolutions"
+    command: "python3 scripts/release_inventory.py --lock '<lock>' --output '<output>' --execute"
+    parameters: ["lock", "output", "execute"]
+    outputs: ["cyclonedx-sbom"]
+    validation: ["exit_code == 0"]
+    status: "active"
+
+  - id: "release-security"
+    intent: ["release", "security", "execute"]
+    capabilities: ["pinned-source-scans", "locked-dependency-audit"]
+    description: "Preview or scan exact clean source; dependency advisories require explicit --allow-advisory-network"
+    command: "python3 scripts/release_security.py --root '<root>' --output '<output>' --execute"
+    parameters: ["root", "output", "execute", "allow-advisory-network"]
+    outputs: ["redacted-security-evidence"]
+    validation: ["exit_code == 0 only when all checks pass; 1 blocked; 2 invalid or unavailable"]
+    status: "active"
+
+  - id: "release-provenance"
+    intent: ["release", "provenance", "execute"]
+    capabilities: ["artifact-signing", "artifact-verification"]
+    description: "Preview, sign or verify exact artifacts using an operator-supplied key and current key policy; see docs/release-security.md for required arguments"
+    command: "python3 scripts/release_signing.py '<action>' --root '<root>' --sdist '<sdist>' --wheel '<wheel>' --sbom '<sbom>' --scan '<scan>' --profile '<profile>' --configuration '<configuration>' --key-policy '<key-policy>' --key '<key>' --envelope '<envelope>' --execute"
+    parameters: ["action", "root", "sdist", "wheel", "sbom", "scan", "profile", "configuration", "key-policy", "key", "envelope", "execute"]
+    outputs: ["detached-provenance-envelope", "integrity-verification"]
+    validation: ["exit_code == 0"]
+    status: "active"
+
   - id: "validate-registry"
     intent:
       - "validate"

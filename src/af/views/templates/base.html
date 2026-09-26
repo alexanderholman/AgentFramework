@@ -9,7 +9,7 @@
   </head>
   <body data-af-web-profile="{{ web_profile|default('basic') }}" data-af-experimental="{{ experimental_state|default('disabled') }}">
     <a class="skip-link" href="#main-content">{{ message('web.skip') }}</a>
-    <nav aria-label="{{ messages['web.navigation'].text }}"><a href="/{{ locale_query }}">AF</a><a href="/tasks{{ locale_query }}">{{ message('web.tasks') }}</a>{% if operations_available|default('true') == 'true' %}<a href="/operations{{ locale_query }}">{{ message('web.operations') }}</a>{% endif %}<a href="/docs" lang="en">REST docs</a><a href="/graphql">GraphQL</a></nav>
+    <nav aria-label="{{ messages['web.navigation'].text }}"><a href="/{{ locale_query }}">AF</a><a href="/tasks{{ locale_query }}">{{ message('web.tasks') }}</a>{% if operations_available|default('true') == 'true' %}<a href="/operations{{ locale_query }}">{{ message('web.operations') }}</a>{% endif %}<a href="/docs" lang="en">REST docs</a><a href="/graphql/explorer" lang="en">GraphQL</a></nav>
     <form class="locale-controls" method="get" action="{{ locale_path }}" aria-describedby="locale-help">
       <label for="language">{{ message('web.language') }}</label>
       <input id="language" name="language" value="{{ selected_language }}" maxlength="128" required autocapitalize="none" spellcheck="false" dir="ltr">

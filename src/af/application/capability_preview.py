@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from graphlib import TopologicalSorter
 from math import isfinite
 
 from af.framework.capabilities import (
@@ -444,8 +445,11 @@ class CapabilityPreviewService:
         candidates = tuple(self._candidate(record) for record in self.snapshot.records)
         matched = ExactCapabilityMatcher().match(requirements, candidates)
         by_id = {item.descriptor.capability_id: item for item in matched.candidates}
+        dependencies = self._dependency_reasons()
         routes = tuple(
-            self._project(record, by_id[record.descriptor.capability_id], requirements)
+            self._project(
+                record, by_id[record.descriptor.capability_id], requirements, dependencies
+            )
             for record in self.snapshot.records
         )
         routes = tuple(sorted(routes, key=self._rank))
@@ -533,6 +537,7 @@ class CapabilityPreviewService:
         record: CapabilityRecord,
         candidate: CapabilityCandidate,
         requirements: RequestRequirements,
+        dependencies: Mapping[str, tuple[str, ...]],
     ) -> RouteProjection:
         evidence, reasons = self._evidence(record)
         projection = CostProjection.combine(tuple(item.projection for item in evidence))
@@ -563,7 +568,7 @@ class CapabilityPreviewService:
         elif not reasons and (projection is None or projection.upper_envelope() is None):
             reasons = ("unknown_cost",)
         elif not reasons:
-            dependency_reasons = self._dependencies(record, seen=set())
+            dependency_reasons = dependencies[record.descriptor.capability_id]
             if dependency_reasons:
                 reasons = dependency_reasons
             elif candidate.reason is CapabilityReasonCode.EXCESSIVE_COST:
@@ -586,25 +591,38 @@ class CapabilityPreviewService:
             else "insufficient",
         )
 
-    def _dependencies(self, record: CapabilityRecord, *, seen: set[str]) -> tuple[str, ...]:
+    def _dependency_reasons(self) -> dict[str, tuple[str, ...]]:
+        """Propagate failures once per edge after the matcher validates the graph."""
         records = {item.descriptor.capability_id: item for item in self.snapshot.records}
-        for dependency_id in record.descriptor.dependency_ids:
-            if dependency_id in seen:
-                return ("cyclic_dependency",)
-            dependency = records[dependency_id]
+        authorized = set(self.snapshot.authorized_capability_ids)
+        own_reasons: dict[str, tuple[str, ...]] = {}
+        for identity, record in records.items():
             if (
-                dependency_id not in self.snapshot.authorized_capability_ids
-                or dependency.restrictions
+                identity not in authorized
+                or record.restrictions
+                or record.descriptor.declared_state is CapabilityLifecycle.REVOKED
             ):
-                return ("dependency_policy_denied",)
-            if not dependency.installed or not dependency.healthy:
-                return ("dependency_unavailable",)
-            _, reasons = self._evidence(dependency)
-            if reasons:
-                return ("dependency_insufficient_evidence",)
-            if reasons := self._dependencies(dependency, seen=seen | {dependency_id}):
-                return reasons
-        return ()
+                own_reasons[identity] = ("dependency_policy_denied",)
+            elif (
+                not record.installed
+                or not record.healthy
+                or record.descriptor.declared_state is CapabilityLifecycle.UNAVAILABLE
+            ):
+                own_reasons[identity] = ("dependency_unavailable",)
+            elif self._evidence(record)[1]:
+                own_reasons[identity] = ("dependency_insufficient_evidence",)
+            else:
+                own_reasons[identity] = ()
+        graph = {identity: record.descriptor.dependency_ids for identity, record in records.items()}
+        inherited: dict[str, tuple[str, ...]] = {}
+        for identity in TopologicalSorter(graph).static_order():
+            inherited[identity] = ()
+            for dependency_id in graph[identity]:
+                reasons = own_reasons[dependency_id] or inherited[dependency_id]
+                if reasons:
+                    inherited[identity] = reasons
+                    break
+        return inherited
 
     def _rank(self, route: RouteProjection) -> tuple[int, float, float, str]:
         outcomes = list(PreviewOutcome)

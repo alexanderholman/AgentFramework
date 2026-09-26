@@ -1371,8 +1371,8 @@ def test_agent_public_typed_boundary_preserves_whitespace_prompt() -> None:
 
     assert outcome.prompt == "   "
     assert outcome.output == "3"
-    assert trace.prompt == "   "
-    assert trace.arguments == {"text": "   ", "character": " "}
+    assert trace.prompt == "[redacted]"
+    assert trace.arguments == {}
 
 
 @pytest.mark.parametrize(

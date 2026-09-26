@@ -63,3 +63,26 @@ def test_evolve_uses_actual_typed_snapshot_and_explicit_fixture(tmp_path):
     assert runner.invoke(cli, ["evolve", "--snapshot", str(path), "--fixture"]).exit_code == 2
     path.write_bytes(b"x" * 1_048_577)
     assert runner.invoke(cli, ["evolve", "--snapshot", str(path)]).exit_code == 2
+
+
+def test_configured_self_improvement_receives_invocation_cancellation_and_deadline():
+    from datetime import timedelta
+
+    from af.framework.context import ExecutionContext, use_context
+    from af.framework.self_improvement import ImprovementStop
+
+    invocation = ExecutionContext(deadline=datetime.now(UTC) + timedelta(seconds=3))
+    invocation.cancellation.cancel()
+    received = []
+
+    class Configured:
+        def run(self, operation_id, budget, *, cancellation=None):
+            received.append((cancellation, budget.deadline))
+            return ImprovementStop(operation_id=operation_id, reason="cancelled")
+
+    cli = typer.Typer()
+    register_self_improvement_commands(cli, lambda _: Configured(), lambda _: None, lambda: None)
+    with use_context(invocation):
+        result = CliRunner().invoke(cli, ["self-improve", "--timeout-seconds", "60"])
+    assert result.exit_code == 0, result.output
+    assert received == [(invocation.cancellation, invocation.deadline)]

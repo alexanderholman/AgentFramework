@@ -72,10 +72,13 @@ It does not stop externally managed processes. `af status` and `af machine statu
 local schema and recent receipts without mutating them. Degraded/misconfigured output includes a
 repair instruction to review `af init --plan`.
 
-For an explicitly selected setup directory, set `AF_MACHINE_ROOT` to it and use the installed factory
-`af.bootstrap_setup:create_machine_application` via `--application-factory`. This factory loads the
-managed declaration, binds owned queue/cache managers, and keeps remote inference and decisions off
-regardless of unrelated remote-provider environment defaults. The default directory is `storage`.
+Set `AF_MACHINE_ROOT` to select a setup directory consistently for setup, the default CLI and MCP
+factories. The default is `storage`. When that directory contains `machine.json`, those factories
+automatically load its managed declaration and bind owned queue/cache managers. Remote inference
+and decisions remain off regardless of unrelated remote-provider environment defaults. Without a
+declaration, the ordinary settings-based application is used. An explicitly supplied application
+factory remains authoritative; `af.bootstrap_setup:create_machine_application` is also available
+for hosts that want to select managed composition directly.
 
 Tests cover real SQLite provisioning, offline verification, repeat application, process-restart
 receipts, interruption, retained user data, schema drift, competing setup ownership, declaration

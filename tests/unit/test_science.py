@@ -7,6 +7,8 @@ from dataclasses import replace
 from fractions import Fraction
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from af.domain.science import (
     CATALOGUE,
@@ -17,6 +19,31 @@ from af.domain.science import (
 )
 from af.domain.science_procedures import ScienceClassifier, ScienceProcedure, ScienceVerifier
 from af.framework.types import Classification, ProcedureResult, WorkRequest
+
+
+@settings(max_examples=80, derandomize=True, deadline=None)
+@given(st.integers(-10000, 10000), st.integers(-10000, 10000), st.integers(1, 1000))
+def test_generated_rational_inverse_and_independent_verifier(a, b, denominator):
+    request = parse_request(f"math add a={a}/{denominator} b={b}/{denominator}")
+    result = calculate(request)
+    assert result.exact_value == Fraction(a + b, denominator)
+    assert verify_result(request, result)
+    inverse = calculate(parse_request(f"math subtract a={result.exact_value} b={b}/{denominator}"))
+    assert inverse.exact_value == Fraction(a, denominator)
+
+
+@settings(max_examples=60, derandomize=True, deadline=None)
+@given(st.integers(0, 10000), st.integers(0, 10000))
+def test_generated_kinetic_energy_exact_units_and_quadratic_scaling(mass, speed):
+    request = parse_request(f"physics kinetic_energy mass={mass} kg speed={speed} m/s")
+    result = calculate(request)
+    doubled = calculate(
+        parse_request(f"physics kinetic_energy mass={mass} kg speed={2 * speed} m/s")
+    )
+    assert result.unit == "J"
+    assert result.exact_value == Fraction(mass * speed * speed, 2)
+    assert doubled.exact_value == 4 * result.exact_value
+    assert verify_result(request, result)
 
 
 @pytest.mark.parametrize(

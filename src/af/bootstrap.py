@@ -46,6 +46,7 @@ from af.application.operations import (
 from af.application.program_jobs import ProgramJobHandler, ProgramJobService
 from af.application.resource_leases import ResourceLeaseService
 from af.application.search import SearchController, SearchService
+from af.application.self_development import SelfDevelopmentController
 from af.application.self_improvement import SelfImprovementService
 from af.application.self_stages import SelfStageController
 from af.application.tasks import TaskController, TaskService
@@ -65,6 +66,7 @@ from af.bootstrap_extensions import (
 )
 from af.bootstrap_observability import create_observability_products
 from af.bootstrap_scheduling import SchedulerRuntime
+from af.bootstrap_self_development import LocalSelfDevelopmentProvider
 from af.config import (
     ConfigSnapshot,
     EnvironmentConfigSource,
@@ -414,7 +416,16 @@ class _ApplicationProvider(ServiceProvider):
     provider_id = "af.application"
     dependencies = ("af.framework", "af.ideons", "af.search")
 
+    def __init__(self, *, self_development_configured: bool = False) -> None:
+        self._self_development_configured = self_development_configured
+
     def register(self, container: ProviderRegistrar) -> None:
+        if not self._self_development_configured:
+            container.bind(
+                SelfDevelopmentController,
+                lambda _: SelfDevelopmentController(),
+                scope=Scope.APPLICATION,
+            )
         container.bind(
             SQLiteStreamDriver,
             lambda current: create_stream_driver(current.resolve(Database)),
@@ -914,7 +925,9 @@ def _prepare_application(
             ),
             ephemeral=task_repository is not None or trace_repository is not None,
         ),
-        _ApplicationProvider(),
+        _ApplicationProvider(
+            self_development_configured=resolved_settings.self_development_unit is not None
+        ),
         _QueueWorkerProvider(
             resolved_settings,
             profile=(
@@ -929,6 +942,16 @@ def _prepare_application(
                 ),
             )
             if resolved_settings.engineering_repository is not None
+            else ()
+        ),
+        *(
+            (
+                LocalSelfDevelopmentProvider(
+                    Path(resolved_settings.engineering_repository or "").expanduser().resolve(),
+                    Path(resolved_settings.self_development_unit).expanduser().resolve(),
+                ),
+            )
+            if resolved_settings.self_development_unit is not None
             else ()
         ),
         *tuple(providers),

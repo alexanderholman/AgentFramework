@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 import secrets
 from pathlib import Path
 from typing import Literal
@@ -60,7 +61,7 @@ def _sign_session_payload(payload: bytes, *, signing_key: bytes) -> str:
 def _read_session(request: Request, *, signing_key: bytes) -> dict[str, str]:
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
     encoded, separator, signature = token.partition(".")
-    if not encoded or not separator or not signature:
+    if not encoded or not separator or re.fullmatch(r"[0-9a-f]{64}", signature) is None:
         return {}
     if len(encoded) > _MAX_SESSION_COOKIE_BYTES:
         return {}
@@ -126,9 +127,9 @@ def _clear_flash(request: Request, response: Response, *, signing_key: bytes) ->
 
 
 def _has_valid_csrf_signature(token: str) -> bool:
-    nonce, separator, signature = token.partition(".")
-    if not nonce or not separator or not signature:
+    if re.fullmatch(r"[A-Za-z0-9_-]{43}\.[0-9a-f]{64}", token) is None:
         return False
+    nonce, _, signature = token.partition(".")
     expected = hmac.new(
         _CSRF_SECRET,
         nonce.encode("utf-8"),
@@ -155,16 +156,23 @@ def _set_csrf_cookie(request: Request, response: Response, token: str) -> None:
     )
 
 
-def _same_origin(request: Request, header_value: str) -> bool:
-    parsed = urlsplit(header_value)
+def _same_origin(request: Request, header_value: str, *, origin_only: bool = False) -> bool:
+    if len(header_value) > 8192 or any(ord(character) < 33 for character in header_value):
+        return False
+    try:
+        parsed = urlsplit(header_value)
+    except ValueError:
+        return False
     if not parsed.scheme or not parsed.netloc:
+        return False
+    if origin_only and (parsed.path or parsed.query or parsed.fragment):
         return False
     return f"{parsed.scheme}://{parsed.netloc}" == f"{request.url.scheme}://{request.url.netloc}"
 
 
 def _validate_csrf(request: Request, form_token: str) -> bool:
     if origin := request.headers.get("origin"):
-        if not _same_origin(request, origin):
+        if not _same_origin(request, origin, origin_only=True):
             return False
     elif (referer := request.headers.get("referer")) and not _same_origin(request, referer):
         return False
@@ -265,7 +273,7 @@ def create_web_router(
             name="tasks/show.html",
             context={
                 "task": task,
-                "prompt": prompt or task.prompt,
+                "prompt": task.prompt if prompt is None else prompt,
                 "error": error,
                 "flash": flash_for_view(request),
                 "csrf_token": token,

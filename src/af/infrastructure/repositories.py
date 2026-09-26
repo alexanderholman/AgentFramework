@@ -34,6 +34,10 @@ class InMemoryTaskRepository:
         except KeyError as error:
             raise TaskNotFound(task_id) from error
 
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        with self._lock:
+            return [self._tasks.get(task_id) for task_id in task_ids]
+
     def list_recent(self, *, limit: int) -> list[Task]:
         return nlargest(
             limit,
@@ -87,6 +91,14 @@ class SqlAlchemyTaskRepository:
             if row is None:
                 raise TaskNotFound(task_id)
             return self._to_domain(row)
+
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        if not task_ids:
+            return []
+        with self._database.sessions() as session:
+            rows = session.scalars(select(TaskRow).where(TaskRow.id.in_(task_ids))).all()
+            found = {row.id: self._to_domain(row) for row in rows}
+            return [found.get(task_id) for task_id in task_ids]
 
     def list_recent(self, *, limit: int) -> list[Task]:
         with self._database.sessions() as session:

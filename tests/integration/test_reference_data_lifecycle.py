@@ -246,3 +246,46 @@ def test_restore_retains_checkpoint_key_and_resumes_authenticated_workflow(tmp_p
     assert result.nodes[-1].output == b'{"total":3}'
     restored.close()
     database.close()
+
+
+def test_restore_failure_preserves_replaced_key_sidecar(tmp_path, monkeypatch):
+    import af.infrastructure.data_maintenance as module
+
+    database = Database("sqlite:///:memory:")
+    maintenance = SQLiteDataMaintenance(database, authentication_key=b"k" * 32)
+    backup = maintenance.backup(tmp_path / "backup.db")
+    destination = tmp_path / "restored.db"
+    key = destination.with_suffix(".workflow-key")
+
+    def replace_key_then_fail(source, target):
+        replacement = tmp_path / "replacement-key"
+        replacement.write_bytes(b"another-owner")
+        replacement.replace(key)
+        raise OSError("publication failed")
+
+    monkeypatch.setattr(module.os, "link", replace_key_then_fail)
+    with pytest.raises(OSError, match="publication failed"):
+        maintenance.restore(backup.path, destination)
+    assert key.read_bytes() == b"another-owner"
+    assert not destination.exists()
+    database.close()
+
+
+def test_backup_failure_preserves_replaced_destination(tmp_path, monkeypatch):
+    import af.infrastructure.data_maintenance as module
+
+    database = Database("sqlite:///:memory:")
+    maintenance = SQLiteDataMaintenance(database, authentication_key=b"k" * 32)
+    destination = tmp_path / "backup.db"
+
+    def replace_backup_then_fail(path, payload):
+        replacement = tmp_path / "replacement-backup"
+        replacement.write_bytes(b"another-owner")
+        replacement.replace(destination)
+        raise OSError("manifest failed")
+
+    monkeypatch.setattr(module, "_private_write", replace_backup_then_fail)
+    with pytest.raises(OSError, match="manifest failed"):
+        maintenance.backup(destination)
+    assert destination.read_bytes() == b"another-owner"
+    database.close()

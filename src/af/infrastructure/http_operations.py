@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -38,6 +39,8 @@ class SQLiteHttpOperations:
             if resolved.is_symlink():
                 raise ValueError("HTTP ledger must not be a symbolic link")
             resolved.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(resolved, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
         self._connection = sqlite3.connect(str(path), timeout=5, check_same_thread=False)
         self._lock = RLock()
         self._retention = retention_seconds

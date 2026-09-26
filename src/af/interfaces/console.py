@@ -25,6 +25,7 @@ from af.application.human_interpreter import HumanInterpreter
 from af.application.introspection import IntrospectionService
 from af.application.oauth_controller import OAuthController
 from af.application.self_design_execution import SelfDesignExecutionController
+from af.application.self_development import SelfDevelopmentController
 from af.application.self_improvement import SelfImprovementService
 from af.application.self_stages import SelfStageController
 from af.application.version_control import VersionControlController
@@ -61,6 +62,7 @@ from af.interfaces.observability_products import (
     register_observability_commands,
 )
 from af.interfaces.scheduling import register_scheduling_commands
+from af.interfaces.self_development import register_self_development_commands
 from af.interfaces.self_improvement import register_self_improvement_commands
 from af.interfaces.self_stages import register_lifecycle_stage_commands
 from af.interfaces.starters import register_starter_commands
@@ -89,6 +91,12 @@ def create_cli(
         version_control=version_control,
     )
     register_starter_commands(cli)
+    register_self_development_commands(
+        cli,
+        lambda context: current_application_from_context(context).container.resolve(
+            SelfDevelopmentController
+        ),
+    )
 
     def introspection(context: typer.Context) -> IntrospectionService:
         current = current_application_from_context(context)

@@ -44,8 +44,8 @@ def test_count_characters_preserves_typed_arguments(application) -> None:  # typ
     assert outcome.prompt == text
     assert outcome.output == "1"
     assert outcome.route == "character-count"
-    assert trace.prompt == text
-    assert trace.arguments == {"text": text, "character": "?"}
+    assert trace.prompt == "[redacted]"
+    assert trace.arguments == {}
 
 
 def test_count_characters_accepts_whitespace_text_and_character(
@@ -56,8 +56,8 @@ def test_count_characters_accepts_whitespace_text_and_character(
 
     assert outcome.prompt == "   "
     assert outcome.output == "3"
-    assert trace.prompt == "   "
-    assert trace.arguments == {"text": "   ", "character": " "}
+    assert trace.prompt == "[redacted]"
+    assert trace.arguments == {}
 
 
 def test_count_characters_accepts_exact_limit_and_rejects_overflow(

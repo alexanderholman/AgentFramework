@@ -13,6 +13,7 @@ from af.application.dispatch import (
     ExecuteTask,
     GetOperationsSnapshot,
     GetTask,
+    GetTasks,
     InterpretIdeon,
     ListTasks,
     RealiseIdeon,
@@ -38,6 +39,7 @@ def _controllers() -> tuple[Mock, Mock, Mock, Mock]:
     tasks.execute.return_value = "executed"
     tasks.create.return_value = "created"
     tasks.get.return_value = "found"
+    tasks.get_many.return_value = ["found", None]
     tasks.list.return_value = ["listed"]
     tasks.update.return_value = "updated"
     tasks.count_characters.return_value = "counted"
@@ -75,6 +77,7 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
     assert endpoints.tasks.execute("run") == "executed"
     assert endpoints.tasks.create("create") == "created"
     assert endpoints.tasks.get("task-1") == "found"
+    assert endpoints.tasks.get_many(("task-1", "missing")) == ["found", None]
     assert endpoints.tasks.list(limit=5, offset=2) == ["listed"]
     assert endpoints.tasks.update("task-1", "update") == "updated"
     assert endpoints.tasks.count_characters("text", "t") == "counted"
@@ -91,6 +94,7 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
         ExecuteTask,
         CreateTask,
         GetTask,
+        GetTasks,
         ListTasks,
         UpdateTask,
         CountCharacters,
@@ -106,6 +110,7 @@ def test_controller_facades_dispatch_every_use_case_through_one_ordered_bus() ->
         (MessageKind.COMMAND, "ExecuteTask", AcceptanceScope.DETERMINISTIC),
         (MessageKind.COMMAND, "CreateTask", AcceptanceScope.DETERMINISTIC),
         (MessageKind.QUERY, "GetTask", AcceptanceScope.DETERMINISTIC),
+        (MessageKind.QUERY, "GetTasks", AcceptanceScope.DETERMINISTIC),
         (MessageKind.QUERY, "ListTasks", AcceptanceScope.DETERMINISTIC),
         (MessageKind.COMMAND, "UpdateTask", AcceptanceScope.DETERMINISTIC),
         (MessageKind.COMMAND, "CountCharacters", AcceptanceScope.DETERMINISTIC),
@@ -170,6 +175,7 @@ def test_bootstrap_exposes_bus_backed_endpoints_to_every_transport() -> None:
             ExecuteTask,
             CreateTask,
             GetTask,
+            GetTasks,
             ListTasks,
             UpdateTask,
             CountCharacters,

@@ -17,6 +17,9 @@ The reference application includes:
   by an independent verifier
 - a finite independently verified math/physics catalogue and locale-aware presentation
 - durable typed workflows, restartable schedules, and scoped headless tokens/OAuth
+- local initialization, a typed terminal application, and six application-owned starter kits
+- finite algorithms/problems and a controlled Human Interpreter with source provenance
+- headless accounts/MFA/passkeys, durable local streams, and optional inspector/metrics
 - persisted Task create/list/read/update/delete operations
 - SQLite in normal use and in-memory repositories in tests
 - an MCP server for local clients plus deployment guidance for ChatGPT-compatible HTTPS or
@@ -60,12 +63,28 @@ uv run af tasks delete TASK_ID
 ```
 
 By default, persistent data is stored at `storage/af.sqlite3`. Override this with
-`AF_DATABASE_URL`.
+`AF_DATABASE_URL` for an unmanaged application. A managed declaration created by
+`af init` is loaded by the default CLI and MCP factories; its state directory is selected
+by `AF_MACHINE_ROOT` (default `storage`). Explicit application factories own their configuration.
+
+Create an application whose source you own:
+
+```bash
+uv run af new my-app --template full-stack --package my_app
+```
+
+The six templates are `basic-web`, `pretty-web`, `rest-api`, `worker`, `tui`, and
+`full-stack`. Each includes its own composition root, primary-entrypoint tests and CI.
+See [starter kits](docs/starter-kits.md) for installation and execution.
 
 
 ## Integrated local operations
 
 ```bash
+uv run af init --plan --profile scheduler
+# After reviewing the local plan:
+uv run af init --non-interactive --apply --yes --profile scheduler
+uv run af status
 uv run af data init
 uv run af doctor --json
 uv run af ask "math divide a=1 b=3" --language fr --territory CA --json
@@ -73,8 +92,15 @@ uv run af workflows start '{"texts":["strawberry","raspberry"],"character":"r"}'
 uv run af workflows resume RUN_ID
 uv run af data backup BACKUP_PATH
 uv run af capabilities --json
+uv run af catalogues algorithms
+uv run af human interpret 'sort integers [3,1,2]'
+uv run af tui run tasks --plain
 uv run af peer-demo --execute
 ```
+
+Initialization is optional for the basic deterministic examples. The managed profiles
+provision only local SQLite components; they do not install model runtimes or contact
+remote services. `--plain` displays a terminal snapshot without reading input or running a task.
 
 The peer demo uses temporary loopback nodes and the installed verified character
 procedure. It is qualification evidence for that local path, not a promise about
@@ -94,6 +120,12 @@ See [durable workflows](docs/durable-workflows.md), [data lifecycle](docs/data-l
 [agent development](docs/agent-development.md). The current finite implementation
 and measured support limits are documented; roadmap completion is still under validation.
 
+Additional installed journeys: [machine setup](docs/machine-setup.md),
+[terminal applications](docs/tui.md), [algorithms/problems](docs/computational-catalogues.md),
+[Human Interpreter](docs/human-interpreter.md), [human decisions](docs/human-decisions.md),
+[accounts and authentication](docs/authentication.md), [durable streams](docs/durable-streams.md),
+and [observability products](docs/observability-products.md).
+
 ## HTML, REST, and GraphQL
 
 Start the HTTP application:
@@ -105,8 +137,16 @@ uv run af serve
 Then open:
 
 - HTML MVC: `http://127.0.0.1:8000/`
-- OpenAPI: `http://127.0.0.1:8000/docs`
-- GraphQL: `http://127.0.0.1:8000/graphql`
+- Local REST documentation/explorer: `http://127.0.0.1:8000/docs`
+- Local GraphQL explorer: `http://127.0.0.1:8000/graphql/explorer`
+- Machine-readable OpenAPI: `http://127.0.0.1:8000/openapi.json`
+
+Both explorers use locally served assets under the existing same-origin content-security
+policy. They execute only on an explicit submission, preserve server authorization, and
+display responses as text. `/graphql` itself remains the JSON API. See
+[web access and API explorers](docs/web-accessibility.md) for keyboard behavior and current
+accessibility evidence. Authenticated browser hosting requires an explicit host authentication
+integration; headless bearer support is not a browser login UI.
 
 REST example:
 
@@ -212,7 +252,11 @@ python3 scripts/af_dev.py --action check --execute
 The executed gate checks Ruff formatting and linting, strict mypy typing, pytest, and the
 legacy AgentFactory governance suite. It also validates the production-MVP manifest and
 builds, inspects, temporarily installs, and smokes a wheel produced from the sdist. The
-framework tests are deliberately network-free.
+default framework tests use local/in-process fixtures. Real-service tests are opt-in and skipped
+without their configured services; a skip does not establish support. The complete gate also
+includes local protocol tests and a runtime-only temporary package installation. That installation
+uses hashed locked dependencies from a primed offline cache and does not borrow development
+site packages; it is evidence on the current host, not a clean OS or cross-platform certification.
 
 Long-running epic analysis uses the registered `[SCRIPT:af-epic-worker]` harness. Each
 iteration records a checkpoint under a stable session ID so service restarts preserve one
@@ -255,7 +299,12 @@ AF retains the original AgentFactory registry and documentation conventions:
 Do not rewrite append-only history. Add a dated entry at the end and run
 `./validate_agents.sh`.
 
+The [Constitution](docs/constitution.md), [trace privacy](docs/trace-privacy.md),
+[configured self-development](docs/self-development.md),
+[threat model](docs/threat-model.md) and [accessibility evidence](docs/web-accessibility.md)
+record the implemented boundaries and the remaining independent/manual checks. Passing repository
+tests does not close the roadmap, approve a release, certify external drivers, or authorize deployment.
+
 ## License
 
 Copyright © 2019 Alexander Holman. All rights reserved; see [LICENSE](LICENSE).
-

@@ -127,7 +127,7 @@ FORBIDDEN_WHEEL_PREFIXES = (
     "tests/",
     "scripts/",
 )
-FORBIDDEN_ARCHIVE_SUFFIXES = (".db", ".sqlite", ".sqlite3")
+FORBIDDEN_ARCHIVE_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".workflow-key", ".pem", ".p12", ".pfx")
 UV_BUILD_OPTIONS = (
     "--offline",
     "--no-sources",
@@ -610,7 +610,8 @@ def _forbidden_archive_path(name: str, *, wheel: bool) -> bool:
     return (
         normalized.startswith(prefixes)
         or "/__pycache__/" in f"/{normalized}"
-        or normalized.endswith(FORBIDDEN_ARCHIVE_SUFFIXES)
+        or normalized.lower().endswith(FORBIDDEN_ARCHIVE_SUFFIXES)
+        or PurePosixPath(normalized).name in {".env", "id_rsa", "id_ed25519"}
     )
 
 
@@ -1011,6 +1012,77 @@ def _release_environment(temporary_root: Path) -> dict[str, str]:
     return environment
 
 
+def _install_runtime_dependencies(
+    root: Path, target: Path, uv_executable: str, environment: Mapping[str, str]
+) -> None:
+    """Install only hashed locked runtime dependencies from the primed uv cache."""
+    requirements = target.parent / "runtime-requirements.txt"
+    _run_release_command(
+        (
+            uv_executable,
+            "export",
+            "--no-config",
+            "--offline",
+            "--locked",
+            "--no-sources",
+            "--no-dev",
+            "--no-default-groups",
+            "--no-emit-project",
+            "--format",
+            "requirements.txt",
+            "--output-file",
+            str(requirements),
+        ),
+        cwd=root,
+        environment=environment,
+        stage="runtime lock export",
+        timeout=60,
+    )
+    cache_environment = {
+        name: value
+        for name in ("HOME", "PATH", "LOCALAPPDATA", "XDG_CACHE_HOME")
+        if (value := os.environ.get(name))
+    }
+    cache_environment.update({"UV_NO_CONFIG": "1", "UV_OFFLINE": "1"})
+    if cache := os.environ.get("UV_CACHE_DIR"):
+        cache_environment["UV_CACHE_DIR"] = str(Path(cache).resolve())
+    cache_result = _run_release_command(
+        (uv_executable, "cache", "dir", "--no-config"),
+        cwd=target.parent,
+        environment=cache_environment,
+        stage="runtime cache lookup",
+        timeout=30,
+    )
+    cache_path = Path(cache_result.stdout.strip())
+    if not cache_path.is_absolute() or not cache_path.is_dir():
+        raise ArtifactError("runtime cache must be primed by the locked development install")
+    runtime_environment = dict(environment, UV_CACHE_DIR=str(cache_path.resolve()))
+    _run_release_command(
+        (
+            uv_executable,
+            "pip",
+            "install",
+            "--offline",
+            "--no-config",
+            "--python",
+            sys.executable,
+            "--target",
+            str(target),
+            "--require-hashes",
+            "--no-deps",
+            "--no-build",
+            "--link-mode",
+            "copy",
+            "--requirements",
+            str(requirements),
+        ),
+        cwd=target.parent,
+        environment=runtime_environment,
+        stage="locked runtime dependency installation",
+        timeout=300,
+    )
+
+
 def build_and_validate_distribution(
     root: Path, uv_command: str = "uv", git_command: str = "git"
 ) -> ArtifactSummary:
@@ -1101,6 +1173,8 @@ def build_and_validate_distribution(
         summary = inspect_distribution(reference_root, sdists[0], wheels[0])
         wheel_sha256 = summary.wheel_sha256
 
+        _install_runtime_dependencies(reference_root, target, uv_executable, environment)
+
         _run_release_command(
             (
                 uv_executable,
@@ -1122,7 +1196,7 @@ def build_and_validate_distribution(
         if _sha256(wheels[0]) != wheel_sha256:
             raise ArtifactError("wheel changed while it was being installed")
         _run_release_command(
-            (sys.executable, "-I", "-c", PACKAGE_SMOKE, str(target)),
+            (sys.executable, "-I", "-S", "-c", PACKAGE_SMOKE, str(target)),
             cwd=temporary_root,
             environment=environment,
             stage="installed-wheel smoke",
@@ -1153,7 +1227,9 @@ def _render_package_plan(uv_command: str) -> str:
             "build the wheel from that sdist in a temporary directory",
             "inspect artifact identity, entry points, templates, typing, and forbidden state",
             "install the wheel with uv pip install --offline --no-deps into a temporary target",
-            "run deterministic smoke checks outside the source checkout",
+            "install only hash-verified runtime dependencies from the locked, primed uv cache",
+            "run deterministic smoke outside the checkout "
+            "with user and environment site packages disabled",
             "Dry run only. Re-run with --execute to build and smoke the package.",
         )
     )
