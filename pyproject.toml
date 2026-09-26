@@ -62,6 +62,7 @@ include = [
   "README.md",
   "SECURITY.md",
   "docs",
+  "native",
   "pyproject.toml",
   "release",
   "scripts",

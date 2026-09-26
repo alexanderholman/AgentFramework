@@ -24,10 +24,12 @@ from af.framework.types import (
     WorkRequest,
 )
 from af.framework.workflows import WorkflowRun
+from af.interfaces.human_interpreter import HumanInterpretRequest
 from af.interfaces.presenters import procedure_descriptor_to_dict
 
 _SCHEMAS: dict[str, type[object]] = {
     "execution-request": WorkRequest,
+    "human-interpretation-request": HumanInterpretRequest,
     "decision-request": DecisionRequest,
     "decision-result": DecisionAnswer,
     "workflow-checkpoint": WorkflowRun,

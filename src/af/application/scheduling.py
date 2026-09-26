@@ -338,7 +338,11 @@ class ScheduledJobHandler:
                 ("cancelled", "cancelled") if cancellation.cancelled else ("completed", "completed")
             )
         except Exception:
-            terminal, reason = "failed", "execution_failed"
+            terminal, reason = (
+                ("cancelled", "cancelled")
+                if cancellation.cancelled
+                else ("failed", "execution_failed")
+            )
             raise
         finally:
             stop.set()

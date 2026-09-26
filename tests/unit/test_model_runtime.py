@@ -161,6 +161,17 @@ def test_revocation_checked_before_load_and_before_result_acceptance() -> None:
     assert adapter.loaded == ["qwen.q4"]
 
 
+def test_revoked_idle_residency_drains_before_a_new_request_is_refused() -> None:
+    adapter = LocalAdapter()
+    runtime, repository = broker(adapter)
+    runtime.execute(invocation(), lambda: None)
+    runtime.authorize = lambda request: False
+    with pytest.raises(RuntimeRefused, match="authorization_revoked"):
+        runtime.execute(invocation("another"), lambda: None)
+    assert all(item.state is LeaseState.RELEASED for item in repository.list())
+    assert runtime.state is RuntimeState.COLD
+
+
 def test_deadline_queue_limit_and_changed_scope_fail_closed() -> None:
     adapter = LocalAdapter()
     runtime, repository = broker(adapter)

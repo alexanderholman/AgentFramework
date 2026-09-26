@@ -226,6 +226,14 @@ class ModelRuntimeBroker:
 
     def _enter(self, invocation: RuntimeInvocation) -> None:
         with self._condition:
+            if self._active is None and self._resident is not None:
+                try:
+                    self._validate(self._resident, residency=True)
+                    self._check_lease()
+                except RuntimeRefused:
+                    self._evict("residency_revoked")
+                    raise
+            self.maintain()
             self._validate(invocation)
             if self._state is RuntimeState.QUARANTINED:
                 raise RuntimeRefused("runtime_quarantined")
@@ -258,7 +266,11 @@ class ModelRuntimeBroker:
             raise RuntimeRefused("cancelled")
         if not residency and invocation.deadline <= self._clock():
             raise RuntimeRefused("deadline_exceeded")
-        if invocation.authorized_until <= self._clock() or not self.authorize(invocation):
+        try:
+            authorized = self.authorize(invocation)
+        except Exception as error:
+            raise RuntimeRefused("authorization_unavailable") from error
+        if invocation.authorized_until <= self._clock() or not authorized:
             raise RuntimeRefused("authorization_revoked")
 
     def _ensure_resident(self, invocation: RuntimeInvocation) -> None:

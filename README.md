@@ -6,15 +6,17 @@ deterministic procedures. Its execution kernel follows:
 `classify → route → execute → verify → record → test → reuse`
 
 The same application service powers a Typer CLI, server-rendered HTML MVC, REST,
-GraphQL, and MCP. Deterministic static and procedural routes run first and bypass any
+GraphQL, XML/SOAP, and MCP. Deterministic static and procedural routes run first and bypass any
 optional selector. A selector may only propose an installed procedure; AF does not ship a
 model-generated-answer route.
 
-The first vertical slice includes:
+The reference application includes:
 
 - `hello` → `Hello, world!`
 - `how many rs in strawberry` → `3`, computed by a reusable character loop and checked
   by an independent verifier
+- a finite independently verified math/physics catalogue and locale-aware presentation
+- durable typed workflows, restartable schedules, and scoped headless tokens/OAuth
 - persisted Task create/list/read/update/delete operations
 - SQLite in normal use and in-memory repositories in tests
 - an MCP server for local clients plus deployment guidance for ChatGPT-compatible HTTPS or
@@ -59,6 +61,38 @@ uv run af tasks delete TASK_ID
 
 By default, persistent data is stored at `storage/af.sqlite3`. Override this with
 `AF_DATABASE_URL`.
+
+
+## Integrated local operations
+
+```bash
+uv run af data init
+uv run af doctor --json
+uv run af ask "math divide a=1 b=3" --language fr --territory CA --json
+uv run af workflows start '{"texts":["strawberry","raspberry"],"character":"r"}' --max-nodes 1
+uv run af workflows resume RUN_ID
+uv run af data backup BACKUP_PATH
+uv run af capabilities --json
+uv run af peer-demo --execute
+```
+
+The peer demo uses temporary loopback nodes and the installed verified character
+procedure. It is qualification evidence for that local path, not a promise about
+remote connectivity or mobile hosting. `af self-improve --fixture` and `af evolve
+--fixture` explicitly exercise offline evidence fixtures; configured self-operation
+ports and runtime admission remain separate.
+
+`AF_SELECTOR_PROVIDER=ollama`, `AF_SELECTOR_MODEL=MODEL`, and an optional
+`AF_SELECTOR_ENDPOINT` enable a loopback selector (600-second startup/request bound).
+Deterministic procedures still bypass it. Jev requires `AF_DECISION_ENABLED=true`,
+`AF_ALLOW_REMOTE_INFERENCE=true`, `TYPESAFE_API_KEY`, and the explicit
+`af decisions preview` → `approve` → `evaluate` flow. Neither provider is required.
+
+See [durable workflows](docs/durable-workflows.md), [data lifecycle](docs/data-lifecycle.md),
+[science](docs/science-catalogue.md), [locales](docs/locales.md),
+[scheduling](docs/scheduling.md), [driver qualification](docs/driver-support.md), and
+[agent development](docs/agent-development.md). The current finite implementation
+and measured support limits are documented; roadmap completion is still under validation.
 
 ## HTML, REST, and GraphQL
 
@@ -105,7 +139,8 @@ curl -sS http://127.0.0.1:8000/api/v1/operations
 
 Open `http://127.0.0.1:8000/operations` for the server-rendered view. The projection is
 bounded and excludes prompts, outputs, trace identifiers, credentials, and configuration.
-The HTTP surface remains loopback/development-only until AF has a real authentication boundary.
+Optional bearer enforcement is available with `AF_HTTP_AUTH_REQUIRED=true` and scoped
+locally issued tokens. Loopback defaults and token support do not establish deployment qualification.
 See [Operations dashboard](docs/operations-dashboard.md).
 
 ## MCP and ChatGPT
@@ -124,9 +159,9 @@ AF_MCP_TRANSPORT=streamable-http uv run af-mcp
 
 This binds to `127.0.0.1:8000/mcp` by default. ChatGPT web cannot connect directly to a
 local stdio or loopback server. For local/private use, prefer an outbound-only Secure MCP
-Tunnel deployment. Public HTTPS is a separate authenticated and hardened option. AF does
-not bundle a real local or remote selector provider adapter, and remote selector execution
-is denied by the current auto-execution policy. The repository skill in
+Tunnel deployment. Public HTTPS is a separate authenticated and hardened option. AF includes explicitly configured loopback Ollama/OpenAI-compatible selector adapters
+and a separate consented Jev decision adapter. Remote selector auto-execution remains
+denied by policy; no provider result grants execution authority. The repository skill in
 `.agents/skills/af-work/` teaches a compatible agent when to use each AF tool without
 reimplementing AF logic.
 

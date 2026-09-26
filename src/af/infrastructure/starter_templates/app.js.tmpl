@@ -1,0 +1,25 @@
+"use strict";
+const form = document.getElementById("task-form");
+const status = document.getElementById("status");
+const result = document.getElementById("result");
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = form.querySelector("button");
+  button.disabled = true;
+  status.textContent = "Running…";
+  result.textContent = "";
+  try {
+    const response = await fetch("/api/v1/tasks", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({prompt: document.getElementById("prompt").value})
+    });
+    const task = await response.json();
+    if (!response.ok) throw new Error("Request could not be completed.");
+    status.textContent = task.verified ? "Verified result" : "Needs review";
+    result.textContent = task.output ?? task.status;
+  } catch (error) {
+    status.textContent = "Request could not be completed.";
+  } finally {
+    button.disabled = false;
+  }
+});

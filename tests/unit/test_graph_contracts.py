@@ -187,3 +187,15 @@ def test_graph_contracts_are_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         edge.edge_id = "rel-002"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), True])
+def test_graph_result_rejects_nonfinite_or_boolean_score(score):
+    with pytest.raises(ValueError):
+        GraphResult("node", ("Entity",), score, 1)
+
+
+@pytest.mark.parametrize("rank", [True, 1.5])
+def test_graph_result_requires_integer_rank(rank):
+    with pytest.raises(ValueError):
+        GraphResult("node", ("Entity",), 1.0, rank)

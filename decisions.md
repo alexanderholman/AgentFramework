@@ -4173,3 +4173,19 @@ restore authenticated workflow keys with verified backups; publish honest driver
 capabilities instead of dictionary-backed claims of external graph persistence.
 OpenCode and Copilot now use one concise root engineering contract. The root package
 version remains alpha while integration/release gates and roadmap work continue.
+
+## 2026-09-26 — Finite operational reference paths and independent qualification
+
+Use the actual installed pipeline and shared application bus for the finite v0.1
+catalogues, generated-component admission, TUI/starters and operational observations.
+Reuse the persisted host key through domain-separated derivation for account secrets;
+keep notifications encrypted until explicit local export or configured delivery.
+Machine setup provisions local SQLite capabilities and records unsupported engine
+installation honestly; it does not simulate downloads or readiness.
+
+Non-loopback HTTP now requires scoped authentication and a private session key.
+MCP HTTP remains loopback-only until its own transport authentication is installed;
+an HTTP host/origin allowlist alone cannot authorize exposure. Package smoke forbids
+Python network/DNS and subprocess egress; this is bounded trusted-runtime evidence,
+not a claim of an operating-system sandbox. Native Bare offline startup and signed
+IPC conformance are distinct from DHT/hole-punch/mobile qualification.

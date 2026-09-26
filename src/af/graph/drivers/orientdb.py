@@ -14,10 +14,13 @@ from af.graph.contracts import (
     GraphEdge,
     GraphFeature,
     GraphNode,
+    GraphPath,
     GraphQuery,
     GraphResult,
+    GraphTraversal,
     _identifier,
 )
+from af.graph.traversal import edges_from_rows, execute_traversal
 
 
 class OrientDBResponse(Protocol):
@@ -87,7 +90,11 @@ class OrientDBDriver:
         evidence = self._verifier()
         if not isinstance(evidence, CapabilitySet):
             raise TypeError("OrientDB verifier must return a CapabilitySet")
-        implemented = {GraphFeature.QUERY.value, GraphFeature.PERSISTENCE.value}
+        implemented = {
+            GraphFeature.QUERY.value,
+            GraphFeature.PERSISTENCE.value,
+            GraphFeature.TRAVERSAL.value,
+        }
         return CapabilitySet(
             evidence.values & implemented & {feature.value for feature in required}
         )
@@ -152,6 +159,34 @@ class OrientDBDriver:
                 stage="graph.orientdb.result",
                 protected_cause=error,
             ) from None
+
+    def traverse(self, traversal: GraphTraversal) -> list[GraphPath]:
+        if not isinstance(traversal, GraphTraversal):
+            raise TypeError("OrientDB traversal requires GraphTraversal")
+
+        def neighbors(node_id: str, limit: int, deadline_ms: int) -> list[GraphEdge]:
+            predicate = {
+                "outgoing": "out.af_id = :node_id",
+                "incoming": "in.af_id = :node_id",
+                "any": "(out.af_id = :node_id OR in.af_id = :node_id)",
+            }[traversal.direction]
+            parameters: dict[str, object] = {"node_id": node_id}
+            if traversal.relation_types:
+                predicate += " AND af_relation IN :relation_types"
+                parameters["relation_types"] = list(traversal.relation_types)
+            rows = self._run(
+                "SELECT af_id AS edge_id, out.af_id AS source_id, in.af_id AS target_id, "
+                "af_relation AS relation_type FROM AFEdge WHERE "
+                + predicate
+                + f" ORDER BY edge_id, source_id, target_id LIMIT {limit} "
+                f"TIMEOUT {deadline_ms} EXCEPTION",
+                parameters,
+                limit=limit,
+                deadline_ms=deadline_ms,
+            )
+            return edges_from_rows(rows)
+
+        return execute_traversal(traversal, neighbors)
 
     def create_node(
         self, node_id: str, labels: tuple[str, ...], properties: Mapping[str, Any]

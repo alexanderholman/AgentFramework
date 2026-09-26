@@ -1,0 +1,16 @@
+"""Application-owned TUI registration; the terminal kernel remains replaceable."""
+
+from af.framework.container import ProviderRegistrar, ServiceProvider
+from af.framework.tui import TuiApplicationDescriptor, TuiContribution, bind_tui_application
+
+from .tui_app import StarterTui
+
+
+class StarterTuiProvider(ServiceProvider):
+    provider_id = "app.starter-tui"
+
+    def register(self, registrar: ProviderRegistrar) -> None:
+        bind_tui_application(
+            registrar,
+            TuiContribution(TuiApplicationDescriptor("starter", "__PACKAGE__"), StarterTui),
+        )

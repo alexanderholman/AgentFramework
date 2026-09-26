@@ -38,7 +38,11 @@ def workflow_key(url: URL) -> bytes:
                 os.link(temporary, path)
         finally:
             os.unlink(temporary)
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    # Nonblocking open lets the descriptor check reject FIFOs without waiting
+    # for another process; it has no effect on a regular key file.
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
     with os.fdopen(descriptor, "rb") as source:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:

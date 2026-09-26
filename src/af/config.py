@@ -59,6 +59,8 @@ class Settings:
     mcp_transport: str = "stdio"
     http_auth_required: bool = False
     auth_tenant_id: str = "local"
+    passkey_rp_id: str | None = None
+    passkey_origin: str | None = None
     session_cookie_signing_key: str = "af-local-session-signing-key"
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()
@@ -77,6 +79,9 @@ class Settings:
     resource_lease_maintenance_host_id: str | None = None
     resource_lease_maintenance_interval_seconds: float = 30.0
     schedules_path: str | None = None
+    engineering_repository: str | None = None
+    inspector_enabled: bool = False
+    metrics_enabled: bool = False
     worker_queue_sqlite_path: str | None = None
     worker_optimization_profile_path: str | None = None
 
@@ -169,6 +174,8 @@ _ENV_NAMES = {
     "AF_MCP_TRANSPORT": "mcp_transport",
     "AF_HTTP_AUTH_REQUIRED": "http_auth_required",
     "AF_AUTH_TENANT_ID": "auth_tenant_id",
+    "AF_PASSKEY_RP_ID": "passkey_rp_id",
+    "AF_PASSKEY_ORIGIN": "passkey_origin",
     "AF_SESSION_COOKIE_SIGNING_KEY": "session_cookie_signing_key",
     "AF_ALLOWED_HOSTS": "allowed_hosts",
     "AF_ALLOWED_ORIGINS": "allowed_origins",
@@ -189,6 +196,9 @@ _ENV_NAMES = {
         "resource_lease_maintenance_interval_seconds"
     ),
     "AF_SCHEDULES_PATH": "schedules_path",
+    "AF_ENGINEERING_REPOSITORY": "engineering_repository",
+    "AF_INSPECTOR_ENABLED": "inspector_enabled",
+    "AF_METRICS_ENABLED": "metrics_enabled",
     "AF_WORKER_QUEUE_SQLITE_PATH": "worker_queue_sqlite_path",
     "AF_WORKER_OPTIMIZATION_PROFILE_PATH": "worker_optimization_profile_path",
 }
@@ -199,6 +209,7 @@ _NON_CONFIG_ENV_NAMES = frozenset(
         "AF_APPEND_ONLY_BASE_STRATEGY",
         "AF_ROUTER_CLI",
         "AF_EPIC_MODEL",
+        "AF_MACHINE_ROOT",
     }
 )
 
@@ -347,14 +358,23 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
         in {
             "resource_lease_maintenance_host_id",
             "selector_model",
+            "passkey_rp_id",
+            "passkey_origin",
             "schedules_path",
+            "engineering_repository",
             "worker_queue_sqlite_path",
             "worker_optimization_profile_path",
         }
         and value is None
     ):
         return None
-    if name in {"allow_remote_inference", "decision_enabled", "http_auth_required"}:
+    if name in {
+        "allow_remote_inference",
+        "decision_enabled",
+        "http_auth_required",
+        "inspector_enabled",
+        "metrics_enabled",
+    }:
         if textual and isinstance(value, str):
             normalized = value.lower()
             if normalized in {"1", "true", "yes", "on"}:
@@ -395,7 +415,17 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("selector timeout must be positive and at most ten minutes")
     if type(settings.http_auth_required) is not bool:
         raise ValueError("HTTP authentication required must be boolean")
+    if type(settings.inspector_enabled) is not bool or type(settings.metrics_enabled) is not bool:
+        raise ValueError("observability settings must be boolean")
     _validate_single_line(settings.auth_tenant_id, "auth_tenant_id")
+    if (settings.passkey_rp_id is None) != (settings.passkey_origin is None):
+        raise ValueError("passkeys require both a relying-party ID and an exact origin")
+    if settings.passkey_rp_id is not None:
+        _validate_single_line(settings.passkey_rp_id, "passkey_rp_id")
+    if settings.passkey_origin is not None:
+        _validate_single_line(settings.passkey_origin, "passkey_origin")
+    if settings.engineering_repository is not None:
+        _validate_single_line(settings.engineering_repository, "engineering_repository")
     if type(settings.decision_enabled) is not bool:
         raise ValueError("decision enabled must be boolean")
     _validate_single_line(settings.decision_model, "decision_model")

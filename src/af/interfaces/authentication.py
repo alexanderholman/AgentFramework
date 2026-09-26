@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,7 @@ from af.application.authentication import AuthenticationService
 from af.framework.authentication import IssuedToken
 from af.framework.context import Principal
 from af.framework.errors import AFError
+from af.interfaces.json_input import read_json
 
 
 def register_authentication_commands(
@@ -28,10 +30,12 @@ def register_authentication_commands(
         context: typer.Context, output: Path, operation: Callable[[], IssuedToken]
     ) -> None:
         issued = None
+        owned: os.stat_result | None = None
         try:
             # Claim the private destination before changing token state.
             descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, "w") as stream:
+                owned = os.fstat(stream.fileno())
                 issued = operation()
                 json.dump(asdict(issued), stream)
                 stream.flush()
@@ -49,7 +53,13 @@ def register_authentication_commands(
             )
         except (AFError, ValueError, OSError):
             if issued is not None:
-                service(context).revoke(issued.token_id, tenant_id=tenant(context))
+                with suppress(AFError, ValueError, OSError):
+                    service(context).revoke(issued.token_id, tenant_id=tenant(context))
+            if owned is not None:
+                with suppress(OSError):
+                    current = output.stat(follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino):
+                        output.unlink()
             typer.echo('{"error":"token_operation_failed"}', err=True)
             raise typer.Exit(2) from None
 
@@ -79,11 +89,7 @@ def register_authentication_commands(
         output: Annotated[Path, typer.Option()],
     ) -> None:
         def rotate_existing() -> IssuedToken:
-            with credential.open("rb") as stream:
-                payload = stream.read(4097)
-            if len(payload) > 4096:
-                raise ValueError("invalid credential file")
-            data = json.loads(payload)
+            data = read_json(credential, max_bytes=4096)
             if not isinstance(data, dict) or not isinstance(data.get("secret"), str):
                 raise ValueError("invalid credential file")
             return service(context).rotate(data["secret"], tenant_id=tenant(context))

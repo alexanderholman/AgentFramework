@@ -82,14 +82,19 @@ class SqlAlchemyWorkflowRepository:
 
     def get(self, run_id: str) -> WorkflowRun:
         with self._database.sessions() as session:
-            row = session.get(WorkflowRunRow, run_id)
-            if row is None:
-                raise WorkflowError("workflow not found")
-            latest = session.scalar(
-                select(func.max(WorkflowHistoryRow.revision)).where(
-                    WorkflowHistoryRow.run_id == run_id
-                )
+            latest_revision = (
+                select(func.max(WorkflowHistoryRow.revision))
+                .where(WorkflowHistoryRow.run_id == run_id)
+                .scalar_subquery()
             )
+            # Both values must come from one snapshot. Separate SELECTs under
+            # SQLite's legacy transaction behavior can observe different commits.
+            record = session.execute(
+                select(WorkflowRunRow, latest_revision).where(WorkflowRunRow.run_id == run_id)
+            ).one_or_none()
+            if record is None:
+                raise WorkflowError("workflow not found")
+            row, latest = record
             if latest != row.revision:
                 raise WorkflowError("checkpoint revision rollback detected")
             return self._decode(row.payload, row.signature, row.run_id, row.revision)

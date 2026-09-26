@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable
 from decimal import Decimal
@@ -53,13 +54,11 @@ class JevDecisionProvider:
     ) -> None:
         if (
             type(model) is not str
-            or not model.startswith("jev-")
+            or re.fullmatch(r"jev-[0-9]+\.[0-9]+\.[0-9]+", model) is None
             or len(model) > 128
             or any(char.isspace() for char in model)
         ):
             raise ValueError("invalid Jev model")
-        if model in {"jev-latest", "jev-preview"}:
-            raise ValueError("remote decision consent requires a pinned Jev model")
         if type(timeout) not in (int, float) or not isfinite(timeout) or not 0 < timeout <= 600:
             raise ValueError("invalid decision timeout")
         if (
@@ -133,7 +132,10 @@ class JevDecisionProvider:
             return self._failure(request, DecisionStatus.CANCELLED)
         if not self._enabled or not self._allow_remote or not self._api_key or consent is None:
             return self._failure(request, DecisionStatus.DENIED)
-        preview = self.preview(request)
+        try:
+            preview = self.preview(request)
+        except ValueError:
+            return self._failure(request, DecisionStatus.MALFORMED)
         if not self.consents.consume(consent, expected=preview):
             return self._failure(request, DecisionStatus.DENIED)
         try:

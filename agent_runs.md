@@ -4300,3 +4300,25 @@ remaining stable failures and coverage are being resolved. Account/OIDC/passkey,
 algorithm/problem/interpreter catalogue and engineering/promotion work continues.
 External database/search/graph/cloud qualification is not inferred from fakes. Keep
 this as a recovery checkpoint, retain alpha versioning, and continue the mission.
+
+## 2026-09-26 — Full foundation gate and installed operational integration
+
+The fixed foundation snapshot passed the complete canonical gate: 3,738 passed,
+58 skipped, 90.75% branch coverage, strict typing/format/lint, nine OpenCode route
+tests, sdist/wheel inspection and clean temporary install smoke, 36 governance
+checks. External-service skips remain explicit. This supersedes the preceding
+"not yet completed" status for the foundation snapshot only.
+
+Subsequent focused journeys verified account reset across restarts; encrypted
+notification persistence; software-authenticator WebAuthn cryptography; signed
+human-decision restart/replay denial; actual temporary-Git engineering, admission,
+direct reuse and invalidation; real SQLite stream recovery; graph projection
+generation cutover; local setup/apply/reconciliation; independent observations;
+locale HTML/REST and generated starter entry points. Fixed unsafe time-result reuse,
+JSON depth/finite-number bounds, credential output cleanup and context handoff.
+
+The enlarged tree is entering another fixed-snapshot gate. API concurrency controls,
+native networking qualification and release tooling remain under active audit.
+No public release, production deployment, external delivery, paid model call or
+issue-closure claim was made. Keep engineering checkpoint evidence separate from
+candidate-bound target-host and maintainer approvals.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from dataclasses import asdict
 from decimal import Decimal, InvalidOperation
@@ -22,6 +21,7 @@ from af.framework.decision_consent import DecisionConsent
 from af.framework.decisions import DecisionStatus
 from af.framework.errors import AFError
 from af.interfaces.json_input import read_json as _read_json
+from af.interfaces.private_output import write_private_json
 
 
 def _consent(path: Path) -> DecisionConsent:
@@ -74,25 +74,26 @@ def register_decision_commands(
         output: Annotated[Path, typer.Option()],
     ) -> None:
         """Authorize the exact shown disclosure and write a private one-use token file."""
-        controller: DecisionController | None = None
-        grant: DecisionConsent | None = None
         try:
             controller = factory(context)
-            grant = controller.approve(
-                parse_request(_read_json(request)),
-                _read_json(preview),
-                max_cost_usd=Decimal(max_cost_usd),
+
+            def approve_exact() -> dict[str, object]:
+                grant = controller.approve(
+                    parse_request(_read_json(request)),
+                    _read_json(preview),
+                    max_cost_usd=Decimal(max_cost_usd),
+                )
+                return {"token": grant.token}
+
+            write_private_json(
+                output,
+                approve_exact,
+                lambda result: controller.revoke(DecisionConsent(str(result["token"]))),
             )
-            # Refuse replacement or symlink traversal, and never print the token.
-            descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "w") as stream:
-                json.dump({"token": grant.token}, stream)
             typer.echo(
                 json.dumps({"status": "approved", "consent_file": str(output)}, sort_keys=True)
             )
         except (AFError, ValueError, TypeError, OSError, InvalidOperation):
-            if controller is not None and grant is not None:
-                controller.revoke(grant)
             _fail()
 
     @group.command("evaluate")

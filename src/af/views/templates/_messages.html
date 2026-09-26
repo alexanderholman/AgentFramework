@@ -1,0 +1,3 @@
+{% macro message(key) -%}
+<span lang="{{ messages[key].resolved_language }}" dir="{{ messages[key].direction }}">{{ messages[key].text }}</span>
+{%- endmacro %}

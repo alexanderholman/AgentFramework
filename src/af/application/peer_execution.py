@@ -174,6 +174,11 @@ class PeerExecutionService:
 
             def cancelled() -> bool:
                 assert resource_lease is not None
+                try:
+                    self.trust.verify(request, domain="af.peer.request.v1")
+                    self.trust.verify(grant, domain="af.peer.lease.v1")
+                except (ContentRejected, ValueError):
+                    return True
                 current = self.resources.get_lease(resource_lease.id)
                 return (
                     not self.ledger.current(lease, self.clock())
@@ -185,6 +190,8 @@ class PeerExecutionService:
 
             # Revalidate installed identity after admission; advertisements are never consulted.
             self._procedure(lease)
+            if cancelled():
+                raise ContentRejected("execution_cancelled")
             result = self.executor.execute(
                 procedure,
                 classification,

@@ -183,3 +183,18 @@ def test_bootstrap_exposes_bus_backed_endpoints_to_every_transport() -> None:
         )
     finally:
         application.shutdown()
+
+
+def test_sync_facade_preserves_authorized_container_context_across_async_bridge(
+    application,
+) -> None:
+    from af.framework.context import Principal, current_context, maybe_current_context
+
+    tasks, routes, ideons, operations = _controllers()
+    tasks.execute.side_effect = lambda _: current_context()
+    endpoints = build_application_endpoints(tasks, routes, ideons, operations)
+    context = ExecutionContext(principal=Principal("alice", "human"), tenant_id="workspace-a")
+    with application.container.invocation_scope(context=context):
+        assert endpoints.tasks.execute("inspect identity") is context
+        assert current_context() is context
+    assert maybe_current_context() is None

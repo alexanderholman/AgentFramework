@@ -1,0 +1,55 @@
+"""Real terminal and headless drivers run the same application-owned typed TUI."""
+
+import argparse
+import json
+from pathlib import Path
+
+from af.framework.tui import KeyEvent, TextEvent
+from af.infrastructure.tui import ScriptedTuiDriver, TerminalTuiDriver
+from af.interfaces.tui import create_tui_kernel
+
+from .application import build_application
+
+
+def run_once(prompt: str, data_dir: Path | None = None) -> dict[str, object]:
+    application = build_application(data_dir)
+    try:
+        driver = ScriptedTuiDriver((TextEvent(prompt), KeyEvent("enter"), KeyEvent("escape")))
+        result = create_tui_kernel(application).run("starter", driver)
+        output = ""
+        if result.final_view is not None:
+            output = next(
+                widget.value for widget in result.final_view.widgets if widget.id == "output"
+            )
+        return {"exit_code": result.exit_code, "reason": result.reason, "output": output}
+    finally:
+        application.shutdown()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Application-owned task terminal.")
+    parser.add_argument(
+        "--once", help="Run the same typed application with a deterministic headless driver."
+    )
+    parser.add_argument(
+        "--plain", action="store_true", help="Allow a plain snapshot without a TTY."
+    )
+    args = parser.parse_args()
+    if args.once is not None:
+        headless = run_once(args.once)
+        print(json.dumps(headless, sort_keys=True))
+        exit_code = headless["exit_code"]
+        assert isinstance(exit_code, int)
+        parser.exit(exit_code)
+    application = build_application()
+    try:
+        result = create_tui_kernel(application).run(
+            "starter", TerminalTuiDriver(plain=args.plain), plain_fallback=args.plain
+        )
+        parser.exit(result.exit_code)
+    finally:
+        application.shutdown()
+
+
+if __name__ == "__main__":
+    main()

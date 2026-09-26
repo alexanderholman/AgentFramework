@@ -445,3 +445,33 @@ def test_checkpoint_head_rollback_is_rejected_against_append_only_history(tmp_pa
     with pytest.raises(WorkflowError, match="rollback"):
         store.get(run.run_id)
     database.close()
+
+
+def test_concurrent_checkpoint_reads_observe_one_committed_revision(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    database, store, _service, _handler, _context, run = setup_workflow(tmp_path)
+    started, completed = Event(), Event()
+
+    def advance():
+        current = run
+        started.set()
+        try:
+            for _ in range(60):
+                current = store.save(current, expected_revision=current.revision)
+        finally:
+            completed.set()
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            writer = pool.submit(advance)
+            assert started.wait(2)
+            revisions = []
+            while not completed.is_set():
+                revisions.append(store.get(run.run_id).revision)
+            writer.result(5)
+        assert revisions == sorted(revisions)
+        assert store.get(run.run_id).revision == 60
+    finally:
+        database.close()

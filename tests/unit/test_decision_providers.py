@@ -313,3 +313,17 @@ def test_invalid_noul_cannot_smuggle_a_confidence_or_nan() -> None:
     preview = provider.preview(req)
     grant = provider.consents.approve(preview, max_cost_usd=preview.max_cost_usd)
     assert provider.evaluate(req, consent=grant).status is DecisionStatus.MALFORMED
+
+
+def test_jev_rejects_unpinned_names_and_reports_oversize_before_egress() -> None:
+    from af.framework.decision_consent import DecisionConsent
+
+    for name in ("jev-main", "jev-nightly", "jev-1"):
+        with pytest.raises(ValueError):
+            JevDecisionProvider(model=name)
+    provider = JevDecisionProvider(api_key="private", enabled=True, allow_remote=True)
+    request = DecisionRequest(DecisionKind.BINARY, "?", "x" * 32_000)
+    assert (
+        provider.evaluate(request, consent=DecisionConsent("unused")).status
+        is DecisionStatus.MALFORMED
+    )

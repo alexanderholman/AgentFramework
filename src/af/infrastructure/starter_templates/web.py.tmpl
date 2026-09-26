@@ -1,0 +1,52 @@
+"""Application-owned HTTP composition with explicit AF application lifetime."""
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from af.interfaces.http import create_http_app
+
+from .application import build_application
+
+
+def build_web(data_dir: Path | None = None) -> FastAPI:
+    application = build_application(data_dir)
+    try:
+        web = create_http_app(application, web_profile="__WEB_PROFILE__")
+    except BaseException:
+        application.shutdown()
+        raise
+    original_lifespan = web.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            async with original_lifespan(app):
+                yield
+        finally:
+            await application.ashutdown()
+
+    web.router.lifespan_context = lifespan
+    if not __REST_ONLY__:
+        assets = Path(__file__).parent / "frontend"
+        web.mount("/starter-assets", StaticFiles(directory=assets), name="starter-assets")
+
+        @web.get("/app", include_in_schema=False)
+        def home() -> FileResponse:
+            return FileResponse(assets / "index.html")
+
+    return web
+
+
+def main() -> None:
+    # Loopback is the default; add authenticated ingress before external deployment.
+    uvicorn.run("__PACKAGE__.web:build_web", factory=True, host="127.0.0.1", port=8000)
+
+
+if __name__ == "__main__":
+    main()

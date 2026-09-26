@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Set
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from af.framework.errors import PlatformError, PlatformReason
 from af.framework.managers import CapabilitySet
-from af.graph.contracts import GraphFeature, GraphQuery, GraphResult
+from af.graph.contracts import GraphFeature, GraphPath, GraphQuery, GraphResult, GraphTraversal
 
 
 class GraphDriver(Protocol):
@@ -34,6 +34,11 @@ class GraphDriver(Protocol):
     def delete_node(self, node_id: str) -> None: ...
 
     def delete_edge(self, edge_id: str) -> None: ...
+
+
+@runtime_checkable
+class _TraversalDriver(Protocol):
+    def traverse(self, traversal: GraphTraversal) -> list[GraphPath]: ...
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -113,6 +118,12 @@ class GraphManager:
         if not verified.supports({feature.value}):
             raise PlatformError(PlatformReason.CAPABILITY_UNAVAILABLE, stage="graph.capability")
         return driver
+
+    def traverse(self, traversal: GraphTraversal, driver_name: str) -> list[GraphPath]:
+        driver = self._required(driver_name, GraphFeature.TRAVERSAL)
+        if not isinstance(driver, _TraversalDriver):
+            raise PlatformError(PlatformReason.CAPABILITY_UNAVAILABLE, stage="graph.traversal")
+        return driver.traverse(traversal)
 
     def query(self, query: GraphQuery, driver_name: str) -> list[GraphResult]:
         """Execute a graph query using the named driver."""

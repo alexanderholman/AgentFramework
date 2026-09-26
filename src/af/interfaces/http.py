@@ -15,8 +15,14 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from af import __version__
 from af.application.authentication import AuthenticationService
+from af.application.http_operations import HttpOperations
+from af.application.human_decisions import HumanDecisionService
+from af.application.human_interpreter import HumanInterpreter
+from af.application.locales import Localizer
 from af.application.workflow_control import WorkflowController
 from af.bootstrap import AFApplication, create_application
+from af.bootstrap_http import create_http_operations
+from af.domain.tasks import TaskConflict
 from af.framework.authentication import AuthenticationDenied
 from af.framework.container import InvocationKind
 from af.framework.context import AcceptanceScope, ExecutionContext
@@ -46,7 +52,10 @@ from af.interfaces.http_body import (
     replay_receive,
     validate_content_length_header,
 )
+from af.interfaces.http_operations import HttpOperationsMiddleware
 from af.interfaces.http_trust import format_host, host_matches, parse_host_value
+from af.interfaces.human_decisions import create_human_decision_router
+from af.interfaces.human_interpreter import create_human_interpreter_router
 from af.interfaces.ideons import create_ideon_router
 from af.interfaces.rest import create_rest_router
 from af.interfaces.web import WebProfile, create_web_router
@@ -312,6 +321,8 @@ class _TrustedHostMiddleware:
 def create_http_app(
     application: AFApplication | None = None,
     *,
+    http_operations: HttpOperations | None = None,
+    api_policy_version: str = "af-api-v1",
     bind_host: str | None = None,
     allowed_hosts: Sequence[str] | None = None,
     web_profile: str = "basic",
@@ -331,6 +342,8 @@ def create_http_app(
         return _assemble_http_app(
             resolved,
             owns_application=owns_application,
+            http_operations=http_operations,
+            api_policy_version=api_policy_version,
             bind_host=resolved_bind_host,
             allowed_hosts=resolved_allowed_hosts,
             web_profile=resolved_web_profile,
@@ -347,17 +360,31 @@ def _assemble_http_app(
     resolved: AFApplication,
     *,
     owns_application: bool,
+    http_operations: HttpOperations | None,
+    api_policy_version: str,
     bind_host: str,
     allowed_hosts: Sequence[str],
     web_profile: WebProfile,
     experimental_state: Literal["disabled", "fallback", "enabled"],
 ) -> FastAPI:
 
+    trusted_hosts = _trusted_hosts_for(bind_host, allowed_hosts)
+    if not _is_loopback_host(bind_host):
+        if not resolved.settings.http_auth_required:
+            raise InvalidProviderConfiguration("non-loopback HTTP requires authentication")
+        key = resolved.settings.session_cookie_signing_key
+        if key == "af-local-session-signing-key" or len(key) < 32:
+            raise InvalidProviderConfiguration("non-loopback HTTP requires a private session key")
+
+    operations = http_operations or create_http_operations(resolved)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
+            if http_operations is None:
+                await run_in_threadpool(operations.close)
             if owns_application:
                 await resolved.ashutdown()
 
@@ -368,11 +395,14 @@ def _assemble_http_app(
         lifespan=lifespan,
     )
     app.state.af = resolved
+    app.add_middleware(
+        HttpOperationsMiddleware, operations=operations, policy_version=api_policy_version
+    )
     app.add_middleware(_RequestContextMiddleware, application=resolved)
     app.add_middleware(_BoundedBodyMiddleware)
     app.add_middleware(
         _TrustedHostMiddleware,
-        allowed_hosts=_trusted_hosts_for(bind_host, allowed_hosts),
+        allowed_hosts=trusted_hosts,
     )
     app.add_middleware(_SecurityHeadersMiddleware)
     app.include_router(
@@ -382,10 +412,21 @@ def _assemble_http_app(
             experimental_state=experimental_state,
             session_cookie_signing_key=resolved.settings.session_cookie_signing_key,
             operations=resolved.operations,
+            localizer=resolved.container.resolve(Localizer),
         )
     )
-    app.include_router(create_rest_router(resolved.tasks, resolved.operations))
+    app.include_router(
+        create_rest_router(
+            resolved.tasks, resolved.operations, localizer=resolved.container.resolve(Localizer)
+        )
+    )
     app.include_router(create_ideon_router(resolved.ideons))
+    app.include_router(
+        create_human_decision_router(lambda: resolved.container.resolve(HumanDecisionService))
+    )
+    app.include_router(
+        create_human_interpreter_router(resolved.container.resolve(HumanInterpreter))
+    )
     app.include_router(create_xml_router(resolved.tasks))
     app.include_router(create_workflow_router(resolved.container.resolve(WorkflowController)))
     app.include_router(
@@ -394,6 +435,10 @@ def _assemble_http_app(
         ),
         prefix="/graphql",
     )
+
+    @app.exception_handler(TaskConflict)
+    async def task_conflict(_: Request, error: TaskConflict) -> JSONResponse:
+        return JSONResponse(status_code=412, content={"detail": str(error)})
 
     @app.exception_handler(TaskNotFound)
     async def task_not_found(_: Request, error: TaskNotFound) -> JSONResponse:

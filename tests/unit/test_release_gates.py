@@ -736,6 +736,41 @@ def test_package_smoke_rejects_missing_entry_point_attribute(tmp_path: Path) -> 
     assert "installed wheel entry-point target failed to load: af" in completed.stderr
 
 
+@pytest.mark.parametrize("attempt_egress", [False, True])
+def test_package_smoke_exercises_stdio_contract_under_egress_guard(
+    tmp_path: Path, attempt_egress: bool
+) -> None:
+    module = _load_module()
+    target = tmp_path / "installed"
+    shutil.copytree(REPO_ROOT / "src/af", target / "af")
+    dist_info = target / "af_agent_framework-0.1.0a0.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: af-agent-framework\nVersion: 0.1.0a0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "entry_points.txt").write_text(
+        "[console_scripts]\naf = af.interfaces.console:app\naf-mcp = af.interfaces.mcp:main\n",
+        encoding="utf-8",
+    )
+    if attempt_egress:
+        with (target / "af" / "__init__.py").open("a") as stream:
+            stream.write('\nimport socket\nsocket.getaddrinfo("example.com", 443)\n')
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", module.PACKAGE_SMOKE, str(target)],
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+        text=True,
+        timeout=60,
+    )
+    if attempt_egress:
+        assert completed.returncode != 0
+        assert "offline package smoke forbids network and process egress" in completed.stderr
+    else:
+        assert completed.returncode == 0, completed.stderr
+
+
 def test_package_build_is_a_dry_run_without_execute() -> None:
     completed = _run("--action", "package")
 

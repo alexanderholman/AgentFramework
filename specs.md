@@ -3359,3 +3359,22 @@ MUST NOT confer execution authority, verified completion or real-service certifi
 Authenticated backup restoration MUST retain the checkpoint signing identity. Runtime
 admission and self-operation review are separate from repository engineering autonomy.
 This checkpoint is an engineering increment, not completion of the v0.1 release gate.
+
+## 2026-09-26 — Durable decisions, admission, and installed reference operations
+
+Human responses MUST narrow a stored request to one pinned installed operation,
+retain expiry/authority/policy bounds, reject replay and corrupted history, and bind
+the revalidated context during execution. Interrupted accepted responses remain
+inconclusive rather than silently repeating work. Finite interpretation preserves
+ambiguity and cannot itself authorize execution.
+
+The confined local engineering path MUST derive route exhaustion from installed
+services, run test-first generation and independent gates, authenticate admission,
+and expose a direct reusable route that immediately honors invalidation. A resolver
+lease MUST NOT escape a dependency factory or cross execution owners implicitly.
+Current-time results MUST NOT enter exact deterministic reuse caches.
+
+Machine setup MUST offer a read-only plan, explicit apply, actual bounded readiness
+probes, durable recovery receipts and data-retaining disable operations. Optional
+observational products MUST be removable without changing task semantics and redact
+before persistence. Network host allowlists are not authentication authority.

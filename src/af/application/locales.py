@@ -117,6 +117,31 @@ MESSAGE_SPECS = MappingProxyType(
             (("other", "Human confirmation required for {action}."),),
             True,
         ),
+        **{
+            message_id: MessageSpec((), (("other", text),))
+            for message_id, text in {
+                "web.tasks": "Tasks",
+                "web.task": "Task",
+                "web.operations": "Operations",
+                "web.navigation": "Main navigation",
+                "web.skip": "Skip to main content",
+                "web.language": "Language",
+                "web.territory": "Territory",
+                "web.apply_locale": "Apply language and territory",
+                "web.locale_help": "Language and territory affect presentation only.",
+                "web.ask": "Ask AF",
+                "web.execute": "Execute and save",
+                "web.replace": "Replace prompt and re-execute",
+                "web.update": "Update",
+                "web.empty": "No persisted tasks yet.",
+                "web.saved_tasks": "View saved tasks",
+                "web.saved": "Saved task.",
+                "web.updated": "Updated task.",
+                "web.deleted": "Deleted task.",
+                "web.translation_notice": "Machine-assisted translation; not human certified.",
+            }.items()
+        },
+        "web.delete": MessageSpec((), (("other", "Delete"),), True),
     }
 )
 

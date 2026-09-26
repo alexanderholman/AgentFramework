@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from math import isfinite
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@ def _identifier(value: str, name: str, max_len: int = 64) -> str:
 
 
 def _bounded(value: int | float, name: str, lo: int | float, hi: int | float) -> int | float:
-    if value < lo or value > hi:
+    if type(value) not in (int, float) or value < lo or value > hi or not isfinite(value):
         raise ValueError(f"{name} must be between {lo} and {hi}, got {value}")
     return value
 
@@ -94,6 +95,7 @@ def _validate_parameterized_query(text: str, parameters: Mapping[str, Any]) -> N
 
 class GraphFeature(StrEnum):
     QUERY = "query"
+    TRAVERSAL = "traversal"
     INDEXING = "indexing"
     PERSISTENCE = "persistence"
     CANCELLATION = "cancellation"
@@ -170,15 +172,28 @@ class GraphTraversal:
     max_depth: int = 3
     relation_types: tuple[str, ...] = ()
     direction: str = "any"  # "any", "outgoing", "incoming"
+    max_results: int = 100
+    max_edges: int = 10_000
+    deadline_ms: int = 5_000
 
     def __post_init__(self) -> None:
         _identifier(self.start_node_id, "start_node_id")
-        if self.max_depth < 1 or self.max_depth > 1000:
+        if type(self.max_depth) is not int or self.max_depth < 1 or self.max_depth > 1000:
             raise ValueError("max_depth must be between 1 and 1000")
         if self.direction not in ("any", "outgoing", "incoming"):
             raise ValueError("direction must be 'any', 'outgoing', or 'incoming'")
+        if type(self.relation_types) is not tuple or len(self.relation_types) > 64:
+            raise ValueError("traversal relation types must be bounded and immutable")
         for rt in self.relation_types:
             _label(rt)
+        for name, maximum in (
+            ("max_results", 10_000),
+            ("max_edges", 100_000),
+            ("deadline_ms", 120_000),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"traversal {name} must be within 1..{maximum}")
 
 
 # ---------------------------------------------------------------------------
@@ -286,4 +301,6 @@ class GraphResult:
         if not self.labels:
             raise ValueError("labels must not be empty")
         _bounded(self.score, "score", 0.0, 1.0)
+        if type(self.rank) is not int:
+            raise ValueError("graph result rank must be an integer")
         _bounded(self.rank, "rank", 1, 10_000)

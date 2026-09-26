@@ -322,3 +322,21 @@ def test_rabbitmq_registration_routes_through_verified_manager() -> None:
     manager.close()
     with pytest.raises(ValueError):
         registration.factory(ConnectionRef("queue", "bad", "rabbitmq"), {})
+
+
+def test_fork_inherited_close_does_not_submit_to_inherited_io_thread(monkeypatch) -> None:
+    import os
+
+    import af.queue.rabbitmq as rabbitmq
+    from af.queue import QueueOperationError
+
+    connection = Connection()
+    queue = _driver(connection)
+    parent_pid = os.getpid()
+    try:
+        monkeypatch.setattr(rabbitmq.os, "getpid", lambda: parent_pid + 1)
+        with pytest.raises(QueueOperationError):
+            queue.close()
+    finally:
+        monkeypatch.undo()
+        queue.close()

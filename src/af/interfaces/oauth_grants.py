@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -14,6 +13,7 @@ from af.application.oauth_controller import OAuthController
 from af.framework.errors import AFError
 from af.framework.oauth_grants import OAuthGrantError
 from af.interfaces.json_input import read_json
+from af.interfaces.private_output import write_private_json
 
 
 def register_oauth_commands(
@@ -30,26 +30,16 @@ def register_oauth_commands(
             request: Annotated[Path, typer.Option()],
             output: Annotated[Path, typer.Option()],
         ) -> None:
-            result = None
-            controller = None
-            payload = None
-            claimed = False
             try:
-                payload = read_json(request, max_bytes=16_384)
+                payload = read_json(request, max_bytes=65_536)
                 controller = factory(context)
-                descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                claimed = True
-                with os.fdopen(descriptor, "w") as stream:
-                    result = controller.run(action, payload)
-                    json.dump(result, stream, sort_keys=True)
-                    stream.flush()
-                    os.fsync(stream.fileno())
+                write_private_json(
+                    output,
+                    lambda: controller.run(action, payload),
+                    lambda result: controller.cancel_output(action, payload, result),
+                )
                 typer.echo(json.dumps({"completed": True, "result_file": str(output)}))
             except (AFError, ValueError, OSError) as error:
-                if controller is not None and result is not None:
-                    controller.cancel_output(action, payload, result)
-                if claimed:
-                    output.unlink(missing_ok=True)
                 code = error.code if isinstance(error, OAuthGrantError) else "oauth_action_failed"
                 typer.echo(json.dumps({"error": code}), err=True)
                 raise typer.Exit(2) from None

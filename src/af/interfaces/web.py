@@ -12,13 +12,15 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Form, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from af.application.locales import Localizer, Message
 from af.application.operations import OperationsController
 from af.application.tasks import TaskController
 from af.framework.types import PROMPT_MAX_LENGTH
+from af.interfaces.locale_http import locale_query, request_locale, web_locale_context
 
 TEMPLATE_DIRECTORY = Path(__file__).parent.parent / "views" / "templates"
 CSRF_COOKIE_NAME = "af-csrf"
@@ -185,17 +187,42 @@ def create_web_router(
     experimental_state: Literal["disabled", "fallback", "enabled"],
     session_cookie_signing_key: str,
     operations: OperationsController | None = None,
+    localizer: Localizer | None = None,
 ) -> APIRouter:
-    router = APIRouter(tags=["web"])
+    def validate_locale(request: Request) -> None:
+        if request_locale(request) is not None and localizer is None:
+            raise HTTPException(400, detail="locale_unavailable")
+
+    router = APIRouter(tags=["web"], dependencies=[Depends(validate_locale)])
     templates = Jinja2Templates(directory=TEMPLATE_DIRECTORY)
     signing_key = session_cookie_signing_key.encode("utf-8")
 
-    def profile_context() -> dict[str, str]:
+    def profile_context(request: Request) -> dict[str, object]:
         return {
             "web_profile": web_profile,
             "experimental_state": experimental_state,
             "operations_available": "true" if operations is not None else "false",
+            **web_locale_context(request, localizer),
         }
+
+    def flash_for_view(request: Request) -> str | None:
+        flash = _flash_message(request, signing_key=signing_key)
+        message_id = {
+            "Saved task.": "web.saved",
+            "Updated task.": "web.updated",
+            "Deleted task.": "web.deleted",
+        }.get(flash or "")
+        selection = request_locale(request)
+        if message_id is not None and selection is not None and localizer is not None:
+            return localizer.render(Message(message_id, {}), selection).text
+        return flash
+
+    def language_header(request: Request) -> dict[str, str]:
+        return {"Content-Language": str(web_locale_context(request, localizer)["locale_language"])}
+
+    @router.get("/assets/af.css", include_in_schema=False)
+    def stylesheet() -> FileResponse:
+        return FileResponse(TEMPLATE_DIRECTORY.parent / "assets" / "af.css", media_type="text/css")
 
     def render_index(
         request: Request,
@@ -212,11 +239,12 @@ def create_web_router(
                 "tasks": controller.list(),
                 "prompt": prompt,
                 "error": error,
-                "flash": _flash_message(request, signing_key=signing_key),
+                "flash": flash_for_view(request),
                 "csrf_token": token,
-                **profile_context(),
+                **profile_context(request),
             },
             status_code=status_code,
+            headers=language_header(request),
         )
         _set_csrf_cookie(request, response, token)
         _clear_flash(request, response, signing_key=signing_key)
@@ -239,11 +267,12 @@ def create_web_router(
                 "task": task,
                 "prompt": prompt or task.prompt,
                 "error": error,
-                "flash": _flash_message(request, signing_key=signing_key),
+                "flash": flash_for_view(request),
                 "csrf_token": token,
-                **profile_context(),
+                **profile_context(request),
             },
             status_code=status_code,
+            headers=language_header(request),
         )
         _set_csrf_cookie(request, response, token)
         _clear_flash(request, response, signing_key=signing_key)
@@ -260,9 +289,10 @@ def create_web_router(
             name="tasks/index.html",
             context={
                 "tasks": controller.list(),
-                "flash": _flash_message(request, signing_key=signing_key),
-                **profile_context(),
+                "flash": flash_for_view(request),
+                **profile_context(request),
             },
+            headers=language_header(request),
         )
         _clear_flash(request, response, signing_key=signing_key)
         return response
@@ -276,8 +306,9 @@ def create_web_router(
                 name="operations.html",
                 context={
                     "snapshot": operations.snapshot(),
-                    **profile_context(),
+                    **profile_context(request),
                 },
+                headers=language_header(request),
             )
 
     @router.post("/tasks")
@@ -297,7 +328,7 @@ def create_web_router(
             )
         task = controller.create(prompt)
         response = RedirectResponse(
-            url=f"/tasks/{task.id}",
+            url=f"/tasks/{task.id}" + locale_query(request_locale(request)),
             status_code=status.HTTP_303_SEE_OTHER,
         )
         _set_flash(request, response, "Saved task.", signing_key=signing_key)
@@ -326,7 +357,7 @@ def create_web_router(
             )
         task = controller.update(task_id, prompt)
         response = RedirectResponse(
-            url=f"/tasks/{task.id}",
+            url=f"/tasks/{task.id}" + locale_query(request_locale(request)),
             status_code=status.HTTP_303_SEE_OTHER,
         )
         _set_flash(request, response, "Updated task.", signing_key=signing_key)
@@ -341,7 +372,10 @@ def create_web_router(
         if not _validate_csrf(request, csrf_token):
             return _csrf_forbidden()
         controller.delete(task_id)
-        response = RedirectResponse(url="/tasks", status_code=status.HTTP_303_SEE_OTHER)
+        response = RedirectResponse(
+            url="/tasks" + locale_query(request_locale(request)),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
         _set_flash(request, response, "Deleted task.", signing_key=signing_key)
         return response
 

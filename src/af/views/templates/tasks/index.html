@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Tasks · AF{% endblock %}
+{% from "_messages.html" import message with context %}
+{% block title %}{{ messages['web.tasks'].text }} · AF{% endblock %}
 {% block content %}
-  <h1>Tasks</h1>
+  <h1>{{ message('web.tasks') }}</h1>
   {% if flash %}<p role="status">{{ flash }}</p>{% endif %}
   {% if tasks %}
     <ol>
       {% for task in tasks %}
-        <li><a href="/tasks/{{ task.id }}">{{ task.prompt }}</a> → {{ task.output }}</li>
+        <li><a href="/tasks/{{ task.id }}{{ locale_query }}"><bdi>{{ task.prompt }}</bdi></a> <bdi>→ {{ task.output }}</bdi></li>
       {% endfor %}
     </ol>
-  {% else %}<p>No persisted tasks yet.</p>{% endif %}
+  {% else %}<p>{{ message('web.empty') }}</p>{% endif %}
 {% endblock %}
-

@@ -145,6 +145,7 @@ class PinnedProcessRuntime:
                 str(spec.executable),
                 *(str(spec.model_path) if item == "{model}" else item for item in spec.arguments),
             ]
+            self._check(cancellation, deadline)
             self._process = subprocess.Popen(
                 argv,
                 stdin=subprocess.DEVNULL,
@@ -240,4 +241,9 @@ class PinnedProcessRuntime:
                 else:
                     process.kill()
                 process.wait(timeout=2)
+            if os.name == "posix":
+                # A runtime leader may exit promptly while a worker ignores TERM.
+                # Its original process group remains ours until all workers stop.
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
             self._process, self._variant = None, None

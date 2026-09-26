@@ -21,6 +21,11 @@ from af.application.ideons import InterpretRequest
 from af.application.locales import LocaleSelection, Localizer
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication, create_application
+from af.bootstrap_setup import (
+    create_machine_application,
+    create_machine_setup_controller,
+    machine_root,
+)
 from af.bootstrap_version_control import create_version_control_controller
 from af.domain.ideons.records import ContextGraph
 from af.framework.container import Container, InvocationKind
@@ -35,6 +40,7 @@ from af.interfaces.cli_commands import (
 )
 from af.interfaces.cli_interactions import CliInteraction, NonInteractiveCliInteraction
 from af.interfaces.locale_presenters import localize_outcome
+from af.interfaces.machine_setup import register_initialization_commands
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
@@ -220,7 +226,8 @@ def create_cli(
     )
     initialization_commands = typer.Typer(
         name="init",
-        no_args_is_help=True,
+        no_args_is_help=False,
+        invoke_without_command=True,
         help="Initialize AF's local operating foundations",
     )
     version_commands = typer.Typer(
@@ -233,8 +240,14 @@ def create_cli(
     owns_application = application is None
     cached_application = application
     cached_version_control = version_control
+
+    def default_application() -> AFApplication:
+        if (machine_root() / "machine.json").exists():
+            return create_machine_application()
+        return create_application()
+
     configured_factory: Callable[[], object] = (
-        create_application if application_factory is None else application_factory
+        default_application if application_factory is None else application_factory
     )
     selected_factory_path: str | None = None
     lifecycle_context: typer.Context | Context | None = None
@@ -762,6 +775,7 @@ def create_cli(
         except AFError as error:
             fail(error)
 
+    register_initialization_commands(cli, initialization_commands, create_machine_setup_controller)
     initialization_commands.add_typer(version_commands, name="version")
     cli.add_typer(initialization_commands, name="init")
     cli.add_typer(make_commands, name="make")

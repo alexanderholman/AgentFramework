@@ -6,7 +6,13 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from af.domain.tasks import Task, TaskRepository
+from af.domain.tasks import (
+    ConditionalTaskRepository,
+    Task,
+    TaskConflict,
+    TaskRepository,
+    task_version,
+)
 from af.framework.contracts import Agent
 from af.framework.errors import InvalidCharacter, InvalidPagination, InvalidPrompt
 from af.framework.types import (
@@ -57,25 +63,27 @@ class TaskService:
         normalized_limit, normalized_offset = self._normalize_list_window(limit, offset)
         return self._repository.list(limit=normalized_limit, offset=normalized_offset)
 
-    def update(self, task_id: str, prompt: str) -> Task:
+    def update(self, task_id: str, prompt: str, *, expected_version: str | None = None) -> Task:
         existing = self._repository.get(task_id)
+        conditional = self._conditional(existing, expected_version)
         normalized = self._normalize(prompt)
         outcome = self._agent.handle(WorkRequest(prompt=normalized))
-        return self._repository.save(
-            replace(
-                existing,
-                prompt=normalized,
-                output=outcome.output,
-                intent=outcome.intent,
-                route=outcome.route,
-                tier=outcome.tier,
-                status=outcome.status,
-                verified=outcome.verified,
-                reused=outcome.reused,
-                trace_id=outcome.trace_id,
-                updated_at=datetime.now(UTC),
-            )
+        changed = replace(
+            existing,
+            prompt=normalized,
+            output=outcome.output,
+            intent=outcome.intent,
+            route=outcome.route,
+            tier=outcome.tier,
+            status=outcome.status,
+            verified=outcome.verified,
+            reused=outcome.reused,
+            trace_id=outcome.trace_id,
+            updated_at=datetime.now(UTC),
         )
+        if conditional is not None:
+            return conditional.compare_and_save(changed, expected=existing)
+        return self._repository.save(changed)
 
     def count_characters(self, text: str, character: str) -> ExecutionOutcome:
         validated_text = self._normalize_count_text(text)
@@ -91,8 +99,25 @@ class TaskService:
             expected_procedure_id="character-count",
         )
 
-    def delete(self, task_id: str) -> None:
-        self._repository.delete(task_id)
+    def delete(self, task_id: str, *, expected_version: str | None = None) -> None:
+        if expected_version is None:
+            self._repository.delete(task_id)
+            return
+        existing = self._repository.get(task_id)
+        conditional = self._conditional(existing, expected_version)
+        assert conditional is not None
+        conditional.compare_and_delete(existing)
+
+    def _conditional(
+        self, existing: Task, expected_version: str | None
+    ) -> ConditionalTaskRepository | None:
+        if expected_version is None:
+            return None
+        if not isinstance(self._repository, ConditionalTaskRepository):
+            raise ValueError("repository does not support conditional writes")
+        if expected_version != task_version(existing):
+            raise TaskConflict()
+        return self._repository
 
     @staticmethod
     def _normalize(prompt: str) -> str:
@@ -154,11 +179,11 @@ class TaskController:
     ) -> list[Task]:
         return self._service.list(limit=limit, offset=offset)
 
-    def update(self, task_id: str, prompt: str) -> Task:
-        return self._service.update(task_id, prompt)
+    def update(self, task_id: str, prompt: str, *, expected_version: str | None = None) -> Task:
+        return self._service.update(task_id, prompt, expected_version=expected_version)
 
     def count_characters(self, text: str, character: str) -> ExecutionOutcome:
         return self._service.count_characters(text, character)
 
-    def delete(self, task_id: str) -> None:
-        self._service.delete(task_id)
+    def delete(self, task_id: str, *, expected_version: str | None = None) -> None:
+        self._service.delete(task_id, expected_version=expected_version)

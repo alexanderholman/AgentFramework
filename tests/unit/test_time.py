@@ -26,7 +26,7 @@ class TestTimeClassifier:
         assert result is not None
         assert isinstance(result, Classification)
         assert result.intent == "system.current_time"
-        assert result.arguments == {}
+        assert result.arguments == {"timezone": "UTC"}
 
     def test_classifies_current_time(self, classifier):
         request = WorkRequest(prompt="what is the current time")
@@ -139,8 +139,8 @@ class TestCurrentTimeProcedure:
     def test_tier_is_static(self, procedure):
         assert procedure.tier == WorkTier.STATIC
 
-    def test_is_pure(self, procedure):
-        assert procedure.pure is True
+    def test_clock_read_is_not_pure(self, procedure):
+        assert procedure.pure is False
 
-    def test_is_replay_safe(self, procedure):
-        assert procedure.replay_safe is True
+    def test_clock_read_is_not_replay_safe(self, procedure):
+        assert procedure.replay_safe is False

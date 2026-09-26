@@ -329,6 +329,10 @@ class RabbitMQQueueDriver:
             self._forget(reservation)
 
     def close(self) -> None:
+        # A child has no live executor/heartbeat threads and may inherit a held lock.
+        # Reject before touching either rather than blocking on an impossible future.
+        if self._pid != os.getpid():
+            raise QueueOperationError(stage="queue.rabbitmq.connection")
         with self._lock:
             if self._closed:
                 return

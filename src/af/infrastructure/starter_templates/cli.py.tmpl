@@ -1,0 +1,13 @@
+"""Application-owned CLI using AF's public controller composition."""
+
+from af.interfaces.console import create_cli
+
+from .application import build_application
+
+
+def main() -> None:
+    create_cli(application_factory=build_application)()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,97 @@
+"""Application-owned durable SQLite queue; each delivery uses the shared task service."""
+
+import argparse
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
+
+from af.framework.errors import AFError
+from af.framework.types import normalize_prompt
+from af.infrastructure.sqlite import SQLiteDriver
+from af.messaging import EnvelopeKind, MessageEnvelope, MessageMetadata
+from af.queue.contracts import QueueJob
+from af.queue.database import DatabaseQueueDriver
+from af.queue.worker import WorkerKernel
+
+from .application import build_application, data_directory
+from .services import execute_prompt
+
+
+def build_queue(data_dir: Path | None = None) -> DatabaseQueueDriver:
+    return DatabaseQueueDriver(
+        SQLiteDriver(data_directory(data_dir) / "queue.sqlite3"), clock=lambda: datetime.now(UTC)
+    )
+
+
+def enqueue(prompt: str, data_dir: Path | None = None) -> str:
+    prompt = normalize_prompt(prompt)
+    identifier = str(uuid4())
+    queue = build_queue(data_dir)
+    try:
+        queue.dispatch(
+            QueueJob(
+                envelope=MessageEnvelope.create(
+                    metadata=MessageMetadata(
+                        message_id=identifier,
+                        message_type="starter.task",
+                        schema_version=1,
+                        kind=EnvelopeKind.JOB,
+                        occurred_at=datetime.now(UTC),
+                    ),
+                    payload={"prompt": prompt},
+                )
+            )
+        )
+    finally:
+        queue.close()
+    return identifier
+
+
+def run_once(data_dir: Path | None = None) -> dict[str, object]:
+    application = build_application(data_dir)
+    outputs: list[str] = []
+    worker: WorkerKernel | None = None
+    try:
+        worker = WorkerKernel(build_queue(data_dir), max_concurrency=1)
+
+        def handle(job: QueueJob) -> None:
+            payload = job.envelope.payload_copy()
+            if (
+                job.envelope.metadata.message_type != "starter.task"
+                or job.envelope.metadata.schema_version != 1
+                or not isinstance(payload, dict)
+                or set(payload) != {"prompt"}
+                or not isinstance(payload["prompt"], str)
+            ):
+                raise ValueError("unsupported starter job")
+            outcome = execute_prompt(application, payload["prompt"])
+            if not outcome.verified:
+                raise ValueError("task was not independently verified")
+            outputs.append(outcome.output)
+
+        reservation = worker.run_once(handle)
+        return {"processed": reservation is not None, "outputs": outputs}
+    finally:
+        try:
+            if worker is not None:
+                worker.close()
+        finally:
+            application.shutdown()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Dispatch or process one durable starter task.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("once")
+    commands.add_parser("enqueue").add_argument("prompt")
+    args = parser.parse_args()
+    try:
+        value = {"message_id": enqueue(args.prompt)} if args.command == "enqueue" else run_once()
+        print(json.dumps(value, sort_keys=True))
+    except (AFError, ValueError):
+        parser.exit(2, "worker request failed\n")
+
+
+if __name__ == "__main__":
+    main()

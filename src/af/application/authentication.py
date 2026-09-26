@@ -128,6 +128,10 @@ class AuthenticationService:
             scopes=scopes,
             ttl_seconds=min(ttl_seconds, remaining),
         )
+        # prepare_token reads the clock again; retain the original absolute bound.
+        expiry = min(record.expires_at, old.expires_at)
+        record = replace(record, expires_at=expiry)
+        issued = replace(issued, expires_at=expiry)
         if not self._repository.rotate_token(old, record, self._clock()):
             raise AuthenticationDenied()
         return issued

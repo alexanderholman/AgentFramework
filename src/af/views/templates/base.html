@@ -1,23 +1,26 @@
+{% from "_messages.html" import message with context %}
 <!doctype html>
-<html lang="en">
+<html lang="{{ locale_language }}" dir="{{ locale_direction }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}AF Agent Framework{% endblock %}</title>
-    <style>
-      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-      body { margin: 0 auto; max-width: 58rem; padding: 2rem; line-height: 1.5; }
-      nav { display: flex; gap: 1rem; margin-bottom: 2rem; }
-      form { display: grid; gap: .75rem; margin: 1rem 0; }
-      input, button { font: inherit; padding: .7rem; }
-      .answer { font-size: 2rem; font-weight: 700; }
-      .meta { opacity: .75; }
-      li { margin-bottom: .65rem; }
-    </style>
+    <link rel="stylesheet" href="/assets/af.css">
   </head>
   <body data-af-web-profile="{{ web_profile|default('basic') }}" data-af-experimental="{{ experimental_state|default('disabled') }}">
-    <nav><a href="/">AF</a><a href="/tasks">Tasks</a>{% if operations_available|default('true') == 'true' %}<a href="/operations">Operations</a>{% endif %}<a href="/docs">REST docs</a><a href="/graphql">GraphQL</a></nav>
-    {% block content %}{% endblock %}
+    <a class="skip-link" href="#main-content">{{ message('web.skip') }}</a>
+    <nav aria-label="{{ messages['web.navigation'].text }}"><a href="/{{ locale_query }}">AF</a><a href="/tasks{{ locale_query }}">{{ message('web.tasks') }}</a>{% if operations_available|default('true') == 'true' %}<a href="/operations{{ locale_query }}">{{ message('web.operations') }}</a>{% endif %}<a href="/docs" lang="en">REST docs</a><a href="/graphql">GraphQL</a></nav>
+    <form class="locale-controls" method="get" action="{{ locale_path }}" aria-describedby="locale-help">
+      <label for="language">{{ message('web.language') }}</label>
+      <input id="language" name="language" value="{{ selected_language }}" maxlength="128" required autocapitalize="none" spellcheck="false" dir="ltr">
+      <label for="territory">{{ message('web.territory') }}</label>
+      <input id="territory" name="territory" value="{{ selected_territory }}" maxlength="3" spellcheck="false" dir="ltr">
+      <p id="locale-help">{{ message('web.locale_help') }}</p>
+      <button type="submit">{{ message('web.apply_locale') }}</button>
+    </form>
+    {% if locale_machine_assisted %}<p id="translation-notice" role="note">{{ message('web.translation_notice') }}</p>{% endif %}
+    <main id="main-content" tabindex="-1">
+      {% block content %}{% endblock %}
+    </main>
   </body>
 </html>
-

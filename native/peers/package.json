@@ -1,0 +1,15 @@
+{
+  "name": "af-native-peer-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional native worker; Node protocol qualification does not certify Bare hosting",
+  "scripts": { "test": "node --test test/*.test.cjs", "start": "electron shell.cjs" },
+  "optionalDependencies": {
+    "bare-buffer": "3.7.1",
+    "bare-fs": "4.8.1",
+    "bare-net": "2.3.3",
+    "electron": "44.4.5",
+    "hyperdht": "6.34.0",
+    "pear-runtime": "1.3.1"
+  }
+}

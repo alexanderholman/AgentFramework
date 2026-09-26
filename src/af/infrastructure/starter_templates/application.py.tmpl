@@ -1,0 +1,25 @@
+"""Application-owned composition root; configure real deployments here."""
+
+from pathlib import Path
+
+from af.bootstrap import AFApplication, create_application
+from af.config import Settings
+
+__PROVIDER_IMPORT__
+
+
+def data_directory(data_dir: Path | None = None) -> Path:
+    directory = data_dir or Path(__file__).resolve().parent.parent / "var"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory.resolve()
+
+
+def build_application(data_dir: Path | None = None) -> AFApplication:
+    directory = data_directory(data_dir)
+    return create_application(
+        settings=Settings(
+            app_name="__PACKAGE__",
+            database_url=f"sqlite+pysqlite:///{directory / 'application.sqlite3'}",
+        ),
+        providers=__PROVIDERS__,
+    )

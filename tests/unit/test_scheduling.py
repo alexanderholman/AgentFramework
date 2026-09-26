@@ -430,3 +430,22 @@ def test_source_cron_loads_and_duplicate_ids_fail(tmp_path):
     path.write_text(json.dumps({"schema": "af.schedules/1", "schedules": [item, item]}))
     with pytest.raises(ScheduleError):
         load_schedule_definitions(path)
+
+
+def test_cancellation_race_records_cancelled_even_when_callback_raises(tmp_path):
+    definition, clock, history, _, locks, queue, first, _ = _services(tmp_path)
+    first.tick()
+
+    def cancelled_task(arguments, context):
+        context.cancellation.cancel()
+        raise ScheduleError("cancelled during invocation")
+
+    handler = ScheduledJobHandler(
+        (definition,), history, locks, {"count": cancelled_task}, clock=clock
+    )
+    with pytest.raises(ScheduleError):
+        handler(queue.jobs[0])
+    assert history.list_runs()[0].state == "cancelled"
+    clock.now += timedelta(minutes=1)
+    first.tick()
+    assert len(queue.jobs) == 2

@@ -29,6 +29,14 @@ from af.framework.decision_consent import (
 from af.framework.decisions import DecisionAnswer
 
 
+def _read_preview(encoded: str) -> DecisionPreview:
+    data = json.loads(encoded)
+    for name in ("data_categories", "effects", "risks"):
+        data[name] = tuple(data[name])
+    data["max_cost_usd"] = Decimal(data["max_cost_usd"])
+    return DecisionPreview(**data)
+
+
 class SQLiteDecisionConsentRegistry:
     def __init__(self, path: str | Path, *, clock: Callable[[], float] = time.time) -> None:
         self._path = str(path)
@@ -73,10 +81,18 @@ class SQLiteDecisionConsentRegistry:
 
     def revoke(self, consent: DecisionConsent) -> None:
         with self._connection() as db:
-            db.execute(
-                "UPDATE af_decision_consents SET status='revoked' "
-                "WHERE token_hash=? AND status='approved'",
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT preview FROM af_decision_consents WHERE token_hash=? AND status='approved'",
                 (self._key(consent),),
+            ).fetchone()
+            if row is None:
+                return
+            receipt = decision_receipt(_read_preview(row[0]), self._clock(), status="revoked")
+            db.execute(
+                "UPDATE af_decision_consents SET status='revoked', receipt=? "
+                "WHERE token_hash=? AND status='approved'",
+                (json.dumps(asdict(receipt), sort_keys=True), self._key(consent)),
             )
 
     def consume(self, consent: DecisionConsent, *, expected: DecisionPreview) -> bool:
@@ -101,11 +117,7 @@ class SQLiteDecisionConsentRegistry:
             ).fetchone()
             if row is None:
                 raise ValueError("decision consent has no unfinished receipt")
-            data = json.loads(row[0])
-            for name in ("data_categories", "effects", "risks"):
-                data[name] = tuple(data[name])
-            data["max_cost_usd"] = Decimal(data["max_cost_usd"])
-            preview = DecisionPreview(**data)
+            preview = _read_preview(row[0])
             receipt = decision_receipt(preview, self._clock(), answer)
             db.execute(
                 "UPDATE af_decision_consents SET status=?, receipt=? "

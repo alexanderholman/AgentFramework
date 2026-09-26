@@ -14,10 +14,13 @@ from af.graph.contracts import (
     GraphEdge,
     GraphFeature,
     GraphNode,
+    GraphPath,
     GraphQuery,
     GraphResult,
+    GraphTraversal,
     _identifier,
 )
+from af.graph.traversal import edges_from_rows, execute_traversal
 
 
 class Neo4jTransaction(Protocol):
@@ -74,7 +77,11 @@ class Neo4jCommunityDriver:
         evidence = self._verifier()
         if not isinstance(evidence, CapabilitySet):
             raise TypeError("Neo4j verifier must return a CapabilitySet")
-        implemented = {GraphFeature.QUERY.value, GraphFeature.PERSISTENCE.value}
+        implemented = {
+            GraphFeature.QUERY.value,
+            GraphFeature.PERSISTENCE.value,
+            GraphFeature.TRAVERSAL.value,
+        }
         return CapabilitySet(
             evidence.values & implemented & {feature.value for feature in required}
         )
@@ -141,6 +148,33 @@ class Neo4jCommunityDriver:
         if "af_id" in properties:
             raise ValueError("graph property name af_id is reserved")
         return dict(properties)
+
+    def traverse(self, traversal: GraphTraversal) -> list[GraphPath]:
+        if not isinstance(traversal, GraphTraversal):
+            raise TypeError("Neo4j traversal requires GraphTraversal")
+
+        def neighbors(node_id: str, limit: int, deadline_ms: int) -> list[GraphEdge]:
+            predicate = {
+                "outgoing": "a.af_id = $node_id",
+                "incoming": "b.af_id = $node_id",
+                "any": "(a.af_id = $node_id OR b.af_id = $node_id)",
+            }[traversal.direction]
+            parameters: dict[str, object] = {"node_id": node_id, "limit": limit}
+            if traversal.relation_types:
+                predicate += " AND type(e) IN $relation_types"
+                parameters["relation_types"] = list(traversal.relation_types)
+            rows = self._run(
+                "MATCH (a:AFNode)-[e]->(b:AFNode) WHERE "
+                + predicate
+                + " RETURN e.af_id AS edge_id, a.af_id AS source_id, b.af_id AS target_id, "
+                "type(e) AS relation_type ORDER BY edge_id, source_id, target_id LIMIT $limit",
+                parameters,
+                limit=limit,
+                deadline_ms=deadline_ms,
+            )
+            return edges_from_rows(rows)
+
+        return execute_traversal(traversal, neighbors)
 
     def create_node(
         self, node_id: str, labels: tuple[str, ...], properties: Mapping[str, Any]

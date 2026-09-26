@@ -56,3 +56,29 @@ Verification lives in `tests/unit/test_locales.py` and
 `tests/feature/test_locale_journey.py`: language-territory independence, CLDR
 formatting, pluralization, fallback, RTL, pseudolocalization, immutable domain
 output, pack and reviewer signatures, template attacks, and forbidden semantics.
+
+The installed HTML and REST adapters accept explicit `language` and `territory`
+query parameters, for example `/tasks?language=ar&territory=EG` and
+`/api/v1/tasks?language=fr&territory=CA`. Duplicate or malformed selections are
+rejected before a task mutation. An empty HTML territory field clears that choice.
+Selection is per request; it is not inferred from identity or stored as authority.
+REST adds its typed `presentation` field only when a locale is requested; ordinary
+responses retain their previous shape. Responses identify the actual rendered
+language with `Content-Language`. Unknown languages render English with fallback
+metadata, and a territory never substitutes another message language.
+
+HTML has independent labelled language and territory controls and preserves the
+selection through task links, forms and redirects. Signed starter pack version
+1.1.0 includes ordinary navigation and task labels. The Delete label uses the
+critical source message until an appropriately reviewed translation is installed.
+Each translated label carries its own language and direction, including English
+fallback inside RTL pages. Canonical task prompts and outputs remain escaped and
+use automatic text direction. Machine-assisted text is visibly labelled. A main
+landmark, skip link, focus indicators, responsive layout and reduced-motion rules
+support accessible operation. The stylesheet is a local external resource so it
+works under the application's restrictive content-security policy.
+
+`tests/feature/test_locale_http.py` proves actual REST/HTML CRUD, locale persistence,
+invalid-selection denial, ordinary-response compatibility, RTL/pseudolocale output,
+and semantic parity for a verified physics result. These structural tests are not
+a claim of completed assistive-technology or WCAG certification.

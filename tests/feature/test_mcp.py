@@ -49,6 +49,10 @@ from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces.mcp import create_mcp_server
 
 EXPECTED_TOOLS = {
+    "af_request_human_decision",
+    "af_get_human_decision",
+    "af_respond_human_decision",
+    "af_revoke_human_decision",
     "af_start_workflow",
     "af_get_workflow",
     "af_resume_workflow",
@@ -354,6 +358,7 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             manifest = json.loads(manifest_result.contents[0].text)
             assert manifest["version"].endswith("a0")
             assert manifest["routes"] == [
+                "catalogue-execute",
                 "character-count",
                 "current-time",
                 "hello",
@@ -361,24 +366,29 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             ]
             assert manifest["route_identities"] == [
                 {
-                    "procedure_id": "character-count",
+                    "procedure_id": "catalogue-execute",
                     "version": "1.0.0",
                     "digest": manifest["route_identities"][0]["digest"],
                 },
                 {
-                    "procedure_id": "current-time",
+                    "procedure_id": "character-count",
                     "version": "1.0.0",
                     "digest": manifest["route_identities"][1]["digest"],
                 },
                 {
+                    "procedure_id": "current-time",
+                    "version": "1.1.0",
+                    "digest": manifest["route_identities"][2]["digest"],
+                },
+                {
                     "procedure_id": "hello",
                     "version": "1.0.0",
-                    "digest": manifest["route_identities"][2]["digest"],
+                    "digest": manifest["route_identities"][3]["digest"],
                 },
                 {
                     "procedure_id": "science-calculate",
                     "version": "1.0.0",
-                    "digest": manifest["route_identities"][3]["digest"],
+                    "digest": manifest["route_identities"][4]["digest"],
                 },
             ]
             assert all(
@@ -753,7 +763,7 @@ def test_streamable_http_mcp_keeps_loopback_default_and_accepts_explicit_transpo
 
     lan = create_application(
         settings=Settings(
-            host="0.0.0.0",
+            host="127.0.0.1",
             mcp_transport="streamable-http",
             allowed_hosts=("af.internal",),
             allowed_origins=("http://af.internal:8000",),
@@ -847,7 +857,7 @@ def test_streamable_http_mcp_validates_explicit_transport_entries_on_loopback_ho
 def test_streamable_http_mcp_canonicalizes_default_port_origins() -> None:
     application = create_application(
         settings=Settings(
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=80,
             mcp_transport="streamable-http",
             allowed_hosts=("af.internal",),

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import inspect
 import json
 import socket
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -173,7 +173,9 @@ def test_result_binding_and_requester_revocation_reject_signed_but_ineligible_re
         verify_peer_result(result, request=substituted, trust=trust, lease_current=lambda: True)
 
 
-def test_peer_supplied_commands_wrong_grant_signer_and_oversized_inputs_are_denied(tmp_path: Path) -> None:
+def test_peer_supplied_commands_wrong_grant_signer_and_oversized_inputs_are_denied(
+    tmp_path: Path,
+) -> None:
     service, peer, _trust, lease, resources = nodes(tmp_path)
     request = make_peer_request(peer, service.issue_lease(lease), ARGS)
     raw = json.loads(request.payload_json)
@@ -230,8 +232,9 @@ def test_post_dispatch_revocation_failure_and_output_budget_discard_results(tmp_
 
     service.executor = RevokingExecutor()
     request = make_peer_request(peer, service.issue_lease(lease), ARGS)
-    result = verify_peer_result(service.execute(request), request=request, trust=trust,
-                                lease_current=lambda: True)
+    result = verify_peer_result(
+        service.execute(request), request=request, trust=trust, lease_current=lambda: True
+    )
     assert result["status"] == "cancelled"
     assert result["output"] is None
     assert all(item.state is LeaseState.RELEASED for item in resources.list())
@@ -257,6 +260,22 @@ def test_post_dispatch_revocation_failure_and_output_budget_discard_results(tmp_
     assert "private failure" not in result_json
 
 
+def test_key_revocation_during_execution_discards_result(tmp_path: Path) -> None:
+    service, peer, trust, lease, resources = nodes(tmp_path)
+
+    class RevokingKeyExecutor:
+        def execute(self, *args: object) -> ProcedureResult:
+            trust.revoke(peer.key_id)
+            return ProcedureResult("3")
+
+    service.executor = RevokingKeyExecutor()
+    request = make_peer_request(peer, service.issue_lease(lease), ARGS)
+    result = json.loads(service.execute(request).payload_json)
+    assert result["status"] == "cancelled"
+    assert result["output"] is None
+    assert all(item.state is LeaseState.RELEASED for item in resources.list())
+
+
 def test_persistent_ledger_refuses_grant_reuse_expiry_and_nonce_collision(tmp_path: Path) -> None:
     service, peer, _trust, lease, _resources = nodes(tmp_path)
     grant = service.issue_lease(lease)
@@ -271,7 +290,9 @@ def test_persistent_ledger_refuses_grant_reuse_expiry_and_nonce_collision(tmp_pa
         service.ledger.finish(lease, "invented", datetime.now(UTC))
 
 
-def test_pairing_expiry_version_and_invalid_material_require_explicit_repair(tmp_path: Path) -> None:
+def test_pairing_expiry_version_and_invalid_material_require_explicit_repair(
+    tmp_path: Path,
+) -> None:
     _service, peer, trust, _lease, _resources = nodes(tmp_path)
     original = json.loads(create_pairing_invite(peer).payload_json)
     for changes, reason in (
@@ -280,8 +301,11 @@ def test_pairing_expiry_version_and_invalid_material_require_explicit_repair(tmp
         ({"public_key": "invalid"}, "pairing_fingerprint"),
     ):
         with pytest.raises(ContentRejected, match=reason):
-            accept_pairing_invite(peer.sign("af.peer.invite.v1", {**original, **changes}),
-                                  expected_key_id=peer.key_id, trust=trust)
+            accept_pairing_invite(
+                peer.sign("af.peer.invite.v1", {**original, **changes}),
+                expected_key_id=peer.key_id,
+                trust=trust,
+            )
 
 
 def test_disconnected_peer_is_not_silently_retried_elsewhere(tmp_path: Path) -> None:
@@ -291,16 +315,24 @@ def test_disconnected_peer_is_not_silently_retried_elsewhere(tmp_path: Path) -> 
         closed_listener.bind(("127.0.0.1", 0))
         port = closed_listener.getsockname()[1]
         with pytest.raises(ContentRejected, match="peer_disconnected"):
-            PeerHTTPClient(f"http://127.0.0.1:{port}/execute", timeout=.1).execute(request)
+            PeerHTTPClient(f"http://127.0.0.1:{port}/execute", timeout=0.1).execute(request)
     with pytest.raises(ValueError, match="loopback"):
         PeerHTTPClient("https://example.com/execute")
 
 
-@pytest.mark.parametrize("event,args", [
-    ("socket.connect", ()), ("subprocess.Popen", ()), ("os.remove", ()),
-    ("open", ("file", "w", 0)), ("open", ("file", None, 2)),
-])
-def test_installed_read_only_worker_defense_denies_effects(event: str, args: tuple[object, ...]) -> None:
+@pytest.mark.parametrize(
+    "event,args",
+    [
+        ("socket.connect", ()),
+        ("subprocess.Popen", ()),
+        ("os.remove", ()),
+        ("open", ("file", "w", 0)),
+        ("open", ("file", None, 2)),
+    ],
+)
+def test_installed_read_only_worker_defense_denies_effects(
+    event: str, args: tuple[object, ...]
+) -> None:
     from af.infrastructure.peers import _deny_effects
 
     with pytest.raises(PermissionError):

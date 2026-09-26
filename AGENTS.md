@@ -67,7 +67,7 @@ require actual authority. Runtime authorization remains part of the product.
 
 ## Add behavior
 
-Use `af make:procedure --help` and the procedure contributor contracts for procedures;
+Use `af make procedure --help` and the procedure contributor contracts for procedures;
 use `ServiceProvider` for composition and manager driver registrations for adapters.
 See `docs/application-platform.md`, `docs/testing-conformance.md`, `docs/queue.md`,
 `docs/science-catalogue.md`, and `docs/driver-support.md` as needed. Keep one shared

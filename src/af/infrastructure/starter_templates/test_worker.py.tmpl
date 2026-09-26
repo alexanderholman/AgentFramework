@@ -1,0 +1,9 @@
+"""Durable dispatch and real WorkerKernel acceptance use separate app lifetimes."""
+
+from __PACKAGE__.worker import enqueue, run_once
+
+
+def test_worker_primary_entrypoint(tmp_path):
+    assert enqueue("how many rs in strawberry?", tmp_path)
+    assert run_once(tmp_path) == {"processed": True, "outputs": ["3"]}
+    assert run_once(tmp_path) == {"processed": False, "outputs": []}

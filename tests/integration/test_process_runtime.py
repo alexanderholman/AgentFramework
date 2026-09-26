@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import socket
 import sys
+import time
+from contextlib import suppress
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
@@ -87,8 +91,6 @@ def test_runtime_refuses_missing_or_changed_local_artifact_without_fetch(tmp_pat
 
 
 def test_runtime_cancellation_and_wrong_model_never_reach_ready(tmp_path: Path) -> None:
-    from dataclasses import replace
-
     installed = spec(tmp_path)
     adapter = PinnedProcessRuntime((installed,))
     cancelled = Event()
@@ -100,3 +102,65 @@ def test_runtime_cancellation_and_wrong_model_never_reach_ready(tmp_path: Path) 
     with pytest.raises(RuntimeRefused, match="deadline_exceeded"):
         adapter.load(installed.variant, Event(), datetime.now(UTC) + timedelta(seconds=0.3))
     assert not adapter.health(installed.variant).process_alive
+
+
+def test_cancellation_during_integrity_checks_prevents_process_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from af.infrastructure import process_runtime
+
+    installed = spec(tmp_path)
+    adapter = PinnedProcessRuntime((installed,))
+    cancellation = Event()
+    original_digest = process_runtime._file_digest
+
+    def cancel_during_hash(path: Path) -> str:
+        value = original_digest(path)
+        cancellation.set()
+        return value
+
+    def forbidden_spawn(*args: object, **kwargs: object) -> None:
+        pytest.fail("a cancelled load must not create a process")
+
+    monkeypatch.setattr(process_runtime, "_file_digest", cancel_during_hash)
+    monkeypatch.setattr(process_runtime.subprocess, "Popen", forbidden_spawn)
+    with pytest.raises(RuntimeRefused, match="cancelled"):
+        adapter.load(installed.variant, cancellation, datetime.now(UTC) + timedelta(seconds=5))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process tree conformance")
+def test_unload_kills_descendants_even_when_leader_exits_on_sigterm(tmp_path: Path) -> None:
+    installed = spec(tmp_path)
+    script = installed.support_files[0][0]
+    child_pid = tmp_path / "child.pid"
+    child_source = (
+        "import os, signal, time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"Path({str(child_pid)!r}).write_text(str(os.getpid())); time.sleep(60)"
+    )
+    code = script.read_text().replace(
+        "HTTPServer((",
+        f"import subprocess, time\nfrom pathlib import Path\n"
+        f"subprocess.Popen([sys.executable, '-c', {child_source!r}])\n"
+        f"while not Path({str(child_pid)!r}).exists(): time.sleep(.01)\nHTTPServer((",
+    )
+    script.write_text(code)
+    installed = replace(installed, support_files=((script, sha(script)),))
+    adapter = PinnedProcessRuntime((installed,))
+    adapter.load(installed.variant, Event(), datetime.now(UTC) + timedelta(seconds=5))
+    pid = int(child_pid.read_text())
+    try:
+        adapter.unload(installed.variant)
+        until = time.monotonic() + 1
+        running = True
+        while time.monotonic() < until:
+            status = Path(f"/proc/{pid}/stat")
+            running = status.exists() and status.read_text().split()[2] != "Z"
+            if not running:
+                break
+            time.sleep(0.01)
+        assert not running, "runtime descendant survived an acknowledged unload"
+    finally:
+        with suppress(ProcessLookupError):
+            os.kill(pid, 9)

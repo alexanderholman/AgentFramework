@@ -55,7 +55,9 @@ def test_only_implemented_capabilities_can_be_verified() -> None:
     second = OrientDBDriver(
         "https://localhost", "graphdb", client=OrientDBClient(), capability_verifier=evidence
     )
-    expected = CapabilitySet({GraphFeature.QUERY.value, GraphFeature.PERSISTENCE.value})
+    expected = CapabilitySet(
+        {GraphFeature.QUERY.value, GraphFeature.PERSISTENCE.value, GraphFeature.TRAVERSAL.value}
+    )
     assert first.verify_capabilities(set(GraphFeature)) == expected
     assert second.verify_capabilities(set(GraphFeature)) == expected
     first.close()
@@ -68,6 +70,6 @@ def test_schema_identifiers_cannot_be_interpolated_as_query_syntax(label: str) -
         GraphNode("a", (label,), {})
 
 
-def test_traversal_contract_remains_bounded_without_claiming_an_execution_engine() -> None:
+def test_traversal_contract_remains_bounded() -> None:
     traversal = GraphTraversal("a", max_depth=3, direction="outgoing", relation_types=("KNOWS",))
     assert traversal.max_depth == 3

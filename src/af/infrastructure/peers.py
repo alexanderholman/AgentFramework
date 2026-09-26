@@ -6,8 +6,8 @@ an authenticated encrypted transport; there is no implicit relay or public liste
 
 from __future__ import annotations
 
-import json
 import inspect
+import json
 import math
 import multiprocessing
 import os
@@ -242,8 +242,13 @@ class SubprocessPeerExecutor:
     ) -> ProcedureResult:
         if sys.platform == "win32":
             raise ContentRejected("resource_limits_unavailable")
+        if cancelled():
+            raise ContentRejected("execution_cancelled")
         source_path = Path(inspect.getfile(type(procedure)))
-        if source_path.is_symlink() or content_digest(source_path.read_bytes()) != lease.implementation_digest:
+        if (
+            source_path.is_symlink()
+            or content_digest(source_path.read_bytes()) != lease.implementation_digest
+        ):
             raise ContentRejected("procedure_digest_mismatch")
         context = multiprocessing.get_context("spawn")
         receiving, sending = context.Pipe(duplex=False)
@@ -254,6 +259,8 @@ class SubprocessPeerExecutor:
         )
         until = monotonic() + lease.max_wall_ms / 1000
         try:
+            if cancelled():
+                raise ContentRejected("execution_cancelled")
             process.start()
             sending.close()
             while True:
@@ -300,9 +307,25 @@ class _BoundedPeerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 8
 
-    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        handler: type[BaseHTTPRequestHandler],
+        *,
+        request_timeout: float = 10,
+    ) -> None:
+        if type(request_timeout) not in (int, float) or not 0 < request_timeout <= 60:
+            raise ValueError("peer request timeout must be within 0..60 seconds")
+        self._request_timeout = request_timeout
         self.slots = BoundedSemaphore(16)
         super().__init__(address, handler)
+
+    def get_request(self) -> tuple[socket.socket, tuple[str, int]]:
+        request, address = super().get_request()
+        # Bound header parsing as well as endpoint reads/writes. do_POST is too late:
+        # an incomplete request line or header has not reached endpoint dispatch.
+        request.settimeout(self._request_timeout)
+        return request, address
 
     def process_request(
         self, request: socket.socket | tuple[bytes, socket.socket], client_address: tuple[str, int]

@@ -12,6 +12,7 @@ from typing import cast
 
 from sqlalchemy.engine import make_url
 
+from af.application.account_controller import AccountController
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
 from af.application.authentication import AuthenticationService
 from af.application.bus import ApplicationBus
@@ -29,9 +30,14 @@ from af.application.database_setup import (
 )
 from af.application.decisions import DecisionController
 from af.application.dispatch import build_application_endpoints
+from af.application.engineering import LocalEngineeringService
+from af.application.engineering_controller import EngineeringController
+from af.application.human_decisions import HumanDecisionService
+from af.application.human_interpreter import HumanInterpreter
 from af.application.ideons import IdeonController, IdeonService
 from af.application.locales import Localizer
 from af.application.oauth_controller import OAuthController
+from af.application.observability_middleware import ObservationMiddleware
 from af.application.operations import (
     OperationsController,
     OperationsService,
@@ -47,12 +53,17 @@ from af.application.worker_generation import WorkerGenerationFactory
 from af.application.worker_supervision import WorkerSupervisorFactory
 from af.application.workflow_control import WorkflowController
 from af.application.workflows import WorkflowService
+from af.bootstrap_engineering import LocalEngineeringProvider
 from af.bootstrap_extensions import (
+    create_account_controller,
     create_authentication_service,
     create_capability_snapshot,
     create_decision_controller,
+    create_human_decision_service,
     create_oauth_controller,
+    create_stream_driver,
 )
+from af.bootstrap_observability import create_observability_products
 from af.bootstrap_scheduling import SchedulerRuntime
 from af.config import (
     ConfigSnapshot,
@@ -62,6 +73,7 @@ from af.config import (
     load_settings,
 )
 from af.domain.agent_routing import DeterministicAgentRouter
+from af.domain.catalogue_procedures import CatalogueProvider
 from af.domain.classifiers import (
     CharacterCountClassifier,
     ClassifierChain,
@@ -120,12 +132,14 @@ from af.infrastructure.resource_leases import InMemoryLeaseRepository
 from af.infrastructure.self_operation_fixtures import create_fixture_self_improvement_service
 from af.infrastructure.sqlite import SQLiteDriver
 from af.infrastructure.sqlite_resource_leases import SQLiteLeaseRepository
+from af.infrastructure.sqlite_streams import SQLiteStreamDriver
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
 from af.infrastructure.worker_optimization import (
     load_worker_optimization_profile,
     worker_queue_storage_identity,
 )
 from af.infrastructure.workflow_factory import create_workflow_service, reference_composition
+from af.interfaces.observability_products import ObservabilityProducts
 from af.queue.database_manager import database_queue_registration
 from af.queue.manager import QueueManager
 from af.search.embedded_manager import embedded_search_registration
@@ -401,6 +415,54 @@ class _ApplicationProvider(ServiceProvider):
     dependencies = ("af.framework", "af.ideons", "af.search")
 
     def register(self, container: ProviderRegistrar) -> None:
+        container.bind(
+            SQLiteStreamDriver,
+            lambda current: create_stream_driver(current.resolve(Database)),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            ObservabilityProducts,
+            lambda current: create_observability_products(
+                current.resolve(Settings), current.resolve(Database)
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            EngineeringController,
+            lambda current: EngineeringController(
+                current.resolve(LocalEngineeringService)
+                if current.resolve(Settings).engineering_repository is not None
+                else None
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            HumanDecisionService,
+            lambda current: create_human_decision_service(
+                current.resolve(Database),
+                current.resolve(LocalAuthenticationKey).value,
+                current.resolve(PipelineAgent),
+                current.resolve(ClassifierChain),
+                current.resolve(ProcedureRegistry),
+                current.resolve(LadderRouter),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            AccountController,
+            lambda current: create_account_controller(
+                current.resolve(Settings),
+                current.resolve(Database),
+                current.resolve(AuthenticationService),
+                current.resolve(LocalAuthenticationKey).value,
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            HumanInterpreter,
+            lambda current: HumanInterpreter(current.resolve(IdeonController)),
+            scope=Scope.APPLICATION,
+        )
         container.bind(
             SelfStageController, lambda _: SelfStageController(), scope=Scope.APPLICATION
         )
@@ -695,6 +757,11 @@ class AFApplication:
     workflows: WorkflowService
     lifecycle: Application
 
+    @property
+    def streams(self) -> SQLiteStreamDriver:
+        """Lazily open the reference persistent stream adapter."""
+        return self.container.resolve(SQLiteStreamDriver)
+
     def shutdown(self) -> None:
         _shutdown_lifecycle_at_sync_boundary(self.lifecycle)
 
@@ -838,6 +905,7 @@ def _prepare_application(
             selector_confidence_threshold,
         ),
         ScienceProvider(),
+        CatalogueProvider(),
         _IdeonProvider(ideon_service),
         _SearchProvider(
             resolved_settings,
@@ -852,6 +920,16 @@ def _prepare_application(
             profile=(
                 resolved_config.profile.value if resolved_config.profile is not None else "local"
             ),
+        ),
+        *(
+            (
+                LocalEngineeringProvider(
+                    Path(resolved_settings.engineering_repository).expanduser().resolve(),
+                    selector_configured=selector is not None,
+                ),
+            )
+            if resolved_settings.engineering_repository is not None
+            else ()
         ),
         *tuple(providers),
     )
@@ -893,6 +971,14 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         container.resolve(AgentRoutingController),
         container.resolve(IdeonController),
         operations,
+        middleware=(
+            ObservationMiddleware(
+                inspector=container.resolve(ObservabilityProducts).inspector,
+                metrics=container.resolve(ObservabilityProducts).metrics,
+            ),
+        )
+        if build.settings.inspector_enabled or build.settings.metrics_enabled
+        else (),
     )
     return AFApplication(
         settings=build.settings,

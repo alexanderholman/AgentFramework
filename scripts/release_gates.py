@@ -140,6 +140,14 @@ from pathlib import Path
 import json
 import sys
 
+network_attempts = []
+def deny_egress(event, arguments):
+    if event in {"socket.connect", "socket.getaddrinfo", "socket.gethostbyname",
+                 "socket.gethostbyaddr", "subprocess.Popen", "os.system"}:
+        network_attempts.append(event)
+        raise RuntimeError("offline package smoke forbids network and process egress")
+sys.addaudithook(deny_egress)
+
 target = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(target))
 
@@ -187,6 +195,24 @@ if hello.exit_code != 0 or hello.stdout.strip() != "Hello, world!":
     raise SystemExit("installed wheel failed the hello smoke")
 if counted.exit_code != 0 or counted.stdout.strip() != "3":
     raise SystemExit("installed wheel failed the character-count smoke")
+
+import anyio
+from mcp.shared.memory import create_connected_server_and_client_session
+from af.interfaces.mcp import create_mcp_server
+
+async def mcp_smoke():
+    server = create_mcp_server(application)
+    async with create_connected_server_and_client_session(server) as session:
+        hello = await session.call_tool("af_hello", {})
+        counted = await session.call_tool(
+            "af_count_characters", {"text":"strawberry", "character":"r"}
+        )
+        if hello.isError or counted.isError:
+            raise SystemExit("installed wheel MCP deterministic smoke failed")
+        if (hello.structuredContent["output"] != "Hello, world!"
+            or counted.structuredContent["output"] != "3"):
+            raise SystemExit("installed wheel MCP output smoke failed")
+anyio.run(mcp_smoke)
 application.shutdown()
 
 profile_path = target / "af_release_operator_profile.py"
@@ -307,6 +333,8 @@ if (
     or ambient_database.exists()
 ):
     raise SystemExit("installed wheel migration profile did not fail before ambient boot")
+if network_attempts:
+    raise SystemExit("installed deterministic smoke attempted prohibited egress")
 """.strip()
 
 

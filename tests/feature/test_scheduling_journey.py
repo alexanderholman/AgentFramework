@@ -52,8 +52,11 @@ def test_source_controlled_schedule_cli_queues_and_executes_a_registered_task(tm
     )
     results = []
     handler = ScheduledJobHandler(
-        (definition,), history, locks,
-        {"count": lambda args, context: results.append(len(args["text"]))}, clock=clock,
+        (definition,),
+        history,
+        locks,
+        {"count": lambda args, context: results.append(len(args["text"]))},
+        clock=clock,
     )
     worker = WorkerKernel(queue.connection(), clock=clock, driver_close=lambda: None)
 
