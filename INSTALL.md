@@ -32,6 +32,12 @@ uv run af ask "how many rs in strawberry"
 
 The expected outputs are `Hello, world!` and `3`.
 
+For focused development checks, `uv run af test tests/unit/test_pipeline.py -q`
+forwards arguments to the installed pytest and preserves its exit status. It runs
+trusted project test code in the current directory without initializing AF state.
+The runtime-only wheel does not include pytest; install the development extra first.
+This focused command does not replace the canonical full gate above.
+
 Validate the source and wheel packaging path:
 
 ```bash
@@ -41,7 +47,8 @@ python3 scripts/af_dev.py --action package --execute
 
 The executed package action snapshots the clean Git commit into temporary directories and
 builds the wheel from its source distribution. It exports only runtime requirements from
-`uv.lock`, verifies their hashes, and installs them into a temporary target with source builds
+`uv.lock` as PEP 751 `pylock.toml`, preserves artifact URLs, verifies their hashes,
+and installs them into a temporary target with source builds
 disabled and uv offline. Prime the uv cache with the locked development install first; a missing
 runtime wheel fails the gate instead of downloading or borrowing it from the development environment.
 An explicit `UV_CACHE_DIR` is retained.

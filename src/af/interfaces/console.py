@@ -66,6 +66,7 @@ from af.interfaces.self_development import register_self_development_commands
 from af.interfaces.self_improvement import register_self_improvement_commands
 from af.interfaces.self_stages import register_lifecycle_stage_commands
 from af.interfaces.starters import register_starter_commands
+from af.interfaces.testing_cli import register_test_command
 from af.interfaces.tui import create_tui_kernel, register_tui_commands
 from af.interfaces.workflows import register_workflow_commands
 from af.search.manager import SearchManager
@@ -91,6 +92,7 @@ def create_cli(
         version_control=version_control,
     )
     register_starter_commands(cli)
+    register_test_command(cli)
     register_self_development_commands(
         cli,
         lambda context: current_application_from_context(context).container.resolve(

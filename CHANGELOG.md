@@ -26,6 +26,9 @@ external-service certification, accessibility certification, or a production rel
 * [Fixed] Local REST/GraphQL explorers work under the same-origin CSP without CDN assets.
 * [Fixed] Malformed CSRF/session signatures and Origin values fail without exposing server errors.
 * [Improved] Runtime-only package smoke, security tooling, provenance and qualification documentation.
+* [Fixed] Require cryptography 50.x and lock 50.0.1 to resolve the CI advisory for 49.0.0.
+* [Fixed] Offline runtime installation preserves exact locked artifact URLs and hashes.
+* [Added] Required `af test` developer entry point, forwarding pytest status without application startup.
 
 ## [v0.1.0] 2026-07-18
 Initial AgentFramework Python vertical slice.

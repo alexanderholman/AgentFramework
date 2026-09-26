@@ -792,12 +792,26 @@ def test_package_build_is_a_dry_run_without_execute() -> None:
     assert "Dry run only. Re-run with --execute to build and smoke the package." in completed.stdout
 
 
-def test_runtime_install_is_isolated_from_development_packages(tmp_path: Path) -> None:
+def test_runtime_install_is_isolated_from_development_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     module = _load_module()
     target = tmp_path / "runtime"
     target.mkdir()
     uv = shutil.which("uv")
     assert uv is not None
+    source_cache = subprocess.check_output([uv, "cache", "dir", "--no-config"], text=True).strip()
+    wheel_cache = tmp_path / "wheel-cache"
+    # A fresh `uv sync --locked` caches lock-addressed wheels, but need not
+    # populate registry index metadata. Reproduce that CI state without touching
+    # the real cache; installation must remain offline and hash-verified.
+    shutil.copytree(
+        source_cache,
+        wheel_cache,
+        symlinks=True,
+        ignore=shutil.ignore_patterns("simple-v*", "flat-index-v*", "sdists-v*", "builds-v*"),
+    )
+    monkeypatch.setenv("UV_CACHE_DIR", str(wheel_cache))
     environment = module._release_environment(tmp_path)
     module._install_runtime_dependencies(REPO_ROOT, target, uv, environment)
     script = (

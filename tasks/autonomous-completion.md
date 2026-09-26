@@ -52,29 +52,54 @@ PostgreSQL, MySQL, MariaDB, OpenSearch and Elasticsearch all subsequently comple
 successfully at that head. This proves those tested profiles at that source only,
 not the later stabilization snapshot.
 
-Current working tree contains subsequent demonstrated blocker fixes awaiting a
-separate coherent checkpoint/full gate: API CAS/idempotency/negotiation/SOAP;
+Checkpoint `3d98ebb` contains the subsequent demonstrated blocker fixes:
+API CAS/idempotency/negotiation/SOAP;
 GraphQL persisted operations/batching/deadlines; CSP-compatible local explorers;
 strict settings types and deep capability graphs; terminal ownership and cleanup;
 request-content trace minimization; configured self-development public journey;
 deterministic-route effect policy; pinned source/security inventory/signing tools;
-and runtime-only isolated package installation. Focused evidence is recorded in
-tests; do not describe the mutable tree as release-qualified. All existing workers
-were instructed to finish these concrete fixes and freeze, not expand scope.
+and runtime-only isolated package installation. Its immutable tree passed a fresh
+checkout/environment canonical gate: 4,255 passed, 59 skipped, 91.57% branch
+coverage; Ruff, strict mypy (372 files), nine OpenCode tests, package build/inspection,
+runtime-only installation/smoke and 36 governance checks. All earlier workers have
+stopped; root owns stabilization. This checkpoint is not release-qualified: CI
+subsequently exposed the concrete blockers below.
 
-The active fixed validation checkout is separate from the working tree. Original
-gate logs are outside Git; reproducible source/tests and the canonical command are
-authoritative. Security advisory lookup encountered DNS failure; no successful
-dependency advisory result or independent security approval has been fabricated.
+CI source scans passed (zero high/high Bandit findings; 76 exact reviewed synthetic
+secret candidates retained). Live dependency audit found PYSEC-2026-3552 in
+cryptography 49.0.0. Current correction requires 50.x and locks 50.0.1; signing,
+identity, peer and related regressions passed (98 tests). No advisory waiver exists.
+The Python/service common gate also exposed an offline installer defect: a freshly
+primed wheel cache lacks registry index metadata. The regression reproduced it
+locally; exporting PEP 751 artifact URLs/hashes instead of name-only requirements
+fixes it without network fallback or borrowing development packages.
 
-1. Complete API conditional updates/idempotency and remaining native bridge/release
-   tooling integration. Do not confuse native protocol or offline Bare startup with
-   successful DHT, relay, cross-platform or physical-model qualification.
-2. Snapshot the current tree, run the canonical gate in that fixed checkout, and fix
-   actual failures without coverage exclusions or weakened package provenance checks.
-3. Repeat the live-roadmap and unfinished-work audit, then clean-room installation
-   and user journeys. Keep target-host approvals and external service qualifications
-   explicitly separate from repository-local functionality.
+Clean-room CLI evidence at the checkpoint: local scheduler-profile initialization
+and health/doctor succeeded with model routes disabled; 25 separate-process commands
+covered Hello/strawberry, persistent Task create/read/update/delete, workflow
+checkpoint/resume/verified total 6 and cancellation, JSON/schema discovery, Arabic
+RTL, pseudolocale and unsupported-request rejection. Cache regression/live Redis:
+44 passed, explicitly retaining #19. Native: 18 passed, one live HyperDHT probe
+skipped because the host denied its native interface watcher (EPERM); actual Bare
+offline startup and Node/Python sockets passed. No NAT/relay deployment certification.
+
+The fresh source audit classified abstract-method sentinels, advertised unsupported
+driver capabilities, SQL/template placeholders, exception marker classes, bounded
+cleanup/reconciliation and test doubles as intentional. No TODO/FIXME/XXX/HACK or
+stub implementation marker remains in the searched production/scripts/native tree.
+The live-roadmap audit found one missing required developer command, `af test`;
+the added thin pytest adapter has an actual subprocess pass/fail regression and
+does not initialize AF state. Existing canonical quality/coverage gates remain intact.
+
+1. Finish qualification of the demonstrated dependency/cache fixes and `af test`;
+   run a new fixed-checkout full gate and exact-head CI, including security.
+2. Require service certification and common quality stages to pass together; do not
+   use the earlier passing certification stages to excuse a red enforcement stage.
+3. Reconcile final evidence and repeat clean-room smoke/audit after any correction.
+   Keep target-host approvals and external service qualifications separate from
+   repository-local functionality. Native desktop/mobile hosts, DHT/NAT, physical
+   models, certified translations, independent accessibility/security approval and
+   deployment signing authority remain unavailable or external qualification gates.
 4. Recheck live remote branch before each non-force checkpoint; retain newer work.
 
 Do not expose API keys or raw token secrets. Jev is opt-in and one-use consented;

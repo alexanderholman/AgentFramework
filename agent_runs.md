@@ -4348,3 +4348,16 @@ NotImplemented sentinels, explicit test doubles, error/status cases and real
 temporary-file cleanup. These were retained rather than mechanically removed.
 The larger stabilization snapshot still requires its own complete fixed-tree gate,
 clean-room journeys and candidate-bound CI before completion can be claimed.
+
+
+## 2026-09-26 — Stabilization CI follow-through
+
+Checkpoint `3d98ebb` passed the fresh local canonical gate (4,255 passed, 59 skipped,
+91.57% branch coverage) and actual clean-room CLI/recovery/native/cache journeys.
+CI exposed a cryptography advisory and a runtime-only installer dependence on
+registry index metadata absent from a fresh wheel cache. Both are release blockers,
+not environmental excuses: upgrade to locked cryptography 50.0.1 and preserve
+PEP 751 artifact URLs/hashes for offline installation. Reproduced the cache failure
+before the fix. The roadmap audit also found the absent `af test` command; its thin
+pytest adapter passed an actual subprocess pass/fail/no-state regression. Continue
+exact-head full/service/security qualification; no release approval is claimed.

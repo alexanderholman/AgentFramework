@@ -35,7 +35,7 @@ class IntrospectionService:
             "procedures": [item.procedure_id for item in self.procedures()],
             "commands": {
                 "install": "uv sync --locked --extra dev",
-                "focused_test": "uv run pytest PATH",
+                "focused_test": "uv run af test PATH",
                 "check": "python3 scripts/af_dev.py --action check --execute",
                 "package": "python3 scripts/af_dev.py --action package --execute",
                 "schemas": "af schemas",

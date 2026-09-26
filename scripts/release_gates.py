@@ -1016,7 +1016,9 @@ def _install_runtime_dependencies(
     root: Path, target: Path, uv_executable: str, environment: Mapping[str, str]
 ) -> None:
     """Install only hashed locked runtime dependencies from the primed uv cache."""
-    requirements = target.parent / "runtime-requirements.txt"
+    # PEP 751 preserves exact artifact URLs as well as hashes. requirements.txt
+    # would require cached index metadata that a lock-only sync need not fetch.
+    requirements = target.parent / "pylock.runtime.toml"
     _run_release_command(
         (
             uv_executable,
@@ -1029,7 +1031,7 @@ def _install_runtime_dependencies(
             "--no-default-groups",
             "--no-emit-project",
             "--format",
-            "requirements.txt",
+            "pylock.toml",
             "--output-file",
             str(requirements),
         ),
