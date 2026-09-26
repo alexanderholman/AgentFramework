@@ -12,6 +12,7 @@ import pytest
 from af.framework.errors import PlatformReason
 from af.framework.relational import (
     DatabaseCursor,
+    DatabaseOperationError,
     DatabaseRow,
     DatabaseStatement,
     DatabaseTransaction,
@@ -22,7 +23,6 @@ from af.infrastructure.postgresql import PostgreSQLDriver
 from af.messaging import (
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
-    ProjectionConflictError,
     ProjectionDecision,
 )
 from af.search.contracts import (
@@ -440,7 +440,9 @@ def _exercise_concurrent_first_delivery(
                 assert projector.apply(winner, delivery) is ProjectionDecision.APPLY
                 future = executor.submit(lose_optimistic_race)
                 assert insert_started.wait(timeout=10)
-            with pytest.raises(ProjectionConflictError) as captured:
+            # Concurrent first writers can lose through a unique/CAS conflict or
+            # InnoDB's deadlock victim rollback. Both require a fresh transaction.
+            with pytest.raises(DatabaseOperationError) as captured:
                 future.result(timeout=10)
         finally:
             executor.shutdown(wait=True, cancel_futures=True)

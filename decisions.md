@@ -4207,3 +4207,8 @@ or cross-platform certification. No release tag, merge or deployment is authoriz
 ## 2026-09-26 — Search receipt archaeology
 
 Port agent/issue-18-transactional-projector semantically into af.search.projection_receipts and the existing relational/embedded search boundaries. Reuse TransactionalProjectionGuard; translate vendor unique-key codes in adapters into DatabaseUniqueConflict so messaging never imports SQLite or SQLAlchemy. Only typed unique conflicts become retryable projection races. Keep all existing cancellation/locking improvements.
+
+
+## 2026-09-26 — InnoDB restart and inventory review
+
+Treat vendor errors 1205/1213 as transient in the MySQL adapter shared by MariaDB, mark the transaction rollback-only, retain the first retry error, and skip invalid savepoint cleanup while the outer boundary rolls back. The real first-writer race accepts either unique/CAS conflict or transaction restart but still requires transient classification, fresh replay as DUPLICATE and preserved content. Reviewed 295 exact non-secret Git object hash candidates in the archaeology inventory against fetched GitHub identities; no scanner rule or coverage changed.

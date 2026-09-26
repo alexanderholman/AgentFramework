@@ -154,3 +154,63 @@ not any upcoming archaeology changes. Continue the new audit and rerun all gates
 ### Receipt recovery port checkpoint — 2026-09-26
 
 Recovered useful issue-18 transactional projector behavior into `af.search.projection_receipts`, retaining the existing generic sink API and shared projection guard. Historical rollback-only/operation-claim, file-generation, restore/replay and cleanup regressions now run against current drivers. Typed unique-key conflicts are translated in adapters, not ORM-aware messaging code. Focused: **186 passed, 6 explicit service skips**; Ruff/strict mypy pass (374 sources). Real relational CI now includes atomic receipt recovery/race cases with an embedded search target. Full gate and final archaeology dispositions remain pending. See `docs/search-projection-recovery.md` for the precise capability and support boundary.
+
+
+### Qualified receipt checkpoint and next demonstrated blocker
+
+Published `1312fd0fc3fbbe4f5fcafc622b4b68c7a34ba14c`, tree
+`cdfac2153a7f95a42afa205ffe60ece4dfa11661`, preserving the live remote parent
+`773d9fa`. Canonical gate ran in fresh detached checkout `8aa163c` with that exact
+tree: **4,337 passed, 65 skipped, 91.46% branch coverage**, strict mypy 374 sources,
+Ruff, nine OpenCode tests, wheel-from-sdist inspection, clean runtime-only install
+and smoke, all 36 governance checks. Log: workspace `receipt-canonical.log`.
+The earlier working-tree run's sole failure was append-only records differing from
+HEAD; the fixed checkpoint passes that same gate without changing its enforcement.
+Remote relational/search/security workflows must still qualify this head.
+
+Archaeology exposed a genuine remaining #54 blocker: the installed current-time
+route still traverses a flat `ClassifierChain`. Live #54 explicitly rejects that
+as completion and requires typed hierarchy, parent-owned sibling recovery, bounded
+rung escalation and route evidence. The recovery branch's hierarchy tests are
+incomplete (nonexistent types/routers, weak budget assertions), so retain their
+intent through the current Classifier/Pipeline/ProcedureRegistry boundaries instead
+of copying the prototype. No second executor or provider-specific architecture.
+
+Other reviewed recovery semantics: current worker kernel/runtime/control replaces
+volatile `_seen` prototypes with durable idempotency, correct scope-exit ordering,
+lease renewal/fencing, cancellation/draining and bounded admission. Current telemetry
+context/signals/health retain independent dimensions, privacy and exporter isolation.
+Current manager admission requires manifest plus independent capability evidence;
+the old manager trusted driver self-reports. Async manager factories in that old
+alternate API are not an installed v0.1 requirement (#11); current synchronous
+factories reject awaitables explicitly, and application/container async lifecycle
+remains canonical. The alternate flag prototype has an eviction-prone cache as its
+store, a process-local key inventory, and unsafe open-circuit fallback; current typed
+FlagManager/FlagStore and context-local memoization supersede it. Old database setup
+plaintext password input/backup behavior is superseded by the current explicit,
+redacted, verified service and private environment writer. Final per-head manifest
+and the #54 repair remain in progress; do not declare archaeology complete yet.
+
+
+### Receipt CI repair in progress
+
+1312fd0 passed Python, PostgreSQL, MySQL, OpenSearch, Elasticsearch and Copilot CI.
+MariaDB run 36276212251 failed its new concurrent first-delivery certification
+(16 passed, 1 failed); its common canonical gate passed. A losing transaction's
+statement failed and savepoint rollback then failed, hiding the retry cause.
+Adapter regressions reproduce server rollback on vendor errors 1205/1213, forbid
+subsequent statements/commit, preserve the transient reason, and allow a fresh
+transaction. Focused combined suite: 91 passed. Live-service requalification pending.
+
+Security run 36276212326 passed Bandit/pip-audit but found 295 unreviewed hex strings
+in `tasks/stranded-work-inventory.json`. Every candidate was verified as an exact
+GitHub branch/PR commit identity, then recorded in `release/secret-reviews.json`
+with the existing exact fingerprint/source-line binding and expiry. No rule disabled.
+If the inventory is reformatted, recheck those exact line bindings before publication.
+
+The #54 hierarchy draft is local and not yet qualified: 23 framework regressions
+and default installed time/strawberry/introspection journeys are implemented through
+ClassifierChain and PipelineAgent; 137 focused tests pass after retaining ordered
+execution phases alongside new classifier-node trace events. Finish configured
+hierarchy injection, terminal-denial/cancellation/low-confidence end-to-end tests,
+shared policy checks, documentation and full gates before claiming it complete.

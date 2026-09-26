@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
 from af.framework.errors import PlatformReason
@@ -342,3 +342,49 @@ def test_mysql_transaction_operation_claim_is_irreversible_and_scoped(
             with pytest.raises(DatabaseOperationError) as captured:
                 bounded.claim_operation("search_projection_source_b")
             assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
+
+
+@pytest.mark.parametrize("code", [1205, 1213])
+def test_mysql_server_abort_requires_fresh_transaction_and_preserves_retry_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
+) -> None:
+    with _driver(monkeypatch) as driver:
+        with driver.transaction() as transaction:
+            transaction.execute(DatabaseStatement("CREATE TABLE records (id INTEGER)"))
+        connection = driver._connection
+        original_execute = connection.execute
+        original_control = connection.exec_driver_sql
+        controls: list[str] = []
+
+        def execute(statement, parameters):
+            if str(statement) == "INSERT INTO records VALUES (2)":
+                # Model the server losing its entire transaction and savepoints.
+                original_control("ROLLBACK")
+                raise OperationalError("private SQL", {}, Exception(code, "private backend detail"))
+            return original_execute(statement, parameters)
+
+        def control(statement):
+            controls.append(statement)
+            return original_control(statement)
+
+        monkeypatch.setattr(connection, "execute", execute)
+        monkeypatch.setattr(connection, "exec_driver_sql", control)
+        with pytest.raises(DatabaseOperationError) as outer, driver.transaction() as transaction:
+            transaction.execute(DatabaseStatement("INSERT INTO records VALUES (1)"))
+            with pytest.raises(DatabaseOperationError) as inner, transaction.savepoint("attempt"):
+                transaction.execute(DatabaseStatement("INSERT INTO records VALUES (2)"))
+            assert inner.value.reason is PlatformReason.TRANSIENT_FAILURE
+            with pytest.raises(DatabaseOperationError) as poisoned:
+                transaction.execute(DatabaseStatement("INSERT INTO records VALUES (3)"))
+            assert poisoned.value is inner.value
+        assert outer.value is inner.value
+        assert controls == ["SAVEPOINT attempt"]
+        assert "private" not in str(outer.value)
+        with driver.transaction() as fresh:
+            fresh.execute(DatabaseStatement("INSERT INTO records VALUES (4)"))
+        with driver.transaction(read_only=True) as fresh:
+            assert [
+                row["id"]
+                for row in fresh.query(DatabaseStatement("SELECT id FROM records", read_only=True))
+            ] == [4]

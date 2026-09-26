@@ -4366,3 +4366,8 @@ exact-head full/service/security qualification; no release approval is claimed.
 ## 2026-09-26 — Search receipt archaeology
 
 Archaeology checkpoint: historical receipt tests first failed import against the completion implementation. Adapted the SQLite race expectation to its existing BEGIN IMMEDIATE fence. Focused receipt, guard, relational and embedded suites: 186 passed, 6 explicit missing-service skips; Ruff and strict mypy passed (374 source files). Recovered eight transaction-claim/rollback regressions and four embedded file-generation/receipt regressions. Added service CI cases; final service and canonical qualification pending.
+
+
+## 2026-09-26 — InnoDB restart and inventory review
+
+At 1312fd0, Python, PostgreSQL, MySQL, OpenSearch, Elasticsearch and Copilot CI passed. MariaDB certification exposed a first-delivery race failure followed by lost-savepoint cleanup; the common canonical gate passed. Security Bandit and pip-audit passed; detect-secrets found 295 unreviewed Git object hashes in the new inventory. Added explicit hash reviews and reproducing server-abort tests before correcting adapter recovery; focused MySQL/MariaDB/projector/unique-conflict suite: 91 passed. Final exact-head service rerun pending.
