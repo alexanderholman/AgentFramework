@@ -153,6 +153,12 @@ def test_terminal_session_lease_rejects_overlap_and_releases_after_close(termina
         first.close()
     assert termios.tcgetattr(slave) == attributes
     assert signal.getsignal(signal.SIGTERM) == original
+    try:
+        assert second.open() == ResizeEvent(80, 24)
+    finally:
+        second.close()
+    assert termios.tcgetattr(slave) == attributes
+    assert signal.getsignal(signal.SIGTERM) == original
 
 
 def test_broken_terminal_output_still_restores_modes_signals_and_releases_lease(
@@ -200,11 +206,5 @@ def test_broken_terminal_output_still_restores_modes_signals_and_releases_lease(
         replacement.open()
     finally:
         replacement.close()
-    assert termios.tcgetattr(slave) == attributes
-    assert signal.getsignal(signal.SIGTERM) == original
-    try:
-        assert second.open() == ResizeEvent(80, 24)
-    finally:
-        second.close()
     assert termios.tcgetattr(slave) == attributes
     assert signal.getsignal(signal.SIGTERM) == original

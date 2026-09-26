@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
-from af.interfaces.http import create_http_app
 from af.infrastructure.http_operations import SQLiteHttpOperations
+from af.interfaces.http import create_http_app
 
 
 def test_etag_precondition_rejects_stale_changes_before_execution(application):
