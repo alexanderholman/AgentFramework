@@ -106,3 +106,51 @@ Do not expose API keys or raw token secrets. Jev is opt-in and one-use consented
 no paid provider calls or external messages have been made by this mission. Live
 Mongo/Neo4j/OrientDB/S3/GCS/Azure/SFTP service qualification is not claimed. Test
 loopback SMTP and peer sockets are local fixture traffic only.
+
+
+### Stranded-work archaeology in progress — 2026-09-26
+
+Additional user direction requires **every live branch and historical/open/closed PR
+head** to receive a semantic disposition before completion. This expands the final
+audit, not the feature roadmap. The new inventory is
+[`stranded-work-inventory.json`](stranded-work-inventory.json): 113 branches, 143 PRs,
+160 distinct heads compared with `773d9fac495ac09176a5b7048ed51724a5c29757`.
+Both API inventories were paginated to exhaustion. All 160 comparisons were fetched;
+none hit the 300-file truncation boundary. 537 differing historical file versions
+were inspected or recovered by exact Git blob hash (467 downloaded, 70 already local).
+Raw comparison/blob evidence is in the current workspace `archaeology/` directory;
+the immutable head/blob references permit recovery without conversation state.
+
+Do not equate unique ancestry with stranded behavior. Initial semantic findings:
+
+- Ideon: 28/39 changed files are byte-identical, including all three design docs,
+  application services and seven extensive unit suites. The only two domain-file
+  differences are Ruff type-union ordering. Current bootstrap/interface integration
+  is preserved; the historical specification was read in full.
+- Version control: all eight implementation/test files are byte-identical; the
+  current console adapter carries the historical command behind the shared service.
+- GitHub self-design publisher: all five files byte-identical, including race/result/
+  validation regressions. Local recording is stronger (canonical persisted replay).
+- Feature flags: contracts, manager, memory adapter, exports and full historical
+  suite match exactly; only the reviewed FIPS-safe non-security MD5 use changed.
+- Genuine candidate needing work: `agent/issue-18-transactional-projector` adds
+  target-generation/receipt/restore and rollback-only transaction protections beyond
+  the current simple projector. Port regression intent first; preserve current
+  architecture and real-service qualification. Recovery branches and other absent
+  or changed test bodies still need individual semantic disposition.
+
+Before archaeology, exact head `773d9fa` passed all eight live workflows (Python,
+security, five relational/search service profiles, Copilot setup). Local full gate:
+4,256 passed, 59 skipped, 91.53% branch coverage, 373 typed source files, nine OpenCode
+tests, package and 36 governance checks. Standard runtime-only wheel installation
+(53 locked dependencies, no development extra) then passed 34 fresh-process commands,
+including initialization, persistence, workflow resume/cancel, science/catalogues,
+local signed peer execution/replay/revocation and authenticated backup/restore.
+The earlier custom launcher peer failure was its missing multiprocessing main guard;
+the generated wheel console entrypoint works. These results qualify that candidate,
+not any upcoming archaeology changes. Continue the new audit and rerun all gates.
+
+
+### Receipt recovery port checkpoint — 2026-09-26
+
+Recovered useful issue-18 transactional projector behavior into `af.search.projection_receipts`, retaining the existing generic sink API and shared projection guard. Historical rollback-only/operation-claim, file-generation, restore/replay and cleanup regressions now run against current drivers. Typed unique-key conflicts are translated in adapters, not ORM-aware messaging code. Focused: **186 passed, 6 explicit service skips**; Ruff/strict mypy pass (374 sources). Real relational CI now includes atomic receipt recovery/race cases with an embedded search target. Full gate and final archaeology dispositions remain pending. See `docs/search-projection-recovery.md` for the precise capability and support boundary.

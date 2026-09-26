@@ -4202,3 +4202,8 @@ finding and explicitly identify automated review; they confer no human approval.
 The package smoke uses a fresh target with locked runtime-only dependencies and
 Python -I -S. That is current-host isolated installation evidence, not an OS sandbox
 or cross-platform certification. No release tag, merge or deployment is authorized.
+
+
+## 2026-09-26 — Search receipt archaeology
+
+Port agent/issue-18-transactional-projector semantically into af.search.projection_receipts and the existing relational/embedded search boundaries. Reuse TransactionalProjectionGuard; translate vendor unique-key codes in adapters into DatabaseUniqueConflict so messaging never imports SQLite or SQLAlchemy. Only typed unique conflicts become retryable projection races. Keep all existing cancellation/locking improvements.

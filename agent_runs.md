@@ -4361,3 +4361,8 @@ PEP 751 artifact URLs/hashes for offline installation. Reproduced the cache fail
 before the fix. The roadmap audit also found the absent `af test` command; its thin
 pytest adapter passed an actual subprocess pass/fail/no-state regression. Continue
 exact-head full/service/security qualification; no release approval is claimed.
+
+
+## 2026-09-26 — Search receipt archaeology
+
+Archaeology checkpoint: historical receipt tests first failed import against the completion implementation. Adapted the SQLite race expectation to its existing BEGIN IMMEDIATE fence. Focused receipt, guard, relational and embedded suites: 186 passed, 6 explicit missing-service skips; Ruff and strict mypy passed (374 source files). Recovered eight transaction-claim/rollback regressions and four embedded file-generation/receipt regressions. Added service CI cases; final service and canonical qualification pending.

@@ -17,12 +17,14 @@ from af.framework.relational import (
     DatabaseOperationError,
     DatabaseRow,
     DatabaseStatement,
+    DatabaseUniqueConflict,
     UnsupportedDatabaseFeature,
 )
 
 __all__ = ("SQLiteDriver",)
 
 _SAVEPOINT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_MAX_OPERATION_CLAIMS = 1_024
 _FEATURES = frozenset(
     {
         DatabaseFeature.TRANSACTIONS,
@@ -39,6 +41,8 @@ def _failure(error: BaseException, *, stage: str) -> DatabaseOperationError:
         getattr(error, "sqlite_errorcode", None) if isinstance(error, sqlite3.Error) else None
     )
     code = raw_code & 0xFF if type(raw_code) is int else None
+    if raw_code in {sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY, sqlite3.SQLITE_CONSTRAINT_UNIQUE}:
+        return DatabaseUniqueConflict(stage=stage, protected_cause=error)
     if code == sqlite3.SQLITE_INTERRUPT:
         reason = PlatformReason.CANCELLED
     elif code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
@@ -114,11 +118,17 @@ class _SQLiteTransaction:
         self._connection = connection
         self._read_only = read_only
         self._active = True
+        self._rollback_only = False
+        self._operation_claims: set[str] = set()
         self._cursors: list[_SQLiteCursor] = []
 
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def rollback_only(self) -> bool:
+        return self._rollback_only
 
     def _assert_active(self) -> None:
         if not self._active:
@@ -182,10 +192,29 @@ class _SQLiteTransaction:
             raise ValueError("database savepoint name must be canonical")
         return _SQLiteSavepoint(self, name)
 
+    def mark_rollback_only(self) -> None:
+        self._assert_active()
+        self._rollback_only = True
+
+    def claim_operation(self, name: str, /) -> bool:
+        self._assert_active()
+        if type(name) is not str or _SAVEPOINT.fullmatch(name) is None:
+            raise ValueError("database operation claim must be canonical")
+        if name in self._operation_claims:
+            return False
+        if len(self._operation_claims) >= _MAX_OPERATION_CLAIMS:
+            raise DatabaseOperationError(
+                reason=PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="database.transaction.claim",
+            )
+        self._operation_claims.add(name)
+        return True
+
     def finish(self) -> None:
         for cursor in self._cursors:
             cursor.close()
         self._cursors.clear()
+        self._operation_claims.clear()
         self._active = False
 
 
@@ -232,9 +261,10 @@ class _SQLiteTransactionContext(AbstractContextManager[_SQLiteTransaction]):
     ) -> Literal[False]:
         del error, traceback
         transaction = self._transaction
+        rollback_only = transaction is not None and transaction.rollback_only
         try:
             try:
-                if error_type is None:
+                if error_type is None and not rollback_only:
                     self._driver._connection.commit()
                 else:
                     self._driver._connection.rollback()
@@ -248,6 +278,11 @@ class _SQLiteTransactionContext(AbstractContextManager[_SQLiteTransaction]):
                     self._driver._connection.execute("PRAGMA query_only = OFF")
         finally:
             self._driver._lock.release()
+        if rollback_only and error_type is None:
+            raise DatabaseOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="database.transaction.rollback-only",
+            )
         return False
 
 

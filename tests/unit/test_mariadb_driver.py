@@ -279,3 +279,44 @@ def test_caught_mariadb_cancellation_taints_transaction_and_rolls_back(
         )
     assert rows[0]["count"] == 0
     driver.close()
+
+
+def test_mariadb_rollback_only_prevents_caught_failure_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _driver(monkeypatch) as driver:
+        with driver.transaction() as transaction:
+            transaction.execute(DatabaseStatement("CREATE TABLE records (id INTEGER)"))
+        with (
+            pytest.raises(DatabaseOperationError) as captured,
+            driver.transaction() as transaction,
+        ):
+            transaction.execute(DatabaseStatement("INSERT INTO records VALUES (1)"))
+            transaction.mark_rollback_only()
+        with driver.transaction(read_only=True) as transaction:
+            rows = transaction.query(DatabaseStatement("SELECT id FROM records", read_only=True))
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert captured.value.stage == "database.transaction.rollback-only"
+    assert rows == ()
+
+
+def test_mariadb_transaction_operation_claim_is_irreversible_and_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _driver(monkeypatch) as driver:
+        with driver.transaction() as transaction:
+            assert transaction.claim_operation("search_projection_source_a") is True
+            assert transaction.claim_operation("search_projection_source_a") is False
+            with pytest.raises(ValueError):
+                transaction.claim_operation("not canonical")
+        with pytest.raises(DatabaseOperationError):
+            transaction.claim_operation("search_projection_source_a")
+        with driver.transaction() as fresh:
+            assert fresh.claim_operation("search_projection_source_a") is True
+        monkeypatch.setattr(mysql_module, "_MAX_OPERATION_CLAIMS", 1)
+        with driver.transaction() as bounded:
+            assert bounded.claim_operation("search_projection_source_a") is True
+            with pytest.raises(DatabaseOperationError) as captured:
+                bounded.claim_operation("search_projection_source_b")
+            assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE

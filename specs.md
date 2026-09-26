@@ -3391,3 +3391,8 @@ outcomes without replay. Package smoke MUST execute with only hash-verified lock
 runtime dependencies and no development or user-site imports. Exact expiring source
 reviews may classify proven synthetic secret candidates, but MUST retain findings,
 reject changed lines and never suppress dependency or static security findings.
+
+
+## 2026-09-26 — Search receipt archaeology
+
+Recover the historical issue-18 atomic search receipt contract with explicit physical generation/version, deterministic source ownership, target-behind-checkpoint denial, and rollback-only outer transactions. Existing search sink behavior and stronger SQLite writer fencing remain intact. External search adapters do not acquire an unproved atomic-receipt capability.

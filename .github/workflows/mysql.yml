@@ -77,16 +77,27 @@ jobs:
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
+              src/af/infrastructure/sqlite.py \
+              src/af/messaging/__init__.py \
+              src/af/messaging/projections.py \
+              src/af/search/embedded.py \
+              src/af/search/lifecycle.py \
+              src/af/search/projection_receipts.py \
               src/af/messaging/relay.py \
               tests/feature/test_cli_database_setup.py \
               tests/unit/test_database_setup.py \
               tests/unit/test_local_mariadb_setup.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
+              tests/unit/test_projection_guard.py \
+              tests/unit/test_relational_unique_conflict.py \
+              tests/unit/test_search_projection_receipts.py \
+              tests/integration/test_search_embedded.py \
               tests/unit/test_outbox_relay.py \
               tests/integration/test_mysql_relational.py \
               tests/integration/test_migrations_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_search_projection_receipts_relational.py \
               tests/integration/test_outbox_relay_relational.py
             uv run ruff check \
               src/af/application/database_setup.py \
@@ -97,16 +108,27 @@ jobs:
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
+              src/af/infrastructure/sqlite.py \
+              src/af/messaging/__init__.py \
+              src/af/messaging/projections.py \
+              src/af/search/embedded.py \
+              src/af/search/lifecycle.py \
+              src/af/search/projection_receipts.py \
               src/af/messaging/relay.py \
               tests/feature/test_cli_database_setup.py \
               tests/unit/test_database_setup.py \
               tests/unit/test_local_mariadb_setup.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
+              tests/unit/test_projection_guard.py \
+              tests/unit/test_relational_unique_conflict.py \
+              tests/unit/test_search_projection_receipts.py \
+              tests/integration/test_search_embedded.py \
               tests/unit/test_outbox_relay.py \
               tests/integration/test_mysql_relational.py \
               tests/integration/test_migrations_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_search_projection_receipts_relational.py \
               tests/integration/test_outbox_relay_relational.py
             uv run mypy \
               src/af/application/database_setup.py \
@@ -117,6 +139,12 @@ jobs:
               src/af/infrastructure/mysql.py \
               src/af/infrastructure/mysql_manager.py \
               src/af/messaging/outbox.py \
+              src/af/infrastructure/sqlite.py \
+              src/af/messaging/__init__.py \
+              src/af/messaging/projections.py \
+              src/af/search/embedded.py \
+              src/af/search/lifecycle.py \
+              src/af/search/projection_receipts.py \
               src/af/messaging/relay.py
             uv run pytest -q \
               tests/feature/test_cli_database_setup.py \
@@ -124,6 +152,10 @@ jobs:
               tests/unit/test_local_mariadb_setup.py \
               tests/unit/test_mysql_driver.py \
               tests/unit/test_mysql_manager.py \
+              tests/unit/test_projection_guard.py \
+              tests/unit/test_relational_unique_conflict.py \
+              tests/unit/test_search_projection_receipts.py \
+              tests/integration/test_search_embedded.py \
               tests/unit/test_outbox_relay.py
           } 2>&1 | tee mysql-quality.log
 
@@ -137,6 +169,7 @@ jobs:
               tests/integration/test_mysql_relational.py \
               tests/integration/test_migrations_relational.py \
               tests/integration/test_transactional_outbox_relational.py \
+              tests/integration/test_search_projection_receipts_relational.py \
               tests/integration/test_outbox_relay_relational.py \
             2>&1 | tee mysql-integration.log
 
@@ -167,16 +200,27 @@ jobs:
             src/af/infrastructure/mysql.py
             src/af/infrastructure/mysql_manager.py
             src/af/messaging/outbox.py
+            src/af/infrastructure/sqlite.py
+            src/af/messaging/__init__.py
+            src/af/messaging/projections.py
+            src/af/search/embedded.py
+            src/af/search/lifecycle.py
+            src/af/search/projection_receipts.py
             src/af/messaging/relay.py
             tests/feature/test_cli_database_setup.py
             tests/unit/test_database_setup.py
             tests/unit/test_local_mariadb_setup.py
             tests/unit/test_mysql_driver.py
             tests/unit/test_mysql_manager.py
+            tests/unit/test_projection_guard.py
+            tests/unit/test_relational_unique_conflict.py
+            tests/unit/test_search_projection_receipts.py
+            tests/integration/test_search_embedded.py
             tests/unit/test_outbox_relay.py
             tests/integration/test_mysql_relational.py
             tests/integration/test_migrations_relational.py
             tests/integration/test_transactional_outbox_relational.py
+            tests/integration/test_search_projection_receipts_relational.py
             tests/integration/test_outbox_relay_relational.py
           if-no-files-found: error
           retention-days: 1

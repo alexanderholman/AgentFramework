@@ -148,3 +148,6 @@ Primary API references used for adapter semantics:
 - [Boto3 S3 API](https://docs.aws.amazon.com/boto3/latest/reference/services/s3.html)
 - [Azure BlobClient](https://learn.microsoft.com/python/api/azure-storage-blob/azure.storage.blob.blobclient)
 - [Google Cloud Storage Blob](https://docs.cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.blob.Blob)
+
+Search projection acknowledgement and optional atomic receipt recovery guarantees
+are described in [search projection recovery](search-projection-recovery.md).
