@@ -166,6 +166,33 @@ def test_database_cache_read_failures_keep_the_get_failure_stage(
     cache.close()
 
 
+@pytest.mark.parametrize("corrupt", (False, True))
+def test_database_stale_read_cleanup_preserves_concurrent_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corrupt: bool
+) -> None:
+    clock = Clock()
+    path = tmp_path / "cache-race.sqlite3"
+    first = DatabaseCacheDriver(url=_url(path), clock=clock)
+    second = DatabaseCacheDriver(url=_url(path), clock=clock)
+    namespace, key = _namespace(), CacheKey("replacement")
+    first.set(namespace, key, b"stale", ttl=timedelta(seconds=1))
+    clock.now += timedelta(seconds=1)
+    if corrupt:
+        with sqlite3.connect(path) as connection:
+            connection.execute("UPDATE af_cache_entries SET expires_at = 'invalid'")
+    original_expiry = first._expiry
+
+    def replace_before_cleanup(value: object) -> datetime | None:
+        second.set(namespace, key, b"replacement", ttl=timedelta(seconds=30))
+        return original_expiry(value)
+
+    monkeypatch.setattr(first, "_expiry", replace_before_cleanup)
+    assert first.get(namespace, key) is None
+    assert second.get(namespace, key) == b"replacement"
+    first.close()
+    second.close()
+
+
 def test_database_cache_flush_is_exactly_namespace_and_tenant_scoped(tmp_path: Path) -> None:
     cache = DatabaseCacheDriver(url=_url(tmp_path / "cache.sqlite3"), clock=Clock())
     tenant_a = _namespace("tenant-a")
@@ -246,7 +273,6 @@ def test_database_lock_is_owner_fenced_across_driver_instances(tmp_path: Path) -
     assert second.release_lock(namespace, key, second_lease)
     first.close()
     second.close()
-
 
 
 def test_database_lock_release_preserves_fencing_progression(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
 from typing import Protocol, cast
+from uuid import uuid4
 
 from af.cache.contracts import (
     CacheKey,
@@ -510,7 +511,9 @@ class MemcachedCacheDriver:
         # This trades at most one second of reacquisition latency for ownership safety.
         release_ttl = timedelta(seconds=1)
         release_marker = LockLease(
-            owner=lease.owner,
+            # A distinct identity also invalidates the released handle when its
+            # original deadline happens to equal the tombstone deadline.
+            owner=LockOwner(f"released:{uuid4().hex}"),
             fencing_token=lease.fencing_token,
             expires_at=now + release_ttl,
         )
