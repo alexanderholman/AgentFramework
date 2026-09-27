@@ -9,6 +9,17 @@ from threading import Event, RLock
 from types import TracebackType
 from typing import Literal, Never, cast
 
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import (
+    Connection,
+    CursorResult,
+    Engine,
+    RootTransaction,
+    make_url,
+)
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import StaticPool
+
 from af.framework.errors import PlatformReason
 from af.framework.relational import (
     DatabaseCursor,
@@ -20,16 +31,6 @@ from af.framework.relational import (
     DatabaseValue,
     UnsupportedDatabaseFeature,
 )
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import (
-    Connection,
-    CursorResult,
-    Engine,
-    RootTransaction,
-    make_url,
-)
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import StaticPool
 
 __all__ = ("MySQLDriver",)
 

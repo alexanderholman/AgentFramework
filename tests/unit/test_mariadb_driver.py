@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.pool import StaticPool
+
 from af.framework.errors import PlatformReason
 from af.framework.relational import (
     DatabaseFeature,
@@ -10,13 +14,9 @@ from af.framework.relational import (
     DatabaseStatement,
     UnsupportedDatabaseFeature,
 )
-from af.infrastructure.mariadb import MariaDBDriver
-from sqlalchemy import create_engine
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
-from sqlalchemy.pool import StaticPool
-
 from af.infrastructure import mariadb as mariadb_module
 from af.infrastructure import mysql as mysql_module
+from af.infrastructure.mariadb import MariaDBDriver
 
 
 def _sqlite_engine(_url: str, **_options: object):
