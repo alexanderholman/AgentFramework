@@ -254,3 +254,31 @@ All historical heads now have semantic dispositions in
 160 distinct heads): 20 INCORPORATED, 136 SUPERSEDED, three PORTED, one OBSOLETE.
 No NEEDS-WORK remains. Archaeology is closed; stabilize/qualify only. The three ports
 are transactional receipts, existing #54 hierarchy and UoW rollback suppression.
+
+
+## MariaDB retry checkpoint — 2026-09-27
+
+Published exact-head checkpoint `216d88a2cb3f7a076ee8cda7cbb5cc86b8a74b39`.
+The remaining MariaDB first-writer race exposed numeric driver error 1020
+(record changed since last read); the transaction adapter classified it as
+permanent, then savepoint cleanup reported 1305 after MariaDB had removed the
+savepoint. MySQL-family error 1020 now follows the existing transient/restart path,
+so savepoint cleanup preserves the original retryable failure. A focused unit
+regression covers the translation; real service certification covers the race.
+No SQL, parameter values or backend messages are exposed by the diagnostic.
+
+Exact-head GitHub evidence: all eight workflows passed (AF Python, release security,
+MySQL, MariaDB, PostgreSQL, OpenSearch, Elasticsearch and Copilot Setup). The full
+Python gate reports 4,395 passed, 65 skipped, 91.46% branch coverage; Ruff, strict
+mypy, the nine OpenCode tests, package gate and all 36 governance checks pass.
+MariaDB real-service certification, common canonical gate and enforcement all pass
+on the same head. The package gate validated version 0.1.0a0, sdist and wheel.
+Workflow runs: Python 36347549323; security 36347549325; MySQL 36347549336;
+MariaDB 36347549318; PostgreSQL 36347549328; OpenSearch 36347549339;
+Elasticsearch 36347549362; Copilot 36347549320.
+
+The MariaDB blocker is closed. Continue release convergence on this exact head:
+reconcile the final clean-room runtime-only install/smoke, user-journey and source
+completion audit evidence after the recent stabilization changes. Preserve genuine
+external qualification limits already listed above. Do not broaden the feature
+roadmap or merge until the mission's final audit is complete.
