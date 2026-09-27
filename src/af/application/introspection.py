@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from af.framework.managers import DriverManifest
 from af.framework.routing import ProcedureRegistry
 from af.framework.types import ProcedureDescriptor
@@ -13,10 +15,12 @@ class IntrospectionService:
         registry: ProcedureRegistry,
         providers: tuple[str, ...],
         drivers: tuple[DriverManifest, ...] = (),
+        classifier_topology: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self._registry = registry
         self._providers = providers
         self._drivers = drivers
+        self._classifier_topology = classifier_topology
 
     def drivers(self) -> tuple[DriverManifest, ...]:
         return self._drivers
@@ -30,6 +34,9 @@ class IntrospectionService:
     def describe(self) -> dict[str, object]:
         return {
             "schema_version": "1.0.0",
+            "classifier_hierarchy": {}
+            if self._classifier_topology is None
+            else self._classifier_topology(),
             "lifecycle": ["classify", "route", "execute", "verify", "record", "test", "reuse"],
             "providers": list(self._providers),
             "procedures": [item.procedure_id for item in self.procedures()],

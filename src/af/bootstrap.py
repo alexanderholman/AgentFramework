@@ -76,6 +76,7 @@ from af.config import (
 )
 from af.domain.agent_routing import DeterministicAgentRouter
 from af.domain.catalogue_procedures import CatalogueProvider
+from af.domain.classifier_topology import default_classifier_hierarchy
 from af.domain.classifiers import (
     CharacterCountClassifier,
     ClassifierChain,
@@ -93,6 +94,7 @@ from af.domain.science_procedures import ScienceProvider
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier
 from af.framework.application import Application
+from af.framework.classification_hierarchy import HierarchyRouter
 from af.framework.container import (
     Container,
     ProviderRegistrar,
@@ -259,7 +261,9 @@ class _FrameworkProvider(ServiceProvider):
         selector: Selector | None,
         selector_metadata: SelectorMetadata | None,
         selector_confidence_threshold: float,
+        classifier_hierarchy: HierarchyRouter | None,
     ) -> None:
+        self._classifier_hierarchy = classifier_hierarchy
         self._reuse_store = reuse_store
         self._selector = selector
         self._selector_metadata = selector_metadata
@@ -286,7 +290,13 @@ class _FrameworkProvider(ServiceProvider):
                 for contribution in resolve_procedure_contributions(resolver)
             )
             classifiers.append(UnknownClassifier())
-            return ClassifierChain(classifiers)
+            return ClassifierChain(
+                classifiers,
+                hierarchy=self._classifier_hierarchy
+                or default_classifier_hierarchy(
+                    resolver.resolve(ProcedureRegistry), resolve_procedure_contributions(resolver)
+                ),
+            )
 
         container.bind(
             ProcedureRegistry,
@@ -797,6 +807,7 @@ def create_application(
     ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
+    classifier_hierarchy: HierarchyRouter | None = None,
     providers: Iterable[ServiceProvider] = (),
 ) -> AFApplication:
     """Build an isolated application; tests and hosts can replace any provider."""
@@ -810,6 +821,7 @@ def create_application(
         ideon_service=ideon_service,
         reuse_store=reuse_store,
         selector=selector,
+        classifier_hierarchy=classifier_hierarchy,
         providers=providers,
     )
     try:
@@ -831,6 +843,7 @@ async def create_application_async(
     ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
+    classifier_hierarchy: HierarchyRouter | None = None,
     providers: Iterable[ServiceProvider] = (),
 ) -> AFApplication:
     """Build an application whose providers may use asynchronous lifecycle hooks."""
@@ -843,6 +856,7 @@ async def create_application_async(
         ideon_service=ideon_service,
         reuse_store=reuse_store,
         selector=selector,
+        classifier_hierarchy=classifier_hierarchy,
         providers=providers,
     )
     try:
@@ -868,8 +882,11 @@ def _prepare_application(
     ideon_service: IdeonService | None,
     reuse_store: ReuseStore | None,
     selector: Selector | None,
+    classifier_hierarchy: HierarchyRouter | None,
     providers: Iterable[ServiceProvider],
 ) -> _ApplicationBuild:
+    if classifier_hierarchy is not None and type(classifier_hierarchy) is not HierarchyRouter:
+        raise TypeError("classifier hierarchy must be a configured HierarchyRouter")
     if settings is not None and config is not None:
         raise ValueError("provide settings or config, not both")
     resolved_config = (
@@ -914,6 +931,7 @@ def _prepare_application(
             selector,
             selector_metadata,
             selector_confidence_threshold,
+            classifier_hierarchy,
         ),
         ScienceProvider(),
         CatalogueProvider(),

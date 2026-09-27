@@ -3401,3 +3401,13 @@ Recover the historical issue-18 atomic search receipt contract with explicit phy
 ## 2026-09-26 — InnoDB restart and inventory review
 
 MySQL/MariaDB InnoDB lock timeout and deadlock errors require a fresh outer transaction. A caught retryable error must prevent further statements or commit; savepoint cleanup must not replace the original retry reason when server rollback removed savepoints.
+
+## 2026-09-27 — Existing #54 hierarchy and transaction failure preservation
+
+Classifiers traverse host-declared, versioned, bounded catalogue trees and ordered
+rungs. Parent-owned sibling recovery follows only NoRoute; ambiguity, denial,
+malformed output, cancellation and exhausted budgets are terminal. Statistical
+ancestors require existing selector grounding/policy at the shared execution
+boundary. Live procedure identities are revalidated and traces retain no prompt
+or argument content. UnitOfWork must propagate a failed body even if a transaction
+adapter suppresses it after rollback; rollback cannot appear as completed work.

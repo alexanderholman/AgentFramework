@@ -51,7 +51,7 @@ def test_pipeline_runs_af_stages_in_order(application) -> None:  # type: ignore[
     assert outcome.output == "3"
     assert outcome.verified is True
     assert outcome.route == "character-count"
-    assert [event.stage for event in trace.events] == [
+    assert [event.stage for event in trace.events if not event.stage.startswith("classify-")] == [
         "classify",
         "route",
         "execute",

@@ -4371,3 +4371,22 @@ Archaeology checkpoint: historical receipt tests first failed import against the
 ## 2026-09-26 — InnoDB restart and inventory review
 
 At 1312fd0, Python, PostgreSQL, MySQL, OpenSearch, Elasticsearch and Copilot CI passed. MariaDB certification exposed a first-delivery race failure followed by lost-savepoint cleanup; the common canonical gate passed. Security Bandit and pip-audit passed; detect-secrets found 295 unreviewed Git object hashes in the new inventory. Added explicit hash reviews and reproducing server-abort tests before correcting adapter recovery; focused MySQL/MariaDB/projector/unique-conflict suite: 91 passed. Final exact-head service rerun pending.
+
+## 2026-09-27 — MariaDB repair qualified; bounded final archaeology regressions
+
+Canonical repair candidate: 4,339 passed, 65 skipped, 91.46% branch coverage,
+Ruff, strict mypy, nine OpenCode tests, package clean install/smoke and 36 governance
+checks. Published b235679; live MariaDB certification and release-security passed
+at inspection, remaining workflow stages pending. Hierarchy public regressions
+failed before injection and policy integration; 165 focused checks then passed.
+Historical UoW suppression test failed before a minimal propagation repair.
+Rechecked all 113 branches and 143 PRs; only the completion branch advanced.
+No final completion or all-head disposition claim is made by this checkpoint.
+
+## 2026-09-27 — Correct MariaDB evidence after raw-log inspection
+
+The earlier successful step conclusion was continue-on-error presentation, not
+service success. Raw job 108520786699 still has one first-writer savepoint failure;
+16 service tests passed and 20 skipped; canonical passed; enforcement correctly failed.
+Add bounded numeric vendor-code diagnostics to the unchanged assertion and investigate.
+All 160 historical heads now have recorded semantic dispositions; stop archaeology.

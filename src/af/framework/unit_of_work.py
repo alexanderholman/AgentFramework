@@ -147,7 +147,9 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
             if error_type is None:
                 self._committed = True
                 callbacks = tuple(self._callbacks)
-            return_value = bool(suppressed)
+            # A driver may suppress an exception while cleaning up its transaction.
+            # The application unit must still report failed work, never completion.
+            return_value = bool(suppressed) if error_type is None else False
         finally:
             self._active = False
             self._transaction = None

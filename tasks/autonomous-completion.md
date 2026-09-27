@@ -214,3 +214,43 @@ ClassifierChain and PipelineAgent; 137 focused tests pass after retaining ordere
 execution phases alongside new classifier-node trace events. Finish configured
 hierarchy injection, terminal-denial/cancellation/low-confidence end-to-end tests,
 shared policy checks, documentation and full gates before claiming it complete.
+
+## 2026-09-27 stabilization checkpoint and archaeology boundary
+
+Published `b235679` repairs InnoDB restart handling and exact source-bound secret
+reviews. Immutable tree `60ea23a` passed canonical check: 4,339 passed, 65 skipped,
+91.46% branch coverage, strict mypy (374 sources), Ruff, nine OpenCode tests,
+wheel-from-sdist clean install/smoke and 36 governance checks. Log:
+`retry-canonical-confirmed.log` in the session workspace. Live MariaDB run 36283870441
+passed its real-service certification stage including the first-writer race;
+release-security run 36283870447 passed. Await complete workflow enforcement.
+
+The user's stabilization correction is authoritative: NEEDS-WORK denotes unfinished
+classification, not an obligation to port. No #213+ draft epic is in this mission.
+The all-green `773d9fa` remains the archaeology baseline; only demonstrated v0.1
+invariants justify changing it. Rechecked 113 live branches and 143 all-state PRs;
+only this completion branch/PR advanced during archaeology.
+
+Two additional concrete regressions justify the remaining local changes: #54's
+previously absent hierarchical traversal (historical incomplete test/spec, current
+public-bootstrap regression fails before integration), and the historical UoW
+suppressed-body-failure invariant (a real SQLite rollback hidden by a transaction
+adapter falsely returned success; failing test now preserved with a minimal fix).
+Hierarchy reuses the registry/pipeline/verifier, retains statistical grounding and
+terminal denial, and adds explicit budgets/current catalogue checks. It does not
+add a parallel executor. See `docs/classifier-hierarchy.md`. Local focused hierarchy
+checks: 165 passed before final trace-identity assertions. Requalify exact final tree.
+
+Correction from complete MariaDB job 108520786699: GitHub's continue-on-error step
+conclusion reported success, but its raw log still shows the competing first-writer
+regression failing (16 passed, one failed, 20 skipped), followed by successful canonical
+gate and failed enforcement. The first repair correctly handles 1205/1213, but the
+actual remaining savepoint failure needs numeric vendor evidence. The integration
+assertion now reports only bounded numeric exception codes, never SQL/parameters or
+backend messages. Enforcement remains unchanged. Do not call MariaDB qualified yet.
+
+All historical heads now have semantic dispositions in
+`tasks/stranded-work-dispositions.md` and the JSON inventory (113 branches, 143 PRs,
+160 distinct heads): 20 INCORPORATED, 136 SUPERSEDED, three PORTED, one OBSOLETE.
+No NEEDS-WORK remains. Archaeology is closed; stabilize/qualify only. The three ports
+are transactional receipts, existing #54 hierarchy and UoW rollback suppression.

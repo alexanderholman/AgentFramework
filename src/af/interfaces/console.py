@@ -37,6 +37,7 @@ from af.bootstrap_scheduling import SchedulerRuntime
 from af.bootstrap_setup import create_machine_setup_controller, machine_root
 from af.config import Settings
 from af.domain.algorithms import ReferenceAlgorithms
+from af.domain.classifiers import ClassifierChain
 from af.framework.errors import AFError, PlatformError, PlatformReason, ServiceNotBound
 from af.framework.routing import ProcedureRegistry
 from af.framework.self_alignment_operation import SelfAlignmentOperation
@@ -106,6 +107,7 @@ def create_cli(
             current.container.resolve(ProcedureRegistry),
             current.lifecycle.provider_order,
             current.container.resolve(SearchManager).driver_manifests,
+            current.container.resolve(ClassifierChain).describe_hierarchy,
         )
 
     def doctor_report() -> dict[str, object]:

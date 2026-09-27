@@ -447,7 +447,25 @@ def _exercise_concurrent_first_delivery(
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
 
-        assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+        # Diagnostic evidence must retain numeric vendor codes without printing SQL,
+        # parameters or backend messages from protected exception chains.
+        pending: list[BaseException] = [captured.value]
+        seen: set[int] = set()
+        vendor_codes: list[int] = []
+        while pending and len(seen) < 16:
+            error = pending.pop()
+            if id(error) in seen:
+                continue
+            seen.add(id(error))
+            if error.args and type(error.args[0]) is int:
+                vendor_codes.append(error.args[0])
+            for attribute in ("orig", "protected_cause", "__context__", "__cause__"):
+                nested = getattr(error, attribute, None)
+                if isinstance(nested, BaseException):
+                    pending.append(nested)
+        assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE, (
+            f"sanitized vendor error codes: {sorted(set(vendor_codes))}"
+        )
         with second.transaction() as retry:
             assert projector.apply(retry, delivery) is ProjectionDecision.DUPLICATE
         assert tuple(hit.resource_id for hit in search.search(_query("original"))) == (

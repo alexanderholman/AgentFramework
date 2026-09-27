@@ -4212,3 +4212,14 @@ Port agent/issue-18-transactional-projector semantically into af.search.projecti
 ## 2026-09-26 — InnoDB restart and inventory review
 
 Treat vendor errors 1205/1213 as transient in the MySQL adapter shared by MariaDB, mark the transaction rollback-only, retain the first retry error, and skip invalid savepoint cleanup while the outer boundary rolls back. The real first-writer race accepts either unique/CAS conflict or transaction restart but still requires transient classification, fresh replay as DUPLICATE and preserved content. Reviewed 295 exact non-secret Git object hash candidates in the archaeology inventory against fetched GitHub identities; no scanner rule or coverage changed.
+
+## 2026-09-27 — Keep archaeology bounded to demonstrated v0.1 invariants
+
+Classify historical intent against current tests before porting. Preserve the
+qualified 773d9fa baseline except for demonstrated missing invariants. #54 remains
+an existing v0.1 requirement and its hierarchy is composed through the current
+PipelineAgent; no historical executor or provider-specific core is revived.
+A historical UoW test exposed suppressed rollback being mistaken for success;
+retain one regression and a minimal failure-propagation fix. Draft epics #213+
+remain outside PR #212. Stop archaeology once every historical head has a semantic
+disposition and these demonstrated regressions are qualified.

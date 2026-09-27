@@ -99,3 +99,39 @@ def test_database_manager_validates_unit_of_work_before_driver_resolution() -> N
     assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE
     assert manager.resolved_connections == ()
     manager.close()
+
+
+def test_unit_of_work_cannot_hide_body_failure_suppressed_by_transaction_adapter():
+    """Retain the historical UoW invariant: rollback is never successful completion."""
+    from contextlib import contextmanager
+
+    driver = SQLiteDriver(":memory:")
+    with driver.transaction() as transaction:
+        transaction.execute(DatabaseStatement("CREATE TABLE evidence (value INTEGER)"))
+
+    class SuppressingDriver:
+        @contextmanager
+        def transaction(self, *, read_only=False):
+            try:
+                with driver.transaction(read_only=read_only) as transaction:
+                    yield transaction
+            except RuntimeError:
+                return
+
+    published = []
+    try:
+        with (
+            pytest.raises(RuntimeError, match="body failed"),
+            UnitOfWork(SuppressingDriver()) as unit,
+        ):
+            unit.transaction.execute(DatabaseStatement("INSERT INTO evidence VALUES (1)"))
+            unit.after_commit(lambda: published.append("committed"))
+            raise RuntimeError("body failed")
+        assert not unit.committed and published == []
+        with driver.transaction(read_only=True) as transaction:
+            assert (
+                transaction.query(DatabaseStatement("SELECT value FROM evidence", read_only=True))
+                == ()
+            )
+    finally:
+        driver.close()
