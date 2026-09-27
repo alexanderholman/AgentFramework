@@ -329,21 +329,51 @@ def test_live_cancellation_reaches_cooperative_handler_and_releases_lease(tmp_pa
         database.close()
 
 
-def test_long_stage_heartbeats_its_claim_without_repeating_effects(tmp_path: Path):
-    import time
+def test_long_stage_heartbeats_its_claim_without_repeating_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from threading import Condition
 
     database, store, _service, _handler, context, run = setup_workflow(tmp_path)
+    heartbeats = Condition()
+    heartbeat_count = 0
+    lease_by_fence = {}
+    original_save = store.save
+
+    def observe_save(updated, *, expected_revision):
+        nonlocal heartbeat_count
+        active = next(
+            (
+                node
+                for node in updated.nodes
+                if node.state == NodeState.RUNNING and node.fence is not None
+            ),
+            None,
+        )
+        result = original_save(updated, expected_revision=expected_revision)
+        if active is not None and active.lease_until is not None:
+            previous = lease_by_fence.get(active.fence)
+            lease_by_fence[active.fence] = active.lease_until
+            if previous is not None and active.lease_until > previous:
+                with heartbeats:
+                    heartbeat_count += 1
+                    heartbeats.notify_all()
+        return result
+
+    monkeypatch.setattr(store, "save", observe_save)
 
     class Slow(Component):
         def execute(self, data, predecessors, child, *, effect_key):
-            time.sleep(0.1)
+            with heartbeats:
+                target = heartbeat_count + 4
+                assert heartbeats.wait_for(lambda: heartbeat_count >= target, timeout=8)
             return super().execute(data, predecessors, child, effect_key=effect_key)
 
     handler = Slow()
     worker = WorkflowService(
         store,
         (WorkflowComponent("append", "1", "a" * 64, False, handler),),
-        claim_lifetime=timedelta(milliseconds=30),
+        claim_lifetime=timedelta(milliseconds=900),
     )
     result = worker.resume(run.run_id, context)
     assert all(node.state == NodeState.COMPLETED for node in result.nodes)
