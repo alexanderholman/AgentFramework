@@ -4,7 +4,7 @@ from typing import cast
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
 from af.framework.errors import PlatformReason
@@ -135,6 +135,24 @@ def test_mariadb_rejects_other_dialects_and_sanitizes_connect_failure(
     assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
     assert "secret" not in str(captured.value)
     assert "secret" not in repr(captured.value)
+
+
+def test_record_changed_inside_savepoint_preserves_retryable_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _driver(monkeypatch) as driver:
+        with pytest.raises(DatabaseOperationError) as captured:
+            with driver.transaction() as transaction:
+                with transaction.savepoint("projection_race"):
+                    error = OperationalError(
+                        "UPDATE projection checkpoint",
+                        {},
+                        Exception(1020, "record changed since last read"),
+                    )
+                    raise transaction._failure(error, stage="database.execute")
+
+    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
+    assert captured.value.stage == "database.execute"
 
 
 def test_mariadb_transaction_contract_fails_closed_and_recovers(

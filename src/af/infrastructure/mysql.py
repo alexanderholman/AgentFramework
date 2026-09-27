@@ -51,7 +51,7 @@ def _failure(error: BaseException, *, stage: str) -> DatabaseOperationError:
     arguments: tuple[object, ...] = tuple(getattr(original, "args", ()))
     if arguments and arguments[0] == 1062:
         return DatabaseUniqueConflict(stage=stage, protected_cause=error)
-    if arguments and arguments[0] in {1205, 1213}:
+    if arguments and arguments[0] in {1020, 1205, 1213}:
         return DatabaseOperationError(
             reason=PlatformReason.TRANSIENT_FAILURE,
             stage=stage,
