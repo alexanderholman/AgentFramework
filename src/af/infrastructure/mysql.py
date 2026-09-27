@@ -10,7 +10,13 @@ from types import TracebackType
 from typing import Literal, Never, cast
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Connection, CursorResult, Engine, RootTransaction, make_url
+from sqlalchemy.engine import (
+    Connection,
+    CursorResult,
+    Engine,
+    RootTransaction,
+    make_url,
+)
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
@@ -246,7 +252,9 @@ class _MySQLTransaction:
                 stage="database.read-only",
             )
         try:
-            result = self._connection.execute(text(statement.sql), dict(statement.parameters))
+            result = self._connection.execute(
+                text(statement.sql), dict(statement.parameters)
+            )
         except SQLAlchemyError as error:
             raise self._failure(error, stage="database.execute") from None
         if self.cancellation_requested():
@@ -401,7 +409,9 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
                 try:
                     root.rollback()
                 except SQLAlchemyError as database_error:
-                    raise _failure(database_error, stage="database.transaction") from None
+                    raise _failure(
+                        database_error, stage="database.transaction"
+                    ) from None
                 raise
             try:
                 if error_type is None and not cancelled and not rollback_only:
