@@ -140,9 +140,11 @@ def test_mariadb_rejects_other_dialects_and_sanitizes_connect_failure(
 def test_record_changed_inside_savepoint_preserves_retryable_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with _driver(monkeypatch) as driver:
-        with pytest.raises(DatabaseOperationError) as captured:
-            with driver.transaction() as transaction:
+    with (
+        _driver(monkeypatch) as driver,
+        pytest.raises(DatabaseOperationError) as captured,
+    ):
+        with driver.transaction() as transaction:
                 with transaction.savepoint("projection_race"):
                     error = OperationalError(
                         "UPDATE projection checkpoint",
