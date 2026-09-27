@@ -282,3 +282,30 @@ reconcile the final clean-room runtime-only install/smoke, user-journey and sour
 completion audit evidence after the recent stabilization changes. Preserve genuine
 external qualification limits already listed above. Do not broaden the feature
 roadmap or merge until the mission's final audit is complete.
+
+
+## Exact-head convergence checkpoint — 2026-09-27
+
+Published exact head `86ab9bd9bca62da7825725be95fa1dea4facff9b`. The MariaDB
+first-writer conflict fix is retained: error 1020 is transient, and the real
+MariaDB first-delivery race plus common canonical gate pass together.
+
+A repeated gate run on a docs-only checkpoint exposed a genuinely timing-sensitive
+regression in `test_long_stage_heartbeats_its_claim_without_repeating_effects`:
+30 ms claims and a 100 ms sleep intermittently let CI scheduling outrun the watcher.
+The test now waits on persisted lease-renewal observations (four renewals for each
+node, 900 ms claim lifetime) and still proves that long-running stages renew without
+repeating their effects. This is a deterministic test synchronization change; no
+workflow behavior was relaxed.
+
+All eight workflows pass on this exact head: AF Python, AF release security, MySQL,
+MariaDB, PostgreSQL, OpenSearch, Elasticsearch and Copilot Setup. Full gate: 4,395
+passed, 65 skipped, 91.47% branch coverage; strict mypy and Ruff pass; nine OpenCode
+tests and all 36 governance checks pass. The package gate validates the 0.1.0a0
+sdist and wheel and runs the wheel in an isolated temporary target with runtime
+requirements from the locked cache; offline CLI, MCP and migration smokes pass.
+
+The MariaDB retry blocker and the observed timer-flaky test are resolved. Before
+release disposition, reconcile the prior clean-room user journeys and source audit
+with this head; the external host, deployment-signing and live-service limits above
+remain explicit. Keep PR #212 draft and do not merge until the final mission audit.
