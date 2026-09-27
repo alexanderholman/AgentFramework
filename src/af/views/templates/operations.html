@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Operations · AF Agent Framework{% endblock %}
 {% block content %}
-<main aria-labelledby="operations-title">
+<section lang="en" dir="ltr" aria-labelledby="operations-title">
   <h1 id="operations-title">Operations</h1>
   <p class="meta">Observed {{ snapshot.observed_at.isoformat() }} · schema {{ snapshot.schema_version }}</p>
 
@@ -43,6 +43,5 @@
     {% else %}<p>No recent tasks.</p>{% endif %}
     {% else %}<p>Recent task activity is unavailable.</p>{% endif %}
   </section>
-</main>
+</section>
 {% endblock %}
-

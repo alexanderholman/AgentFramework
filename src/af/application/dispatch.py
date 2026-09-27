@@ -29,6 +29,7 @@ from af.framework.context import (
     AcceptanceScope,
     ExecutionContext,
     maybe_current_context,
+    without_context,
 )
 from af.framework.types import ExecutionOutcome
 
@@ -40,6 +41,7 @@ __all__ = (
     "ExecuteTask",
     "GetOperationsSnapshot",
     "GetTask",
+    "GetTasks",
     "InterpretIdeon",
     "ListTasks",
     "RealiseIdeon",
@@ -69,6 +71,11 @@ class GetTask(Query):
 
 
 @dataclass(frozen=True, slots=True)
+class GetTasks(Query):
+    task_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ListTasks(Query):
     limit: int | None = None
     offset: int = 0
@@ -83,6 +90,7 @@ class GetOperationsSnapshot(Query):
 class UpdateTask(Command):
     task_id: str
     prompt: str
+    expected_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +102,7 @@ class CountCharacters(Command):
 @dataclass(frozen=True, slots=True)
 class DeleteTask(Command):
     task_id: str
+    expected_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +172,12 @@ class _SyncDispatcher:
         context = self._context_factory()
 
         async def invoke() -> object:
-            result = await self._bus.dispatch(message, context=context)
+            # Context was captured from the authorized synchronous caller above.
+            # A new asyncio task/thread cannot inherit its container lease, whose
+            # validator is intentionally bound to the originating execution owner.
+            # The bus establishes its own bounded lease for the explicit handoff.
+            with without_context():
+                result = await self._bus.dispatch(message, context=context)
             return result.value
 
         return _run_sync(invoke)
@@ -182,6 +196,9 @@ class _TaskControllerFacade(TaskController):
     def get(self, task_id: str) -> Task:
         return cast(Task, self._dispatcher.dispatch(GetTask(task_id)))
 
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        return cast(list[Task | None], self._dispatcher.dispatch(GetTasks(task_ids)))
+
     def list(
         self,
         *,
@@ -190,8 +207,8 @@ class _TaskControllerFacade(TaskController):
     ) -> list[Task]:
         return cast(list[Task], self._dispatcher.dispatch(ListTasks(limit, offset)))
 
-    def update(self, task_id: str, prompt: str) -> Task:
-        return cast(Task, self._dispatcher.dispatch(UpdateTask(task_id, prompt)))
+    def update(self, task_id: str, prompt: str, *, expected_version: str | None = None) -> Task:
+        return cast(Task, self._dispatcher.dispatch(UpdateTask(task_id, prompt, expected_version)))
 
     def count_characters(self, text: str, character: str) -> ExecutionOutcome:
         return cast(
@@ -199,8 +216,8 @@ class _TaskControllerFacade(TaskController):
             self._dispatcher.dispatch(CountCharacters(text, character)),
         )
 
-    def delete(self, task_id: str) -> None:
-        self._dispatcher.dispatch(DeleteTask(task_id))
+    def delete(self, task_id: str, *, expected_version: str | None = None) -> None:
+        self._dispatcher.dispatch(DeleteTask(task_id, expected_version))
 
 
 class _AgentRoutingControllerFacade(AgentRoutingController):
@@ -279,6 +296,7 @@ def build_application_endpoints(
     _register(registry, ExecuteTask, lambda message: tasks.execute(message.prompt))
     _register(registry, CreateTask, lambda message: tasks.create(message.prompt))
     _register(registry, GetTask, lambda message: tasks.get(message.task_id))
+    _register(registry, GetTasks, lambda message: tasks.get_many(message.task_ids))
     _register(
         registry,
         ListTasks,
@@ -287,14 +305,20 @@ def build_application_endpoints(
     _register(
         registry,
         UpdateTask,
-        lambda message: tasks.update(message.task_id, message.prompt),
+        lambda message: tasks.update(
+            message.task_id, message.prompt, expected_version=message.expected_version
+        ),
     )
     _register(
         registry,
         CountCharacters,
         lambda message: tasks.count_characters(message.text, message.character),
     )
-    _register(registry, DeleteTask, lambda message: tasks.delete(message.task_id))
+    _register(
+        registry,
+        DeleteTask,
+        lambda message: tasks.delete(message.task_id, expected_version=message.expected_version),
+    )
     _register(registry, RouteAgent, lambda message: agent_routes.route(message.prompt))
     _register(registry, InterpretIdeon, lambda message: ideons.interpret(message.request))
     _register(registry, ResolveIdeon, lambda message: ideons.resolve(message.ref))

@@ -12,8 +12,12 @@ from typing import cast
 
 from sqlalchemy.engine import make_url
 
+from af.application.account_controller import AccountController
 from af.application.agent_routing import AgentRoutingController, AgentRoutingService
+from af.application.authentication import AuthenticationService
 from af.application.bus import ApplicationBus
+from af.application.capability_preview import CapabilitySnapshot
+from af.application.data_maintenance import DataMaintenanceController
 from af.application.database_setup import (
     ConnectionUrlWriter,
     ConnectionUrlWriterToken,
@@ -24,8 +28,16 @@ from af.application.database_setup import (
     LocalDatabaseProvisioner,
     LocalDatabaseProvisionerToken,
 )
+from af.application.decisions import DecisionController
 from af.application.dispatch import build_application_endpoints
+from af.application.engineering import LocalEngineeringService
+from af.application.engineering_controller import EngineeringController
+from af.application.human_decisions import HumanDecisionService
+from af.application.human_interpreter import HumanInterpreter
 from af.application.ideons import IdeonController, IdeonService
+from af.application.locales import Localizer
+from af.application.oauth_controller import OAuthController
+from af.application.observability_middleware import ObservationMiddleware
 from af.application.operations import (
     OperationsController,
     OperationsService,
@@ -34,9 +46,27 @@ from af.application.operations import (
 from af.application.program_jobs import ProgramJobHandler, ProgramJobService
 from af.application.resource_leases import ResourceLeaseService
 from af.application.search import SearchController, SearchService
+from af.application.self_development import SelfDevelopmentController
+from af.application.self_improvement import SelfImprovementService
+from af.application.self_stages import SelfStageController
 from af.application.tasks import TaskController, TaskService
 from af.application.worker_generation import WorkerGenerationFactory
 from af.application.worker_supervision import WorkerSupervisorFactory
+from af.application.workflow_control import WorkflowController
+from af.application.workflows import WorkflowService
+from af.bootstrap_engineering import LocalEngineeringProvider
+from af.bootstrap_extensions import (
+    create_account_controller,
+    create_authentication_service,
+    create_capability_snapshot,
+    create_decision_controller,
+    create_human_decision_service,
+    create_oauth_controller,
+    create_stream_driver,
+)
+from af.bootstrap_observability import create_observability_products
+from af.bootstrap_scheduling import SchedulerRuntime
+from af.bootstrap_self_development import LocalSelfDevelopmentProvider
 from af.config import (
     ConfigSnapshot,
     EnvironmentConfigSource,
@@ -45,6 +75,8 @@ from af.config import (
     load_settings,
 )
 from af.domain.agent_routing import DeterministicAgentRouter
+from af.domain.catalogue_procedures import CatalogueProvider
+from af.domain.classifier_topology import default_classifier_hierarchy
 from af.domain.classifiers import (
     CharacterCountClassifier,
     ClassifierChain,
@@ -58,9 +90,11 @@ from af.domain.procedures import (
     HelloProcedure,
 )
 from af.domain.resources import LeaseRepository
+from af.domain.science_procedures import ScienceProvider
 from af.domain.tasks import TaskRepository
 from af.domain.verification import DeterministicVerifier
 from af.framework.application import Application
+from af.framework.classification_hierarchy import HierarchyRouter
 from af.framework.container import (
     Container,
     ProviderRegistrar,
@@ -82,25 +116,34 @@ from af.framework.types import (
     is_valid_selector_provider_id,
     parse_probability,
 )
+from af.infrastructure.data_maintenance import SQLiteDataMaintenance
 from af.infrastructure.database import Database
 from af.infrastructure.db_setup import (
     AtomicEnvFileWriter,
     LocalMariaDBProvisioner,
     MariaDBConnectionVerifier,
 )
+from af.infrastructure.doctor import diagnose
 from af.infrastructure.ideon_reference import create_reference_ideon_runtime
 from af.infrastructure.job_events import SqlAlchemyJobEventRepository
+from af.infrastructure.local_keys import LocalAuthenticationKey, workflow_key
+from af.infrastructure.locale_packs import create_starter_localizer
+from af.infrastructure.model_selectors import LocalModelSelector
 from af.infrastructure.program_job_results import SqlAlchemyProgramJobResultRepository
 from af.infrastructure.programs import AsyncSubprocessExecutor
 from af.infrastructure.repositories import SqlAlchemyTaskRepository
 from af.infrastructure.resource_leases import InMemoryLeaseRepository
+from af.infrastructure.self_operation_fixtures import create_fixture_self_improvement_service
 from af.infrastructure.sqlite import SQLiteDriver
 from af.infrastructure.sqlite_resource_leases import SQLiteLeaseRepository
+from af.infrastructure.sqlite_streams import SQLiteStreamDriver
 from af.infrastructure.tracing import SqlAlchemyTraceRepository
 from af.infrastructure.worker_optimization import (
     load_worker_optimization_profile,
     worker_queue_storage_identity,
 )
+from af.infrastructure.workflow_factory import create_workflow_service, reference_composition
+from af.interfaces.observability_products import ObservabilityProducts
 from af.queue.database_manager import database_queue_registration
 from af.queue.manager import QueueManager
 from af.search.embedded_manager import embedded_search_registration
@@ -170,6 +213,9 @@ class _PersistenceProvider(ServiceProvider):
             and self._lease_repository is not None
             and self._settings.worker_queue_sqlite_path is None
         ):
+            container.bind(
+                Database, lambda _: Database("sqlite:///:memory:"), scope=Scope.APPLICATION
+            )
             return
 
         container.bind(
@@ -215,7 +261,9 @@ class _FrameworkProvider(ServiceProvider):
         selector: Selector | None,
         selector_metadata: SelectorMetadata | None,
         selector_confidence_threshold: float,
+        classifier_hierarchy: HierarchyRouter | None,
     ) -> None:
+        self._classifier_hierarchy = classifier_hierarchy
         self._reuse_store = reuse_store
         self._selector = selector
         self._selector_metadata = selector_metadata
@@ -242,7 +290,13 @@ class _FrameworkProvider(ServiceProvider):
                 for contribution in resolve_procedure_contributions(resolver)
             )
             classifiers.append(UnknownClassifier())
-            return ClassifierChain(classifiers)
+            return ClassifierChain(
+                classifiers,
+                hierarchy=self._classifier_hierarchy
+                or default_classifier_hierarchy(
+                    resolver.resolve(ProcedureRegistry), resolve_procedure_contributions(resolver)
+                ),
+            )
 
         container.bind(
             ProcedureRegistry,
@@ -372,7 +426,135 @@ class _ApplicationProvider(ServiceProvider):
     provider_id = "af.application"
     dependencies = ("af.framework", "af.ideons", "af.search")
 
+    def __init__(self, *, self_development_configured: bool = False) -> None:
+        self._self_development_configured = self_development_configured
+
     def register(self, container: ProviderRegistrar) -> None:
+        if not self._self_development_configured:
+            container.bind(
+                SelfDevelopmentController,
+                lambda _: SelfDevelopmentController(),
+                scope=Scope.APPLICATION,
+            )
+        container.bind(
+            SQLiteStreamDriver,
+            lambda current: create_stream_driver(current.resolve(Database)),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            ObservabilityProducts,
+            lambda current: create_observability_products(
+                current.resolve(Settings), current.resolve(Database)
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            EngineeringController,
+            lambda current: EngineeringController(
+                current.resolve(LocalEngineeringService)
+                if current.resolve(Settings).engineering_repository is not None
+                else None
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            HumanDecisionService,
+            lambda current: create_human_decision_service(
+                current.resolve(Database),
+                current.resolve(LocalAuthenticationKey).value,
+                current.resolve(PipelineAgent),
+                current.resolve(ClassifierChain),
+                current.resolve(ProcedureRegistry),
+                current.resolve(LadderRouter),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            AccountController,
+            lambda current: create_account_controller(
+                current.resolve(Settings),
+                current.resolve(Database),
+                current.resolve(AuthenticationService),
+                current.resolve(LocalAuthenticationKey).value,
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            HumanInterpreter,
+            lambda current: HumanInterpreter(current.resolve(IdeonController)),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            SelfStageController, lambda _: SelfStageController(), scope=Scope.APPLICATION
+        )
+        container.bind(
+            SchedulerRuntime,
+            lambda current: SchedulerRuntime(
+                current.resolve(Settings),
+                current.resolve(Database),
+                current.resolve(TaskController),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            OAuthController,
+            lambda current: create_oauth_controller(
+                current.resolve(Settings),
+                current.resolve(Database),
+                current.resolve(AuthenticationService),
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            LocalAuthenticationKey,
+            lambda current: LocalAuthenticationKey(
+                workflow_key(current.resolve(Database).engine.url)
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            AuthenticationService,
+            lambda current: create_authentication_service(current.resolve(Database)),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            CapabilitySnapshot,
+            lambda current: create_capability_snapshot(current.resolve(Settings)),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(Localizer, lambda _: create_starter_localizer(), scope=Scope.APPLICATION)
+        container.bind(
+            DecisionController,
+            lambda current: create_decision_controller(
+                current.resolve(Settings), current.resolve(Database)
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            DataMaintenanceController,
+            lambda current: DataMaintenanceController(
+                SQLiteDataMaintenance(
+                    current.resolve(Database),
+                    authentication_key=current.resolve(LocalAuthenticationKey).value,
+                )
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            WorkflowService,
+            lambda current: create_workflow_service(
+                current.resolve(Database),
+                authentication_key=current.resolve(LocalAuthenticationKey).value,
+            ),
+            scope=Scope.APPLICATION,
+        )
+        container.bind(
+            WorkflowController,
+            lambda current: WorkflowController(
+                current.resolve(WorkflowService), (reference_composition().definition,)
+            ),
+            scope=Scope.APPLICATION,
+        )
         container.bind(
             IdeonController,
             lambda current: IdeonController(current.resolve(IdeonService)),
@@ -593,7 +775,13 @@ class AFApplication:
     operations: OperationsController
     program_jobs: ProgramJobService | None
     program_job_handler: ProgramJobHandler | None
+    workflows: WorkflowService
     lifecycle: Application
+
+    @property
+    def streams(self) -> SQLiteStreamDriver:
+        """Lazily open the reference persistent stream adapter."""
+        return self.container.resolve(SQLiteStreamDriver)
 
     def shutdown(self) -> None:
         _shutdown_lifecycle_at_sync_boundary(self.lifecycle)
@@ -619,6 +807,7 @@ def create_application(
     ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
+    classifier_hierarchy: HierarchyRouter | None = None,
     providers: Iterable[ServiceProvider] = (),
 ) -> AFApplication:
     """Build an isolated application; tests and hosts can replace any provider."""
@@ -632,6 +821,7 @@ def create_application(
         ideon_service=ideon_service,
         reuse_store=reuse_store,
         selector=selector,
+        classifier_hierarchy=classifier_hierarchy,
         providers=providers,
     )
     try:
@@ -653,6 +843,7 @@ async def create_application_async(
     ideon_service: IdeonService | None = None,
     reuse_store: ReuseStore | None = None,
     selector: Selector | None = None,
+    classifier_hierarchy: HierarchyRouter | None = None,
     providers: Iterable[ServiceProvider] = (),
 ) -> AFApplication:
     """Build an application whose providers may use asynchronous lifecycle hooks."""
@@ -665,6 +856,7 @@ async def create_application_async(
         ideon_service=ideon_service,
         reuse_store=reuse_store,
         selector=selector,
+        classifier_hierarchy=classifier_hierarchy,
         providers=providers,
     )
     try:
@@ -690,8 +882,11 @@ def _prepare_application(
     ideon_service: IdeonService | None,
     reuse_store: ReuseStore | None,
     selector: Selector | None,
+    classifier_hierarchy: HierarchyRouter | None,
     providers: Iterable[ServiceProvider],
 ) -> _ApplicationBuild:
+    if classifier_hierarchy is not None and type(classifier_hierarchy) is not HierarchyRouter:
+        raise TypeError("classifier hierarchy must be a configured HierarchyRouter")
     if settings is not None and config is not None:
         raise ValueError("provide settings or config, not both")
     resolved_config = (
@@ -702,6 +897,16 @@ def _prepare_application(
         else load_settings(EnvironmentConfigSource())
     )
     resolved_settings = resolved_config.settings
+    if selector is None and resolved_settings.selector_provider != "disabled":
+        try:
+            selector = LocalModelSelector(
+                model=resolved_settings.selector_model or "",
+                endpoint=resolved_settings.selector_endpoint,
+                protocol=resolved_settings.selector_provider,
+                timeout=resolved_settings.selector_timeout_seconds,
+            )
+        except ValueError:
+            raise InvalidProviderConfiguration("local selector configuration is invalid") from None
     selector_metadata = _resolve_selector_metadata(selector)
     selector_confidence_threshold = _resolve_selector_confidence_threshold(
         resolved_settings.selector_confidence_threshold
@@ -726,7 +931,10 @@ def _prepare_application(
             selector,
             selector_metadata,
             selector_confidence_threshold,
+            classifier_hierarchy,
         ),
+        ScienceProvider(),
+        CatalogueProvider(),
         _IdeonProvider(ideon_service),
         _SearchProvider(
             resolved_settings,
@@ -735,17 +943,44 @@ def _prepare_application(
             ),
             ephemeral=task_repository is not None or trace_repository is not None,
         ),
-        _ApplicationProvider(),
+        _ApplicationProvider(
+            self_development_configured=resolved_settings.self_development_unit is not None
+        ),
         _QueueWorkerProvider(
             resolved_settings,
             profile=(
                 resolved_config.profile.value if resolved_config.profile is not None else "local"
             ),
         ),
+        *(
+            (
+                LocalEngineeringProvider(
+                    Path(resolved_settings.engineering_repository).expanduser().resolve(),
+                    selector_configured=selector is not None,
+                ),
+            )
+            if resolved_settings.engineering_repository is not None
+            else ()
+        ),
+        *(
+            (
+                LocalSelfDevelopmentProvider(
+                    Path(resolved_settings.engineering_repository or "").expanduser().resolve(),
+                    Path(resolved_settings.self_development_unit).expanduser().resolve(),
+                ),
+            )
+            if resolved_settings.self_development_unit is not None
+            else ()
+        ),
         *tuple(providers),
     )
     lifecycle = Application(root, application_providers)
     return _ApplicationBuild(resolved_settings, resolved_config, lifecycle)
+
+
+def diagnose_application(settings: Settings) -> dict[str, object]:
+    """Compose non-mutating local checks without booting the application."""
+    return diagnose(settings)
 
 
 def _shutdown_lifecycle_at_sync_boundary(lifecycle: Application) -> None:
@@ -777,6 +1012,14 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
         container.resolve(AgentRoutingController),
         container.resolve(IdeonController),
         operations,
+        middleware=(
+            ObservationMiddleware(
+                inspector=container.resolve(ObservabilityProducts).inspector,
+                metrics=container.resolve(ObservabilityProducts).metrics,
+            ),
+        )
+        if build.settings.inspector_enabled or build.settings.metrics_enabled
+        else (),
     )
     return AFApplication(
         settings=build.settings,
@@ -803,6 +1046,7 @@ def _assemble_application(build: _ApplicationBuild) -> AFApplication:
             if build.settings.worker_queue_sqlite_path is not None
             else None
         ),
+        workflows=container.resolve(WorkflowService),
         lifecycle=build.lifecycle,
     )
 
@@ -860,4 +1104,12 @@ def _assert_sync_bootstrap_context() -> None:
         return
     raise AsyncLifecycleRequired(
         "create_application cannot run inside an event loop; use create_application_async"
+    )
+
+
+def create_offline_improvement_service(application: AFApplication) -> SelfImprovementService:
+    """Explicit fixture composition; no repository mutation or publication authority."""
+    return create_fixture_self_improvement_service(
+        application.container.resolve(Database),
+        authentication_key=application.container.resolve(LocalAuthenticationKey).value,
     )

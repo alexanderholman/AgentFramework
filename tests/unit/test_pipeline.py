@@ -51,7 +51,7 @@ def test_pipeline_runs_af_stages_in_order(application) -> None:  # type: ignore[
     assert outcome.output == "3"
     assert outcome.verified is True
     assert outcome.route == "character-count"
-    assert [event.stage for event in trace.events] == [
+    assert [event.stage for event in trace.events if not event.stage.startswith("classify-")] == [
         "classify",
         "route",
         "execute",
@@ -464,7 +464,7 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
             ),
             ProcedureDescriptor(
                 procedure_id="current-time",
-                version="1.0.0",
+                version="1.1.0",
                 intent="system.current_time",
                 arguments=(
                     ProcedureArgumentDescriptor(
@@ -472,17 +472,61 @@ def test_local_selector_can_route_unknown_work_through_registered_procedure() ->
                         value_type=ArgumentValueType.TEXT,
                         min_length=1,
                         max_length=64,
-                        allow_blank=True,
+                        allow_blank=False,
                     ),
                 ),
                 effect=ProcedureEffect.READ_ONLY,
                 risk=ProcedureRisk.NONE,
                 requires_confirmation=False,
                 tier=WorkTier.STATIC,
+                pure=False,
+                replay_safe=False,
+                has_selection_grounding=False,
+                metrics=RouteMetrics(cost=0, latency=0, intelligence=0),
+            ),
+            ProcedureDescriptor(
+                procedure_id="catalogue-execute",
+                version="1.0.0",
+                intent="catalogue.execute",
+                arguments=(
+                    ProcedureArgumentDescriptor(
+                        name="request",
+                        value_type=ArgumentValueType.TEXT,
+                        min_length=1,
+                        max_length=10000,
+                        allow_blank=False,
+                    ),
+                ),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
+                tier=WorkTier.PROCEDURAL,
                 pure=True,
                 replay_safe=True,
                 has_selection_grounding=False,
-                metrics=RouteMetrics(cost=0, latency=0, intelligence=0),
+                metrics=RouteMetrics(cost=1, latency=1, intelligence=0),
+            ),
+            ProcedureDescriptor(
+                procedure_id="science-calculate",
+                version="1.0.0",
+                intent="science.calculate",
+                arguments=(
+                    ProcedureArgumentDescriptor(
+                        name="expression",
+                        value_type=ArgumentValueType.TEXT,
+                        min_length=1,
+                        max_length=1024,
+                        allow_blank=False,
+                    ),
+                ),
+                effect=ProcedureEffect.READ_ONLY,
+                risk=ProcedureRisk.NONE,
+                requires_confirmation=False,
+                tier=WorkTier.PROCEDURAL,
+                pure=True,
+                replay_safe=True,
+                has_selection_grounding=False,
+                metrics=RouteMetrics(cost=1, latency=1, intelligence=0),
             ),
         )
     ]
@@ -1327,8 +1371,8 @@ def test_agent_public_typed_boundary_preserves_whitespace_prompt() -> None:
 
     assert outcome.prompt == "   "
     assert outcome.output == "3"
-    assert trace.prompt == "   "
-    assert trace.arguments == {"text": "   ", "character": " "}
+    assert trace.prompt == "[redacted]"
+    assert trace.arguments == {}
 
 
 @pytest.mark.parametrize(

@@ -1,125 +1,127 @@
-from __future__ import annotations
+"""Neo4j protocol tests. These do not certify a live graph service."""
+
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from typing import Any
 
 import pytest
 
-from af.framework.managers import CapabilitySet
+from af.framework.errors import PlatformError
 from af.graph.contracts import GraphFeature, GraphQuery
 from af.graph.drivers.neo4j import Neo4jCommunityDriver
 
 
-class TestNeo4jCommunityDriver:
-    """Tests for Neo4j Community driver conforming to GraphDriver protocol."""
+class Transaction:
+    def __init__(self, client: "Client") -> None:
+        self.client = client
 
-    def test_driver_reports_query_capability(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        result = driver.verify_capabilities({GraphFeature.QUERY})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.QUERY.value in result.values
+    def run(self, text: str, parameters: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+        self.client.calls.append((text, dict(parameters)))
+        return iter(self.client.rows)
 
-    def test_driver_reports_persistence_capability(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        result = driver.verify_capabilities({GraphFeature.PERSISTENCE})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.PERSISTENCE.value in result.values
+    def commit(self) -> None:
+        self.client.commits += 1
 
-    def test_driver_reports_missing_indexing_capability(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        result = driver.verify_capabilities({GraphFeature.INDEXING})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.INDEXING.value not in result.values
 
-    def test_driver_reports_missing_cancellation_capability(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        assert driver.community_edition is True
-        result = driver.verify_capabilities({GraphFeature.CANCELLATION})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.CANCELLATION.value not in result.values
+class Session:
+    def __init__(self, client: "Client") -> None:
+        self.client = client
 
-    def test_driver_query_returns_empty_results(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        query = GraphQuery(text="MATCH (n) RETURN n", limit=10)
-        results = driver.query(query)
-        assert isinstance(results, list)
-        assert len(results) == 0
+    @contextmanager
+    def begin_transaction(self, *, timeout: float) -> Iterator[Transaction]:
+        self.client.timeouts.append(timeout)
+        yield Transaction(self.client)
 
-    def test_driver_query_rejects_untrusted_text(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        with pytest.raises(ValueError, match="untrusted"):
-            driver.query(
-                GraphQuery(
-                    text="MATCH (n) RETURN n; DROP DATABASE",
-                    limit=10,
-                )
-            )
 
-    def test_driver_create_node_stores_node(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={"name": "test"},
+class Client:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.rows: list[dict[str, object]] = []
+        self.timeouts: list[float] = []
+        self.commits = 0
+        self.closed = False
+
+    @contextmanager
+    def session(self, **kwargs: object) -> Iterator[Session]:
+        yield Session(self)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _driver(client: Client) -> Neo4jCommunityDriver:
+    return Neo4jCommunityDriver(uri="bolt://localhost:7687", client=client)
+
+
+def test_unconfigured_neo4j_never_claims_persistence_or_returns_fake_success() -> None:
+    driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
+    assert not driver.verify_capabilities(set(GraphFeature)).values
+    with pytest.raises(PlatformError):
+        driver.query(GraphQuery("RETURN 1"))
+    with pytest.raises(PlatformError):
+        driver.create_node("a", ("Person",), {})
+
+
+def test_neo4j_binds_values_and_returns_bounded_actual_rows_with_deadline() -> None:
+    client = Client()
+    client.rows = [
+        {"node_id": "a", "labels": ["Person"], "score": 0.7},
+        {"node_id": "b", "labels": ["Person"], "score": 0.2},
+    ]
+    driver = _driver(client)
+    value = "'; DROP DATABASE; --"
+    result = driver.query(
+        GraphQuery(
+            "MATCH (n) WHERE n.name = $name RETURN n.af_id AS node_id, labels(n) AS labels",
+            parameters={"name": value},
+            limit=1,
+            deadline_ms=250,
         )
-        assert driver.get_node("entity-001") is not None
+    )
+    assert [row.node_id for row in result] == ["a"]
+    assert value not in client.calls[0][0]
+    assert client.calls[0][1]["name"] == value
+    assert client.timeouts == [0.25]
+    assert client.commits == 1
 
-    def test_driver_create_edge_stores_edge(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_node(
-            node_id="entity-002",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_edge(
-            edge_id="rel-001",
-            source_id="entity-001",
-            target_id="entity-002",
-            relation_type="KNOWS",
-            properties={},
-        )
-        edge = driver.get_edge("rel-001")
-        assert edge is not None
-        assert edge.edge_id == "rel-001"
 
-    def test_driver_delete_node_removes_node(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.delete_node("entity-001")
-        assert driver.get_node("entity-001") is None
+def test_neo4j_crud_calls_database_and_rejects_schema_injection() -> None:
+    client = Client()
+    driver = _driver(client)
+    client.rows = [{"node_id": "a"}]
+    driver.create_node("a", ("Person",), {"name": "Alice"})
+    assert "MERGE" in client.calls[-1][0]
+    assert client.calls[-1][1]["properties"] == {"name": "Alice"}
+    client.rows = [{"node_id": "a", "labels": ["Person"], "properties": {"name": "Alice"}}]
+    node = driver.get_node("a")
+    assert node is not None and node.properties == {"name": "Alice"}
+    client.rows = [{"edge_id": "ab"}]
+    driver.create_edge("ab", "a", "b", "KNOWS", {})
+    assert client.calls[-1][1]["source_id"] == "a"
+    client.rows = []
+    driver.delete_edge("ab")
+    driver.delete_node("a")
+    with pytest.raises(ValueError):
+        driver.create_node("a", ("Person`) DELETE n //",), {})
+    driver.close()
+    assert client.closed
 
-    def test_driver_delete_edge_removes_edge(self) -> None:
-        driver = Neo4jCommunityDriver(uri="bolt://localhost:7687")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_node(
-            node_id="entity-002",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_edge(
-            edge_id="rel-001",
-            source_id="entity-001",
-            target_id="entity-002",
-            relation_type="KNOWS",
-            properties={},
-        )
-        driver.delete_edge("rel-001")
-        assert driver.get_edge("rel-001") is None
 
-    def test_driver_requires_uri(self) -> None:
-        with pytest.raises(ValueError, match="uri"):
-            Neo4jCommunityDriver(uri="")
+def test_neo4j_requires_explicit_capability_evidence_and_sanitizes_failures() -> None:
+    client = Client()
+    driver = _driver(client)
+    assert not driver.verify_capabilities(set(GraphFeature)).values
 
-    def test_driver_uri_must_be_bolt(self) -> None:
-        with pytest.raises(ValueError, match="bolt"):
-            Neo4jCommunityDriver(uri="http://localhost:7474")
+    def broken_session(**kwargs: Any) -> Any:
+        raise RuntimeError("secret password")
+
+    client.session = broken_session  # type: ignore[method-assign]
+    with pytest.raises(PlatformError) as error:
+        driver.delete_node("a")
+    assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("uri", ["", "http://localhost", "bolt://user:password@localhost"])
+def test_neo4j_rejects_invalid_or_credential_bearing_uri(uri: str) -> None:
+    with pytest.raises(ValueError):
+        Neo4jCommunityDriver(uri=uri)

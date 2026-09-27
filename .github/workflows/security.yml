@@ -1,0 +1,49 @@
+name: AF release security
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: Locked Python dependency and source scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact event head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: '0.11.28'
+      - name: Install locked security tools
+        run: uv sync --locked --extra security
+      - name: Produce complete Python lock inventory
+        run: .venv/bin/python scripts/release_inventory.py --output "$RUNNER_TEMP/af-sbom.json" --execute
+      - name: Run source scans and explicitly authorized advisory requests
+        run: .venv/bin/python scripts/release_security.py --output "$RUNNER_TEMP/af-security.json" --allow-advisory-network --execute
+      - name: Preserve bounded redacted evidence for review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: af-security-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/af-sbom.json
+            ${{ runner.temp }}/af-security.json
+          retention-days: 14
+          if-no-files-found: error

@@ -6,7 +6,16 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from af.domain.tasks import Task, TaskRepository
+from af.application.task_guard import check_task_context, commit_task_write
+from af.domain.tasks import (
+    BatchTaskRepository,
+    ConditionalTaskRepository,
+    Task,
+    TaskConflict,
+    TaskRepository,
+    task_version,
+)
+from af.framework.context import maybe_current_context
 from af.framework.contracts import Agent
 from af.framework.errors import InvalidCharacter, InvalidPagination, InvalidPrompt
 from af.framework.types import (
@@ -30,52 +39,73 @@ class TaskService:
         return self._agent.handle(WorkRequest(prompt=normalized))
 
     def create(self, prompt: str) -> Task:
+        context = maybe_current_context()
+        check_task_context(context)
         normalized = self._normalize(prompt)
         outcome = self._agent.handle(WorkRequest(prompt=normalized))
         now = datetime.now(UTC)
-        return self._repository.save(
-            Task(
-                id=str(uuid4()),
-                prompt=normalized,
-                output=outcome.output,
-                intent=outcome.intent,
-                route=outcome.route,
-                tier=outcome.tier,
-                status=outcome.status,
-                verified=outcome.verified,
-                reused=outcome.reused,
-                trace_id=outcome.trace_id,
-                created_at=now,
-                updated_at=now,
-            )
+        return commit_task_write(
+            context,
+            lambda: self._repository.save(
+                Task(
+                    id=str(uuid4()),
+                    prompt=normalized,
+                    output=outcome.output,
+                    intent=outcome.intent,
+                    route=outcome.route,
+                    tier=outcome.tier,
+                    status=outcome.status,
+                    verified=outcome.verified,
+                    reused=outcome.reused,
+                    trace_id=outcome.trace_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+            ),
         )
 
     def get(self, task_id: str) -> Task:
         return self._repository.get(task_id)
 
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        if not isinstance(task_ids, tuple) or len(task_ids) > TASK_LIST_MAX_LIMIT:
+            raise ValueError("invalid task batch bounds")
+        if any(not isinstance(key, str) or not key or len(key) > 200 for key in task_ids):
+            raise ValueError("invalid task batch identifier")
+        check_task_context(maybe_current_context())
+        if not isinstance(self._repository, BatchTaskRepository):
+            raise ValueError("repository does not support batched task reads")
+        return self._repository.get_many(task_ids)
+
     def list(self, *, limit: int | None = None, offset: int = 0) -> list[Task]:
         normalized_limit, normalized_offset = self._normalize_list_window(limit, offset)
         return self._repository.list(limit=normalized_limit, offset=normalized_offset)
 
-    def update(self, task_id: str, prompt: str) -> Task:
+    def update(self, task_id: str, prompt: str, *, expected_version: str | None = None) -> Task:
+        context = maybe_current_context()
+        check_task_context(context)
         existing = self._repository.get(task_id)
+        conditional = self._conditional(existing, expected_version)
         normalized = self._normalize(prompt)
         outcome = self._agent.handle(WorkRequest(prompt=normalized))
-        return self._repository.save(
-            replace(
-                existing,
-                prompt=normalized,
-                output=outcome.output,
-                intent=outcome.intent,
-                route=outcome.route,
-                tier=outcome.tier,
-                status=outcome.status,
-                verified=outcome.verified,
-                reused=outcome.reused,
-                trace_id=outcome.trace_id,
-                updated_at=datetime.now(UTC),
-            )
+        changed = replace(
+            existing,
+            prompt=normalized,
+            output=outcome.output,
+            intent=outcome.intent,
+            route=outcome.route,
+            tier=outcome.tier,
+            status=outcome.status,
+            verified=outcome.verified,
+            reused=outcome.reused,
+            trace_id=outcome.trace_id,
+            updated_at=datetime.now(UTC),
         )
+        if conditional is not None:
+            return commit_task_write(
+                context, lambda: conditional.compare_and_save(changed, expected=existing)
+            )
+        return commit_task_write(context, lambda: self._repository.save(changed))
 
     def count_characters(self, text: str, character: str) -> ExecutionOutcome:
         validated_text = self._normalize_count_text(text)
@@ -91,8 +121,27 @@ class TaskService:
             expected_procedure_id="character-count",
         )
 
-    def delete(self, task_id: str) -> None:
-        self._repository.delete(task_id)
+    def delete(self, task_id: str, *, expected_version: str | None = None) -> None:
+        context = maybe_current_context()
+        check_task_context(context)
+        if expected_version is None:
+            commit_task_write(context, lambda: self._repository.delete(task_id))
+            return
+        existing = self._repository.get(task_id)
+        conditional = self._conditional(existing, expected_version)
+        assert conditional is not None
+        commit_task_write(context, lambda: conditional.compare_and_delete(existing))
+
+    def _conditional(
+        self, existing: Task, expected_version: str | None
+    ) -> ConditionalTaskRepository | None:
+        if expected_version is None:
+            return None
+        if not isinstance(self._repository, ConditionalTaskRepository):
+            raise ValueError("repository does not support conditional writes")
+        if expected_version != task_version(existing):
+            raise TaskConflict()
+        return self._repository
 
     @staticmethod
     def _normalize(prompt: str) -> str:
@@ -146,6 +195,9 @@ class TaskController:
     def get(self, task_id: str) -> Task:
         return self._service.get(task_id)
 
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        return self._service.get_many(task_ids)
+
     def list(
         self,
         *,
@@ -154,11 +206,11 @@ class TaskController:
     ) -> list[Task]:
         return self._service.list(limit=limit, offset=offset)
 
-    def update(self, task_id: str, prompt: str) -> Task:
-        return self._service.update(task_id, prompt)
+    def update(self, task_id: str, prompt: str, *, expected_version: str | None = None) -> Task:
+        return self._service.update(task_id, prompt, expected_version=expected_version)
 
     def count_characters(self, text: str, character: str) -> ExecutionOutcome:
         return self._service.count_characters(text, character)
 
-    def delete(self, task_id: str) -> None:
-        self._service.delete(task_id)
+    def delete(self, task_id: str, *, expected_version: str | None = None) -> None:
+        self._service.delete(task_id, expected_version=expected_version)

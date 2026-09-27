@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from graphlib import CycleError, TopologicalSorter
 
 __all__ = (
     "CapabilityCandidate",
@@ -1183,7 +1184,12 @@ class ExactCapabilityMatcher:
             or not set(requirements.required_verifiers).issubset(descriptor.verifier_requirements)
         ):
             return replace(candidate, reason=CapabilityReasonCode.PARTIAL_MATCH, exact_match=False)
-        if self._score(candidate) > self._score_limit(requirements.max_resources):
+        if any(
+            used > allowed
+            for used, allowed in zip(
+                self._score(candidate), self._score_limit(requirements.max_resources), strict=True
+            )
+        ):
             return replace(candidate, reason=CapabilityReasonCode.EXCESSIVE_COST, exact_match=False)
         return replace(candidate, reason=CapabilityReasonCode.MATCH, exact_match=True)
 
@@ -1252,19 +1258,9 @@ class ExactCapabilityMatcher:
         graph: Mapping[str, tuple[str, ...]],
         message: str,
     ) -> None:
-        visited: set[str] = set()
-        active: set[str] = set()
-
-        def visit(node: str) -> None:
-            if node in active:
-                raise ValueError(message)
-            if node in visited:
-                return
-            active.add(node)
-            for neighbor in graph.get(node, ()):  # pragma: no branch
-                visit(neighbor)
-            active.remove(node)
-            visited.add(node)
-
-        for node in sorted(graph):
-            visit(node)
+        try:
+            # The supported catalogue may exceed Python's recursion depth. The
+            # standard sorter validates all edges with bounded iterative state.
+            tuple(TopologicalSorter(graph).static_order())
+        except CycleError:
+            raise ValueError(message) from None

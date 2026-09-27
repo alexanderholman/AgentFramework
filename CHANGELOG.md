@@ -10,6 +10,26 @@ current version.
 # Changelog
 A rough overview of changes to over time.
 
+## Unreleased — `0.1.0a0` — 2026-09-26
+
+The package remains alpha. These implemented capabilities do not declare roadmap closure,
+external-service certification, accessibility certification, or a production release.
+
+* [Added] Explicit providers, scoped application lifetimes, typed drivers and conformance contracts.
+* [Added] Durable workflows, scheduling, local machine initialization, SQLite lifecycle and streams.
+* [Added] Finite verified science, algorithms/problems, controlled Human Interpreter and human decisions.
+* [Added] Six application-owned starter kits and typed terminal/headless applications.
+* [Added] Headless accounts, MFA, passkeys, tokens and optional identity-provider adapters.
+* [Added] Consent-aware notifications, SMTP submission, document/object/SFTP adapters and support matrices.
+* [Added] Bounded content/runtime/peer foundations and explicit local capability engineering.
+* [Added] Optional inspector/metrics/admin products and locale-aware HTML/REST presentation.
+* [Fixed] Local REST/GraphQL explorers work under the same-origin CSP without CDN assets.
+* [Fixed] Malformed CSRF/session signatures and Origin values fail without exposing server errors.
+* [Improved] Runtime-only package smoke, security tooling, provenance and qualification documentation.
+* [Fixed] Require cryptography 50.x and lock 50.0.1 to resolve the CI advisory for 49.0.0.
+* [Fixed] Offline runtime installation preserves exact locked artifact URLs and hashes.
+* [Added] Required `af test` developer entry point, forwarding pytest status without application startup.
+
 ## [v0.1.0] 2026-07-18
 Initial AgentFramework Python vertical slice.
 * [Added] - Typed AF kernel implementing classify, route, execute, verify, record, test, and reuse

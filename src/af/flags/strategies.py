@@ -53,7 +53,8 @@ class PercentageRollout(RolloutStrategy):
 
     @staticmethod
     def _hash_bucket(value: str) -> float:
-        digest = md5(value.encode("utf-8")).hexdigest()
+        # Stable cohort assignment, never a signature or authentication primitive.
+        digest = md5(value.encode("utf-8"), usedforsecurity=False).hexdigest()
         return int(digest[:8], 16) / 0xFFFFFFFF
 
 

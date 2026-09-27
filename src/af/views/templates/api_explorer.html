@@ -1,0 +1,20 @@
+{% extends "explorer_base.html" %}
+{% block introduction %}
+<h1>REST API documentation</h1>
+<p>This local explorer supports the installed JSON operations. The <a href="/openapi.json">OpenAPI schema</a> describes request fields, response models, and the remaining transports.</p>
+{% endblock %}
+{% block fields %}
+<label for="operation">Operation</label>
+<select id="operation">{% for operation in operations %}<option value="{{ operation.method }} {{ operation.path }}"{% if operation.method == 'GET' and operation.path == '/api/v1/tasks' %} selected{% endif %}>{{ operation.method }} {{ operation.path }} — {{ operation.summary }}</option>{% endfor %}</select>
+<div id="path-parameters"></div>
+<label for="query-parameters">Query parameters (JSON object)</label>
+<textarea id="query-parameters" rows="3" maxlength="16000" spellcheck="false">{}</textarea>
+<label for="request-body">JSON request body (empty for no body)</label>
+<textarea id="request-body" rows="8" maxlength="40000" spellcheck="false" aria-describedby="body-help"></textarea>
+<p id="body-help">For task creation, use {"prompt":"how many rs in strawberry?"}. GET and HEAD requests do not send a body.</p>
+{% endblock %}
+{% block reference %}
+<section aria-labelledby="operations-title"><h2 id="operations-title">Installed JSON operations</h2>
+<ul>{% for operation in operations %}<li><code>{{ operation.method }} {{ operation.path }}</code> — {{ operation.summary }}</li>{% endfor %}</ul>
+</section>
+{% endblock %}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from threading import RLock
 from types import TracebackType
 from typing import Any, Literal
@@ -69,9 +71,7 @@ _CORE_FEATURES: frozenset[DocumentFeature] = frozenset(
         DocumentFeature.CRUD,
         DocumentFeature.AGGREGATION,
         DocumentFeature.INDEX,
-        DocumentFeature.SESSION,
         DocumentFeature.BULK,
-        DocumentFeature.TIME_SERIES,
     }
 )
 
@@ -89,8 +89,8 @@ _WRITE_CONCERN_MAP: dict[WriteConcern, dict[str, Any]] = {
     WriteConcern.MAJORITY: {"w": "majority"},
 }
 
-_INDEX_TYPE_MAP: dict[IndexType, str] = {
-    IndexType.KEY: "text",
+_INDEX_TYPE_MAP: dict[IndexType, str | int] = {
+    IndexType.KEY: 1,
     IndexType.TEXT: "text",
     IndexType.GEO_2D: "2d",
     IndexType.GEO_2SPHERE: "2dsphere",
@@ -107,38 +107,38 @@ def _sanitize_error(
         code = getattr(error, "code", None)
         if code == 11000:
             return DuplicateKeyError(
-                str(error),
+                f"Document operation failed: {operation}",
                 collection=collection,
                 operation=operation,
                 code=code,
             )
         if code in (43, 10107, 13388):
             return DocumentSessionError(
-                str(error),
+                f"Document operation failed: {operation}",
                 collection=collection,
                 operation=operation,
                 code=code,
             )
         return DocumentWriteError(
-            str(error),
+            f"Document operation failed: {operation}",
             collection=collection,
             operation=operation,
             code=code,
         )
     if isinstance(error, errors.ConnectionFailure):
         return DocumentOperationError(
-            f"Connection failure during {operation}: {error}",
+            f"Document connection failed: {operation}",
             collection=collection,
             operation=operation,
         )
     if isinstance(error, errors.ServerSelectionTimeoutError):
         return DocumentOperationError(
-            f"Server selection timeout during {operation}: {error}",
+            f"Document server unavailable: {operation}",
             collection=collection,
             operation=operation,
         )
     return DocumentOperationError(
-        str(error) if error else f"Unknown error during {operation}",
+        f"Document operation failed: {operation}",
         collection=collection,
         operation=operation,
     )
@@ -179,6 +179,24 @@ def _index_spec(definition: IndexDefinition) -> list[tuple[str, Any]]:
     return spec
 
 
+class _MongoSessionContext(SessionContext):
+    def __init__(self, native: ClientSession, on_close: Callable[[str], None]) -> None:
+        super().__init__(str(native.session_id))
+        self.native = native
+        self._on_close = on_close
+
+    def end(self) -> None:
+        if self.is_active:
+            try:
+                self.native.end_session()
+            finally:
+                self.is_active = False
+                self._on_close(self.session_id)
+
+    async def close(self) -> None:
+        self.end()
+
+
 class MongoDBDriver:
     """MongoDB Community document driver with capability discovery."""
 
@@ -195,38 +213,59 @@ class MongoDBDriver:
         self._replica_set = replica_set
         self._lock = RLock()
         self._closed = False
-        self._session: ClientSession | None = None
+        self._sessions: dict[str, _MongoSessionContext] = {}
 
         try:
             self._client: MongoClient[dict[str, Any]] = MongoClient(url, replicaSet=replica_set)
             self._database: Database[dict[str, Any]] = self._client[database]
-        except errors.PyMongoError as e:
+        except errors.PyMongoError:
             raise DocumentOperationError(
-                f"Failed to connect to MongoDB: {e}",
+                "Failed to connect to MongoDB",
                 operation="connect",
-            ) from e
+            ) from None
 
         self._features = self._discover_features()
 
     def _discover_features(self) -> frozenset[DocumentFeature]:
-        """Discover supported features at runtime."""
+        """Discover topology/version capabilities without assuming a host count."""
         features = set(_CORE_FEATURES)
-
         try:
-            if self._is_replica_set():
-                features.add(DocumentFeature.TRANSACTION)
-        except Exception:
+            hello = self._client.admin.command("hello")
+            wire = hello.get("maxWireVersion", 0)
+            if type(wire) is not int:
+                return frozenset(features)
+            if wire >= 13:
+                features.add(DocumentFeature.TIME_SERIES)
+            if type(hello.get("logicalSessionTimeoutMinutes")) is int:
+                features.add(DocumentFeature.SESSION)
+                if (hello.get("setName") and wire >= 7) or (
+                    hello.get("msg") == "isdbgrid" and wire >= 8
+                ):
+                    features.add(DocumentFeature.TRANSACTION)
+        except errors.PyMongoError:
             pass
-
         return frozenset(features)
 
-    def _is_replica_set(self) -> bool:
-        """Check if connected to a replica set."""
+    def verify_capabilities(self) -> frozenset[DocumentFeature]:
+        """Refresh topology evidence only after a successful liveness check."""
+        self._assert_open()
         try:
-            is_master = self._client.admin.command("ismaster")
-            return "hosts" in is_master and len(is_master.get("hosts", [])) > 1
-        except Exception:
-            return False
+            self._client.admin.command("ping")
+            self._features = self._discover_features()
+            return self._features
+        except errors.PyMongoError as error:
+            raise _sanitize_error(error, operation="verify_capabilities") from None
+
+    def _session_options(self, session: SessionContext | None) -> dict[str, Any]:
+        if session is None:
+            return {}
+        if (
+            not isinstance(session, _MongoSessionContext)
+            or not session.is_active
+            or self._sessions.get(session.session_id) is not session
+        ):
+            raise DocumentSessionError("Session is closed or belongs to another driver")
+        return {"session": session.native}
 
     @property
     def features(self) -> frozenset[DocumentFeature]:
@@ -269,17 +308,20 @@ class MongoDBDriver:
         collection: str,
         document: dict[str, Any],
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._write_collection(collection, write_concern)
-            result: InsertOneResult = coll.insert_one(document)
+            result: InsertOneResult = coll.insert_one(document, **session_options)
             return WriteResult(
                 acknowledged=True,
-                inserted_id=str(result.inserted_id),
+                inserted_id=result.inserted_id,
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="insert_one", collection=collection) from e
+            raise _sanitize_error(e, operation="insert_one", collection=collection) from None
 
     async def insert_many(
         self,
@@ -287,20 +329,24 @@ class MongoDBDriver:
         documents: list[dict[str, Any]],
         ordered: bool = True,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._write_collection(collection, write_concern)
             result: InsertManyResult = coll.insert_many(
                 documents,
                 ordered=ordered,
+                **session_options,
             )
             return WriteResult(
                 acknowledged=True,
-                inserted_ids=[str(id_) for id_ in result.inserted_ids],
+                inserted_ids=list(result.inserted_ids),
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="insert_many", collection=collection) from e
+            raise _sanitize_error(e, operation="insert_many", collection=collection) from None
 
     async def find_one(
         self,
@@ -308,19 +354,21 @@ class MongoDBDriver:
         filter: DocumentFilter | None = None,
         projection: DocumentProjection | None = None,
         read_preference: DocReadPreference = DocReadPreference.PRIMARY,
+        *,
+        session: SessionContext | None = None,
     ) -> dict[str, Any] | None:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._read_collection(collection, read_preference)
             doc = coll.find_one(
                 _filter_to_dict(filter),
                 projection=_projection_to_dict(projection),
+                **session_options,
             )
-            if doc and "_id" in doc:
-                doc["_id"] = str(doc["_id"])
             return doc
         except Exception as e:
-            raise _sanitize_error(e, operation="find_one", collection=collection) from e
+            raise _sanitize_error(e, operation="find_one", collection=collection) from None
 
     async def find(
         self,
@@ -331,40 +379,45 @@ class MongoDBDriver:
         limit: int = 0,
         skip: int = 0,
         read_preference: DocReadPreference = DocReadPreference.PRIMARY,
+        *,
+        session: SessionContext | None = None,
     ) -> QueryResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._read_collection(collection, read_preference)
             cursor = coll.find(
                 _filter_to_dict(filter),
                 projection=_projection_to_dict(projection),
+                **session_options,
                 sort=sort,
                 limit=limit,
                 skip=skip,
             )
             documents = []
             for doc in cursor:
-                if "_id" in doc:
-                    doc["_id"] = str(doc["_id"])
                 documents.append(doc)
             return QueryResult(
                 documents=documents,
                 count=len(documents),
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="find", collection=collection) from e
+            raise _sanitize_error(e, operation="find", collection=collection) from None
 
     async def count_documents(
         self,
         collection: str,
         filter: DocumentFilter | None = None,
+        *,
+        session: SessionContext | None = None,
     ) -> int:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._database[collection]
-            return int(coll.count_documents(_filter_to_dict(filter)))
+            return int(coll.count_documents(_filter_to_dict(filter), **session_options))
         except Exception as e:
-            raise _sanitize_error(e, operation="count_documents", collection=collection) from e
+            raise _sanitize_error(e, operation="count_documents", collection=collection) from None
 
     async def update_one(
         self,
@@ -373,23 +426,27 @@ class MongoDBDriver:
         update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._write_collection(collection, write_concern)
             result: UpdateResult = coll.update_one(
                 _filter_to_dict(filter),
                 update,
                 upsert=upsert,
+                **session_options,
             )
             return WriteResult(
                 acknowledged=True,
                 matched_count=result.matched_count,
                 modified_count=result.modified_count,
-                upserted_id=str(result.upserted_id) if result.upserted_id else None,
+                upserted_id=result.upserted_id,
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="update_one", collection=collection) from e
+            raise _sanitize_error(e, operation="update_one", collection=collection) from None
 
     async def update_many(
         self,
@@ -398,14 +455,18 @@ class MongoDBDriver:
         update: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._write_collection(collection, write_concern)
             result: UpdateResult = coll.update_many(
                 _filter_to_dict(filter),
                 update,
                 upsert=upsert,
+                **session_options,
             )
             return WriteResult(
                 acknowledged=True,
@@ -413,7 +474,7 @@ class MongoDBDriver:
                 modified_count=result.modified_count,
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="update_many", collection=collection) from e
+            raise _sanitize_error(e, operation="update_many", collection=collection) from None
 
     async def replace_one(
         self,
@@ -422,82 +483,96 @@ class MongoDBDriver:
         replacement: dict[str, Any],
         upsert: bool = False,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._write_collection(collection, write_concern)
             result: UpdateResult = coll.replace_one(
                 _filter_to_dict(filter),
                 replacement,
                 upsert=upsert,
+                **session_options,
             )
             return WriteResult(
                 acknowledged=True,
                 matched_count=result.matched_count,
                 modified_count=result.modified_count,
-                upserted_id=str(result.upserted_id) if result.upserted_id else None,
+                upserted_id=result.upserted_id,
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="replace_one", collection=collection) from e
+            raise _sanitize_error(e, operation="replace_one", collection=collection) from None
 
     async def delete_one(
         self,
         collection: str,
         filter: DocumentFilter,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._write_collection(collection, write_concern)
-            result: DeleteResult = coll.delete_one(_filter_to_dict(filter))
+            result: DeleteResult = coll.delete_one(_filter_to_dict(filter), **session_options)
             return WriteResult(
                 acknowledged=True,
                 deleted_count=result.deleted_count,
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="delete_one", collection=collection) from e
+            raise _sanitize_error(e, operation="delete_one", collection=collection) from None
 
     async def delete_many(
         self,
         collection: str,
         filter: DocumentFilter,
         write_concern: WriteConcern = WriteConcern.ACKNOWLEDGED,
+        *,
+        session: SessionContext | None = None,
     ) -> WriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._write_collection(collection, write_concern)
-            result: DeleteResult = coll.delete_many(_filter_to_dict(filter))
+            result: DeleteResult = coll.delete_many(_filter_to_dict(filter), **session_options)
             return WriteResult(
                 acknowledged=True,
                 deleted_count=result.deleted_count,
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="delete_many", collection=collection) from e
+            raise _sanitize_error(e, operation="delete_many", collection=collection) from None
 
     async def aggregate(
         self,
         collection: str,
         pipeline: AggregationPipeline,
+        *,
+        session: SessionContext | None = None,
     ) -> list[dict[str, Any]]:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._database[collection]
-            cursor = coll.aggregate(list(pipeline.stages))
+            cursor = coll.aggregate(list(pipeline.stages), **session_options)
             results = []
             for doc in cursor:
-                if "_id" in doc:
-                    doc["_id"] = str(doc["_id"])
                 results.append(doc)
             return results
         except Exception as e:
-            raise _sanitize_error(e, operation="aggregate", collection=collection) from e
+            raise _sanitize_error(e, operation="aggregate", collection=collection) from None
 
     async def create_index(
         self,
         collection: str,
         definition: IndexDefinition,
+        *,
+        session: SessionContext | None = None,
     ) -> str:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._database[collection]
             spec = _index_spec(definition)
@@ -511,63 +586,109 @@ class MongoDBDriver:
             if definition.name:
                 kwargs["name"] = definition.name
 
-            index_name = coll.create_index(spec, **kwargs)
+            index_name = coll.create_index(spec, **kwargs, **session_options)
             return str(index_name)
         except Exception as e:
-            raise _sanitize_error(e, operation="create_index", collection=collection) from e
+            raise _sanitize_error(e, operation="create_index", collection=collection) from None
 
     async def list_indexes(
         self,
         collection: str,
+        *,
+        session: SessionContext | None = None,
     ) -> list[dict[str, Any]]:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._database[collection]
             indexes = []
-            for index in coll.list_indexes():
+            for index in coll.list_indexes(**session_options):
                 indexes.append(dict(index))
             return indexes
         except Exception as e:
-            raise _sanitize_error(e, operation="list_indexes", collection=collection) from e
+            raise _sanitize_error(e, operation="list_indexes", collection=collection) from None
 
     async def drop_index(
         self,
         collection: str,
         index_name: str,
+        *,
+        session: SessionContext | None = None,
     ) -> bool:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._database[collection]
-            coll.drop_index(index_name)
+            coll.drop_index(index_name, **session_options)
             return True
         except errors.OperationFailure as e:
             if e.code == 27:
                 return False
-            raise _sanitize_error(e, operation="drop_index", collection=collection) from e
+            raise _sanitize_error(e, operation="drop_index", collection=collection) from None
         except Exception as e:
-            raise _sanitize_error(e, operation="drop_index", collection=collection) from e
+            raise _sanitize_error(e, operation="drop_index", collection=collection) from None
+
+    def _forget_session(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
 
     async def start_session(self) -> SessionContext:
         self._assert_open()
         self.require(DocumentFeature.SESSION)
         try:
-            session = self._client.start_session()
-            self._session = session
-            return SessionContext(session_id=str(session.session_id))
-        except Exception as e:
-            raise _sanitize_error(e, operation="start_session") from e
+            native = self._client.start_session()
+            handle = _MongoSessionContext(native, self._forget_session)
+            self._sessions[handle.session_id] = handle
+            return handle
+        except errors.PyMongoError as error:
+            raise _sanitize_error(error, operation="start_session") from None
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[SessionContext]:
+        """Use ``session=handle`` on every operation belonging to this transaction."""
+        self._assert_open()
+        self.require(DocumentFeature.TRANSACTION)
+        handle = await self.start_session()
+        native = self._session_options(handle)["session"]
+        try:
+            try:
+                native.start_transaction()
+            except errors.PyMongoError as error:
+                raise _sanitize_error(error, operation="start_transaction") from None
+            try:
+                yield handle
+            except BaseException:
+                if native.in_transaction:
+                    # Preserve the original application/cancellation exception.
+                    with suppress(errors.PyMongoError):
+                        native.abort_transaction()
+                raise
+            else:
+                try:
+                    native.commit_transaction()
+                except errors.PyMongoError as error:
+                    raise _sanitize_error(error, operation="commit_transaction") from None
+        finally:
+            try:
+                await handle.close()
+            finally:
+                self._sessions.pop(handle.session_id, None)
 
     async def bulk_write(
         self,
         collection: str,
         operations: list[BulkOperation],
         ordered: bool = True,
+        *,
+        session: SessionContext | None = None,
     ) -> BulkWriteResult:
         self._assert_open()
+        session_options = self._session_options(session)
         try:
             coll = self._database[collection]
             pymongo_ops: list[_MongoWriteOperation] = []
             for op in operations:
+                if op.operation not in {"insert", "update", "delete", "replace"}:
+                    raise ValueError("Unknown bulk document operation")
                 if op.operation == "insert":
                     pymongo_ops.append(InsertOne(op.document or {}))
                 elif op.operation == "update":
@@ -589,7 +710,9 @@ class MongoDBDriver:
                         )
                     )
 
-            result: PyMongoBulkWriteResult = coll.bulk_write(pymongo_ops, ordered=ordered)
+            result: PyMongoBulkWriteResult = coll.bulk_write(
+                pymongo_ops, ordered=ordered, **session_options
+            )
             return BulkWriteResult(
                 inserted_count=result.inserted_count,
                 matched_count=result.matched_count,
@@ -598,7 +721,7 @@ class MongoDBDriver:
                 upserted_count=result.upserted_count,
             )
         except Exception as e:
-            raise _sanitize_error(e, operation="bulk_write", collection=collection) from e
+            raise _sanitize_error(e, operation="bulk_write", collection=collection) from None
 
     async def create_time_series_collection(
         self,
@@ -617,8 +740,9 @@ class MongoDBDriver:
 
             ts_options: dict[str, Any] = {
                 "timeField": options.time_field,
-                "granularity": options.granularity,
             }
+            if options.bucket_max_span_seconds is None:
+                ts_options["granularity"] = options.granularity.rstrip("s") + "s"
             if options.meta_field:
                 ts_options["metaField"] = options.meta_field
             if options.bucket_max_span_seconds is not None:
@@ -626,9 +750,13 @@ class MongoDBDriver:
             if options.bucket_rounding_seconds is not None:
                 ts_options["bucketRoundingSeconds"] = options.bucket_rounding_seconds
 
+            collection_options: dict[str, Any] = {}
+            if options.expire_after_seconds is not None:
+                collection_options["expireAfterSeconds"] = options.expire_after_seconds
             self._database.create_collection(
                 name,
                 timeseries=ts_options,
+                **collection_options,
             )
             return True
         except DocumentTimeSeriesError:
@@ -636,7 +764,7 @@ class MongoDBDriver:
         except Exception as e:
             raise _sanitize_error(
                 e, operation="create_time_series_collection", collection=name
-            ) from e
+            ) from None
 
     async def get_time_series_options(
         self,
@@ -652,24 +780,26 @@ class MongoDBDriver:
                     return TimeSeriesOptions(
                         time_field=ts.get("timeField", ""),
                         meta_field=ts.get("metaField"),
-                        granularity=ts.get("granularity", "hour"),
+                        granularity=ts.get("granularity", "hours").rstrip("s"),
                         bucket_max_span_seconds=ts.get("bucketMaxSpanSeconds"),
                         bucket_rounding_seconds=ts.get("bucketRoundingSeconds"),
+                        expire_after_seconds=opts.get("expireAfterSeconds"),
                     )
             return None
         except Exception as e:
             raise _sanitize_error(
                 e, operation="get_time_series_options", collection=collection
-            ) from e
+            ) from None
 
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             try:
-                if self._session:
-                    self._session.end_session()
-                    self._session = None
+                for handle in tuple(self._sessions.values()):
+                    with suppress(Exception):
+                        handle.end()
+                self._sessions.clear()
                 self._client.close()
             except Exception:
                 pass

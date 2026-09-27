@@ -49,6 +49,14 @@ from af.infrastructure.tracing import InMemoryTraceRepository
 from af.interfaces.mcp import create_mcp_server
 
 EXPECTED_TOOLS = {
+    "af_request_human_decision",
+    "af_get_human_decision",
+    "af_respond_human_decision",
+    "af_revoke_human_decision",
+    "af_start_workflow",
+    "af_get_workflow",
+    "af_resume_workflow",
+    "af_cancel_workflow",
     "af_hello",
     "af_ask",
     "af_count_characters",
@@ -334,10 +342,9 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             searched = await session.call_tool("af_search", {"text": "pineapple"})
             assert searched.isError is False
             assert searched.structuredContent is not None
-            assert searched.structuredContent["total"] == 2
+            assert searched.structuredContent["total"] == 1
             assert {item["source_id"] for item in searched.structuredContent["items"]} == {
                 "af_tasks",
-                "af_run_traces",
             }
 
             deleted = await session.call_tool("af_delete_task", {"task_id": task_id})
@@ -349,22 +356,38 @@ def test_mcp_catalogue_annotations_and_task_crud(application) -> None:  # type: 
             manifest_result = await session.read_resource("af://manifest")
             manifest = json.loads(manifest_result.contents[0].text)
             assert manifest["version"].endswith("a0")
-            assert manifest["routes"] == ["character-count", "current-time", "hello"]
+            assert manifest["routes"] == [
+                "catalogue-execute",
+                "character-count",
+                "current-time",
+                "hello",
+                "science-calculate",
+            ]
             assert manifest["route_identities"] == [
                 {
-                    "procedure_id": "character-count",
+                    "procedure_id": "catalogue-execute",
                     "version": "1.0.0",
                     "digest": manifest["route_identities"][0]["digest"],
                 },
                 {
-                    "procedure_id": "current-time",
+                    "procedure_id": "character-count",
                     "version": "1.0.0",
                     "digest": manifest["route_identities"][1]["digest"],
                 },
                 {
+                    "procedure_id": "current-time",
+                    "version": "1.1.0",
+                    "digest": manifest["route_identities"][2]["digest"],
+                },
+                {
                     "procedure_id": "hello",
                     "version": "1.0.0",
-                    "digest": manifest["route_identities"][2]["digest"],
+                    "digest": manifest["route_identities"][3]["digest"],
+                },
+                {
+                    "procedure_id": "science-calculate",
+                    "version": "1.0.0",
+                    "digest": manifest["route_identities"][4]["digest"],
                 },
             ]
             assert all(
@@ -569,8 +592,8 @@ def test_mcp_count_characters_uses_typed_route_without_selector() -> None:
                 assert counted.structuredContent["prompt"] == text
                 assert counted.structuredContent["output"] == expected
                 trace = application.traces.get(str(counted.structuredContent["trace_id"]))
-                assert trace.prompt == text
-                assert trace.arguments == {"text": text, "character": character}
+                assert trace.prompt == "[redacted]"
+                assert trace.arguments == {}
 
             too_long = await session.call_tool(
                 "af_count_characters",
@@ -610,7 +633,7 @@ def test_mcp_reports_domain_failures_as_tool_errors(application) -> None:  # typ
                 (
                     "af_create_task",
                     {"prompt": "make tea"},
-                    "no route found for prompt: 'make tea'",
+                    "no route found for this request",
                 ),
                 (
                     "af_ask",
@@ -739,7 +762,7 @@ def test_streamable_http_mcp_keeps_loopback_default_and_accepts_explicit_transpo
 
     lan = create_application(
         settings=Settings(
-            host="0.0.0.0",
+            host="127.0.0.1",
             mcp_transport="streamable-http",
             allowed_hosts=("af.internal",),
             allowed_origins=("http://af.internal:8000",),
@@ -833,7 +856,7 @@ def test_streamable_http_mcp_validates_explicit_transport_entries_on_loopback_ho
 def test_streamable_http_mcp_canonicalizes_default_port_origins() -> None:
     application = create_application(
         settings=Settings(
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=80,
             mcp_transport="streamable-http",
             allowed_hosts=("af.internal",),

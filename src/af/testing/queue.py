@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from af.messaging.envelopes import EnvelopeKind, MessageEnvelope, MessageMetadata
 from af.queue.contracts import QueueJob, QueueOperationError, UnsupportedQueueFeature
-from af.queue.manager import QueueDriver
+from af.queue.manager import QueueDriver, QueueFeature
 from af.testing.conformance import ConformanceCase, DriverConformanceSuite
 
 __all__ = ("QueueDriverConformanceSuite", "queue_driver_cases")
@@ -115,15 +115,47 @@ def _assert_retry_exhaustion(driver: QueueDriver) -> None:
     _check(driver.reserve() is None, "queue driver did not dead-letter the exhausted job")
 
 
+def _supports(driver: QueueDriver, feature: QueueFeature) -> bool:
+    supports = getattr(driver, "supports", None)
+    return callable(supports) and supports(feature) is True
+
+
+def _assert_delay(driver: QueueDriver) -> None:
+    if not _supports(driver, QueueFeature.DELAY):
+        return
+    job = _job("job-delayed", lane="delayed", delay=timedelta(days=1))
+    receipt = driver.dispatch(job)
+    _check(receipt.message_id == "job-delayed", "queue delay returned the wrong receipt")
+    _check(driver.reserve(lane="delayed") is None, "queue delay made future work eligible")
+
+
+def _assert_priority(driver: QueueDriver) -> None:
+    if not _supports(driver, QueueFeature.PRIORITY):
+        return
+    driver.dispatch(_job("job-low", lane="priority", priority=-1))
+    driver.dispatch(_job("job-high", lane="priority", priority=10))
+    for expected in ("job-high", "job-low"):
+        reservation = driver.reserve(lane="priority")
+        _check(reservation is not None, "queue priority lost accepted work")
+        if reservation is not None:
+            _check(
+                reservation.job.envelope.metadata.message_id == expected,
+                "queue priority reserved the wrong job",
+            )
+            driver.ack(reservation)
+
+
 def _assert_unsupported_features(driver: QueueDriver) -> None:
-    for job in (
-        _job("job-delay", delay=timedelta(seconds=1)),
-        _job("job-priority", priority=10),
-        _job("job-timeout", timeout=timedelta(seconds=30)),
-        _job("job-unique", unique_key="job-unique"),
-        _job("job-fifo", fifo_group="orders"),
-        _job("job-transaction", requires_transaction=True),
+    for feature, job in (
+        (QueueFeature.DELAY, _job("job-delay", delay=timedelta(seconds=1))),
+        (QueueFeature.PRIORITY, _job("job-priority", priority=10)),
+        (QueueFeature.TIMEOUT, _job("job-timeout", timeout=timedelta(seconds=30))),
+        (QueueFeature.UNIQUENESS, _job("job-unique", unique_key="job-unique")),
+        (QueueFeature.FIFO, _job("job-fifo", fifo_group="orders")),
+        (QueueFeature.TRANSACTIONAL_DISPATCH, _job("job-transaction", requires_transaction=True)),
     ):
+        if _supports(driver, feature):
+            continue
         captured = None
         try:
             driver.dispatch(job)
@@ -152,6 +184,8 @@ def queue_driver_cases() -> tuple[ConformanceCase[QueueDriver], ...]:
         ConformanceCase("retry-redelivery", _assert_retry_redelivery),
         ConformanceCase("retry-exhaustion", _assert_retry_exhaustion),
         ConformanceCase("unsupported-features", _assert_unsupported_features),
+        ConformanceCase("delay", _assert_delay),
+        ConformanceCase("priority", _assert_priority),
         ConformanceCase("shutdown", _assert_shutdown),
     )
 

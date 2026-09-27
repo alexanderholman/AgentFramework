@@ -1,0 +1,14 @@
+"""Shared deterministic task use case for non-HTTP entry points."""
+
+from af.bootstrap import AFApplication
+from af.framework.container import InvocationKind
+from af.framework.context import AcceptanceScope, ExecutionContext
+from af.framework.types import ExecutionOutcome
+
+
+def execute_prompt(application: AFApplication, prompt: str) -> ExecutionOutcome:
+    context = ExecutionContext(
+        requested_scope=AcceptanceScope.DETERMINISTIC, effective_scope=AcceptanceScope.DETERMINISTIC
+    )
+    with application.container.invocation_scope(kind=InvocationKind.INTERACTION, context=context):
+        return application.tasks.execute(prompt)

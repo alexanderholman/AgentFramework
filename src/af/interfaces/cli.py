@@ -18,8 +18,14 @@ from typer._click.exceptions import Exit as ClickExit
 from typer.core import TyperGroup
 
 from af.application.ideons import InterpretRequest
+from af.application.locales import LocaleSelection, Localizer
 from af.application.version_control import VersionControlController
 from af.bootstrap import AFApplication, create_application
+from af.bootstrap_setup import (
+    create_machine_application,
+    create_machine_setup_controller,
+    machine_root,
+)
 from af.bootstrap_version_control import create_version_control_controller
 from af.domain.ideons.records import ContextGraph
 from af.framework.container import Container, InvocationKind
@@ -33,11 +39,14 @@ from af.interfaces.cli_commands import (
     install_click_group_command_contributors,
 )
 from af.interfaces.cli_interactions import CliInteraction, NonInteractiveCliInteraction
+from af.interfaces.locale_presenters import localize_outcome
+from af.interfaces.machine_setup import register_initialization_commands
 from af.interfaces.presenters import (
     agent_route_to_dict,
     delete_to_dict,
     operations_to_dict,
     operations_to_text,
+    outcome_to_dict,
     procedure_descriptor_to_dict,
     search_index_result_to_dict,
     search_result_to_dict,
@@ -217,7 +226,8 @@ def create_cli(
     )
     initialization_commands = typer.Typer(
         name="init",
-        no_args_is_help=True,
+        no_args_is_help=False,
+        invoke_without_command=True,
         help="Initialize AF's local operating foundations",
     )
     version_commands = typer.Typer(
@@ -230,8 +240,14 @@ def create_cli(
     owns_application = application is None
     cached_application = application
     cached_version_control = version_control
+
+    def default_application() -> AFApplication:
+        if (machine_root() / "machine.json").exists():
+            return create_machine_application()
+        return create_application()
+
     configured_factory: Callable[[], object] = (
-        create_application if application_factory is None else application_factory
+        default_application if application_factory is None else application_factory
     )
     selected_factory_path: str | None = None
     lifecycle_context: typer.Context | Context | None = None
@@ -419,12 +435,35 @@ def create_cli(
             fail(error)
 
     @cli.command()
-    def ask(prompt: Annotated[str, typer.Argument(help="Natural-language work request")]) -> None:
-        """Classify and execute a request without persisting a Task."""
+    def ask(
+        prompt: Annotated[str, typer.Argument(help="Natural-language work request")],
+        language: Annotated[str | None, typer.Option("--language")] = None,
+        territory: Annotated[str | None, typer.Option("--territory")] = None,
+        as_json: Annotated[bool, typer.Option("--json")] = False,
+    ) -> None:
+        """Execute verified work, with optional independent locale presentation."""
         try:
-            typer.echo(current().tasks.execute(prompt).output)
+            selection = LocaleSelection.parse(language=language or "en", territory=territory)
+            application = current()
+            outcome = application.tasks.execute(prompt)
+            if language is not None or territory is not None:
+                payload = localize_outcome(
+                    outcome, application.container.resolve(Localizer), selection
+                )
+                if as_json:
+                    typer.echo(json.dumps(payload, ensure_ascii=False))
+                else:
+                    presentation = cast(dict[str, object], payload["presentation"])
+                    typer.echo(presentation["text"])
+            elif as_json:
+                typer.echo(json.dumps(outcome_to_dict(outcome), ensure_ascii=False))
+            else:
+                typer.echo(outcome.output)
         except AFError as error:
             fail(error)
+        except ValueError:
+            typer.echo("invalid locale selection", err=True)
+            raise typer.Exit(2) from None
 
     @cli.command("route-agent")
     def route_agent(
@@ -437,8 +476,9 @@ def create_cli(
             fail(error)
 
     @cli.command()
-    def routes() -> None:
+    def routes(as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
         """List installed deterministic procedures as JSON."""
+        del as_json
         try:
             registry = current().container.resolve(ProcedureRegistry)
             catalogue = sorted(registry.catalogue(), key=lambda descriptor: descriptor.procedure_id)
@@ -735,6 +775,7 @@ def create_cli(
         except AFError as error:
             fail(error)
 
+    register_initialization_commands(cli, initialization_commands, create_machine_setup_controller)
     initialization_commands.add_typer(version_commands, name="version")
     cli.add_typer(initialization_commands, name="init")
     cli.add_typer(make_commands, name="make")

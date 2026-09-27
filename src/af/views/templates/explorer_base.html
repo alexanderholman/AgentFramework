@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}API documentation{% endblock %} · AF</title>
+  <link rel="stylesheet" href="/assets/af.css">
+  <link rel="stylesheet" href="/assets/explorer.css">
+  <script src="/assets/explorer.js" defer></script>
+</head>
+<body data-explorer="{{ kind }}">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <nav aria-label="Primary navigation"><a href="/">AF workspace</a><a href="/docs">REST documentation</a><a href="/graphql/explorer">GraphQL explorer</a></nav>
+  <main id="main-content" tabindex="-1">
+    {% block introduction %}{% endblock %}
+    <p>Requests run against this AF application with its existing authorization and execution policy. A mutation can create, replace, or delete stored work. Review the operation and input before selecting Send request.</p>
+    <noscript><p>Interactive requests require JavaScript. Schema downloads and the operation list remain available without it.</p></noscript>
+    <form id="explorer-form" aria-describedby="request-help">
+      {% block fields %}{% endblock %}
+      <details>
+        <summary>Optional authorization and request conditions</summary>
+        <p id="token-help">The bearer credential is sent only to this origin when you submit. It is not saved in browser storage or added to the URL. Clear it when finished.</p>
+        <label for="bearer">Bearer credential</label>
+        <input id="bearer" type="password" maxlength="1000" autocomplete="off" aria-describedby="token-help" spellcheck="false">
+        <label for="condition">If-Match value (for conditional updates)</label>
+        <input id="condition" maxlength="256" autocomplete="off" spellcheck="false">
+        <label for="idempotency">Idempotency-Key (for repeatable requests)</label>
+        <input id="idempotency" maxlength="128" autocomplete="off" spellcheck="false">
+      </details>
+      <p id="request-help">Nothing is executed automatically. Requests stay on this origin. Results are displayed as text.</p>
+      <div class="actions"><button id="send-request" type="submit" disabled>Send request</button><button id="cancel-request" type="button" disabled>Cancel waiting</button><button id="clear-request" type="button">Clear credential and result</button></div>
+    </form>
+    <p id="request-status" role="status" aria-live="polite">Ready. No request sent.</p>
+    <section aria-labelledby="result-title" id="response-region" aria-busy="false">
+      <h2 id="result-title">Response</h2>
+      <p>For conditional updates, copy the ETag shown here into If-Match.</p>
+      <pre id="response-headers"></pre>
+      <pre id="response-body" tabindex="0" aria-label="Response body"></pre>
+    </section>
+    {% block reference %}{% endblock %}
+  </main>
+</body>
+</html>

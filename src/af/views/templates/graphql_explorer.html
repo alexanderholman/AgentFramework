@@ -1,0 +1,14 @@
+{% extends "explorer_base.html" %}
+{% block title %}GraphQL explorer{% endblock %}
+{% block introduction %}
+<h1>GraphQL explorer</h1>
+<p>Send an explicit query or mutation to <code>/graphql</code>. Read the <a href="/graphql/schema.graphql">installed GraphQL schema</a> for available fields and types. The server enforces the same query bounds and policy used by other clients.</p>
+{% endblock %}
+{% block fields %}
+<label for="graphql-query">Query or mutation</label>
+<textarea id="graphql-query" rows="10" maxlength="40000" spellcheck="false" required>query { tasks(limit: 10) { id output verified } }</textarea>
+<label for="graphql-variables">Variables (JSON object)</label>
+<textarea id="graphql-variables" rows="5" maxlength="40000" spellcheck="false">{}</textarea>
+<label for="operation-name">Operation name (optional)</label>
+<input id="operation-name" maxlength="128" spellcheck="false">
+{% endblock %}

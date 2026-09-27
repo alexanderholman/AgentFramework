@@ -1,311 +1,85 @@
-# AGENTS.md
+# AgentFramework engineering contract
 
-This file provides practical guidance for AI agents working on AgentFramework.
+AF is a Python 3.12 framework for turning repeated work into typed, independently
+verified procedures: `classify → route → execute → verify → record → test → reuse`.
+This is the canonical contract for all coding agents, including OpenCode, Qwen,
+Copilot, and ChatGPT. Load narrower `AGENTS.md` files only for the area being edited.
 
-## Project Overview
-
-AgentFramework (AF) is an executable, Python-native framework for turning agent work
-into deterministic, tested, reusable procedures. It incorporates the original
-AgentFactory registry and governance system as its inherited definition layer.
-
-## Key Files and Structure
-
-- **agents/** - Agent definition files (markdown format)
-  - Can be flat or nested in subdirectories
-  - Each agent has 5 required headings: Purpose, Inputs, Outputs, Behavior, Constraints
-  
-- **specialisms/** - Domain-specific standards and guidelines
-  - Testing.md, Security.md, Coder.md, etc.
-  
-- **agents.yaml** - Central registry
-  - All agents MUST be registered here with unique IDs
-  - Defines tags, file paths, and metadata
-  
-- **Append-only files** (DO NOT modify existing content, only append):
-  - `specs.md` - Technical specifications
-  - `decisions.md` - Architectural decisions
-  - `agent_runs.md` - Execution logs
-
-- **traits/** - Reusable behavioral modules for agents/specialisms/tasks
-- **skills/** - Operational skill guides for repeatable runtime setup/use
-- **workflows/** - Task-level execution patterns and validation gates
-- **tasks/** - Recurring and stateful task tracking (cadence, wip, triage)
-
-## Development Workflow
-
-### Adding a New Agent
-
-1. Create the agent markdown file in `agents/` (or subdirectory)
-2. Include all 5 required headings in order:
-   - `## Purpose`
-   - `## Inputs`
-   - `## Outputs`
-   - `## Behavior`
-   - `## Constraints`
-3. Add entry to `agents.yaml` with:
-   - Unique ID (e.g., "my-agent-001")
-   - Name, description, version
-   - At least one tag from allowed_tags list
-   - File path relative to repository root
-   - Status (active/inactive)
-4. Run validation: `./validate_agents.sh`
-5. If making architectural decisions, append to `decisions.md`
-
-### Validation
-
-Always run before committing:
-```bash
-./validate_agents.sh
-```
-
-This validates:
-- Required headings present and in correct order
-- Unique agent IDs
-- Tags from allowed list
-- File paths exist
-- Markdown format
-
-Expected: all tests pass
-
-### Python Validation (Alternative)
-
-For more detailed validation:
-```python
-import yaml
-
-with open('agents.yaml', 'r') as f:
-    data = yaml.safe_load(f)
-    
-# Check unique IDs
-ids = [agent['id'] for agent in data['agents']]
-assert len(ids) == len(set(ids)), "Duplicate agent IDs found"
-```
-
-## Coding Conventions
-
-### Agent Files (Markdown)
-- Use GitHub Flavored Markdown
-- Use H2 (`##`) for required headings
-- Use H3 (`###`) for subsections
-- Include code blocks with language specification
-- Keep lines reasonably short for readability
-
-### YAML Files
-- Use 2-space indentation
-- Quote strings containing special characters
-- Validate YAML syntax before committing
-
-### Append-Only Files
-- **NEVER** delete or modify existing content
-- **ALWAYS** add new entries at the end
-- Include date stamps in entry headers
-- Use horizontal rules (`---`) to separate entries
-
-## Testing
-
-Run all validation tests:
-```bash
-./validate_agents.sh
-```
-
-Check specific aspects:
-```bash
-# Check for required headings in a specific file
-grep -E "^## (Purpose|Inputs|Outputs|Behavior|Constraints)" agents/MyAgent.md
-
-# Validate YAML syntax
-python3 -c "import yaml; yaml.safe_load(open('agents.yaml'))"
-
-# Check for nested files (if needed)
-find agents/ -name "*.md" -type f
-```
-
-## Common Tasks
-
-### Operator Quickstart
-```bash
-# 1) Resolve and preview
-scripts/forge-route "validate agent definitions"
-
-# 2) Execute routed command
-scripts/forge-route --execute "validate agent definitions"
-
-# 3) Run full policy validation
-./validate_agents.sh
-```
-
-### View Current Agents
-```bash
-# List all agent files
-find agents/ -name "*.md" -type f
-
-# View agents in registry
-grep "  - id:" agents.yaml
-```
-
-### Check Append-Only File Status
-```bash
-# View recent additions to specs.md
-tail -50 specs.md
-
-# View recent decisions
-tail -50 decisions.md
-
-# View recent agent runs
-tail -50 agent_runs.md
-```
-
-### Verify Agent Memory Wiring
-```bash
-# Install or refresh memlog command
-cd ~/AgentMemory && ./install.sh --force
-
-# Check runtime wiring
-memlog doctor --root ~/opencode --strict
-
-# Validate continuity links and raw artifacts
-memlog validate --root ~/opencode --strict
-```
-
-### Resolve Task to Script (Only Write Once)
-```bash
-# List registered automations
-python3 -c "import yaml; d=yaml.safe_load(open('scripts/registry.yaml')); print('\n'.join(sorted(s['id'] for s in d.get('scripts', []))))"
-
-# Resolve NL request to top script matches
-python3 scripts/resolve.py --query "validate agent definitions" --top-k 3
-
-# Route and run from NL (dry-run by default)
-python3 scripts/route_and_run.py --query "validate agent definitions"
-
-# Forge shortcut wrapper (dry-run)
-scripts/forge-route "validate agent definitions"
-
-# Execute selected route with explicit parameters
-python3 scripts/route_and_run.py --script-id resolve-script --arg request="validate agent definitions" --execute
-
-# Forge shortcut with execution
-scripts/forge-route --execute "validate agent definitions"
-
-# Validate script registry schema quickly
-python3 -c "import yaml; d=yaml.safe_load(open('scripts/registry.yaml')); assert 'scripts' in d and isinstance(d['scripts'], list)"
-
-# Run policy workflow checklist
-grep -E "^# Workflow:|^## Workflow ID|^## Sequence|^## Validation" workflows/nl-to-script-routing.md
-
-# Enforce repeatable-task script references
-python3 scripts/check_repeatable_script_refs.py --root .
-
-# Validate registry schema and dry-run conventions
-python3 scripts/validate_registry.py --registry scripts/registry.yaml
-python3 scripts/check_dry_run_conventions.py --registry scripts/registry.yaml
-```
-
-### Update Agent Metadata
-1. Edit `agents.yaml` to update metadata
-2. Increment version number
-3. Update `last_modified` date
-4. Run `./validate_agents.sh`
-5. Append decision to `decisions.md` explaining why
-
-## Important Rules
-
-### MUST DO
-- Include all 5 required headings in agent files
-- Register agents in agents.yaml with unique IDs
-- Use tags from the allowed_tags list
-- Run validation before committing
-- Append to append-only files (never modify existing content)
-- Mark assumptions with `[ASSUMPTION]` tags
-- Enforce "Only Write Once": check for an existing script/workflow before ad-hoc execution
-- If a repeatable action has no script, write the script first, then execute it
-- Parameterize scripts for reuse; do not hardcode one-off values
-
-### MUST NOT DO
-- Modify or delete content in append-only files (specs.md, decisions.md, agent_runs.md)
-- Fabricate citations or test results
-- Use duplicate agent IDs
-- Create agents without required headings
-- Skip validation before committing
-- Repeat a manual multi-step action when it can be scripted and reused
-
-## Directory Structure
-
-Both flat and nested structures are supported:
-
-```
-# Flat structure (original, still valid)
-agents/
-├── Architect.md
-├── Builder.md
-├── Tester.md
-└── SecurityReviewer.md
-
-# Nested structure (now supported)
-agents/
-├── core/
-│   ├── Architect.md
-│   └── Builder.md
-├── quality/
-│   ├── Tester.md
-│   └── SecurityReviewer.md
-└── documentation/
-    └── Editor.md
-```
-
-The agents.yaml file paths should match the actual file locations.
-
-## Troubleshooting
-
-### Validation Fails
-- Check that all 5 headings are present and spelled correctly
-- Verify agent ID is unique in agents.yaml
-- Ensure tags are from the allowed_tags list
-- Confirm file path in agents.yaml matches actual file location
-
-### Known Issues
-- None currently tracked
-
-## Further Documentation
-
-- `.github/copilot-instructions.md` - Detailed instructions for GitHub Copilot
-- `agents.md` - Agent documentation guidelines and template
-- `specs.md` - Technical specifications (append-only)
-- `decisions.md` - Architectural decisions (append-only)
-- `README.md` - Project overview and quick start
-
-## Platform Compatibility
-
-This repository structure is compatible with:
-- GitHub Copilot Workspace
-- OpenAI ChatGPT (this AGENTS.md file)
-- Google Gemini
-- Google Colab
-- Agent-based IDEs (OpenCode.ai)
-
-## AF Python Runtime
-
-AF is now an executable Python 3.12 framework as well as an agent-definition registry.
-The shared lifecycle is `classify → route → execute → verify → record → test → reuse`.
-
-- Keep `src/af/framework`, `src/af/domain`, and `src/af/application` independent of
-  FastAPI, Typer, Strawberry, MCP, and SQLAlchemy.
-- Keep CLI, HTML, REST, GraphQL, and MCP modules as thin adapters over the shared
-  application controller.
-- Prefer deterministic static and procedural routes. They run before any optional selector
-  and never invoke a model for direct answers. A selector may only propose an installed
-  typed procedure, and AF does not bundle a real local or remote selector adapter.
-- Add a failing behavioural test before implementation and a regression test for every
-  defect.
-- Inject dependencies explicitly through constructors or the composition root; do not
-  add global mutable state or implicit autowiring.
-- Run repeatable development commands through `[SCRIPT:af-dev]`:
+## Start here
 
 ```bash
+uv sync --locked --extra dev
+uv run af dev describe --json
+uv run af procedures --json
+uv run af schemas
+uv run pytest tests/unit/PATH.py
 python3 scripts/af_dev.py --action check --execute
 ```
 
-The repository skill at `.agents/skills/af-work/` describes how ChatGPT/Codex should use
-AF's MCP tools. Local MCP uses stdio by default; ChatGPT web requires either Secure MCP
-Tunnel for private outbound-only access or a separately authenticated HTTPS Streamable
-HTTP endpoint.
+The canonical full gate includes format/lint, strict mypy, pytest with >=90% branch
+coverage, OpenCode route tests, build/inspection/clean-install smoke, and governance.
+It requires a clean committed tree for the package step. Use focused checks while
+editing; do not weaken the gate or describe a subset as the complete gate.
+Run `./validate_agents.sh` before each checkpoint commit.
+
+Mission continuation is recorded in `tasks/autonomous-completion.md`. Inspect current
+Git status/branch before editing; never overwrite another worker's changes. Use one
+mission branch and commit useful, tested checkpoints. User-granted engineering scope
+supersedes historical single-issue restrictions. External destructive effects still
+require actual authority. Runtime authorization remains part of the product.
+
+## Source map
+
+| Area | Location |
+| --- | --- |
+| Neutral execution, types, policy and ports | `src/af/framework/` |
+| Procedures, science, Ideon meaning and verification | `src/af/domain/` |
+| Shared use cases/controllers | `src/af/application/` |
+| Persistence, service clients and process adapters | `src/af/infrastructure/` |
+| CLI, HTTP, HTML, REST/XML, SOAP, GraphQL, MCP | `src/af/interfaces/` |
+| Cache/queue/storage managers and driver contracts | `src/af/{cache,queue,filesystem,graph}/` |
+| Composition/configuration | `src/af/bootstrap*.py`, `src/af/config.py` |
+| Unit / service / cross-interface tests | `tests/{unit,integration,feature}/` |
+| Migration engine and reference schema | `framework/migrations.py`, `infrastructure/reference_schema.py` |
+| Reusable development and validation commands | `scripts/af_dev.py`, `scripts/registry.yaml` |
+
+## Invariants
+
+- Dependencies point inward. Framework/domain/application have no ORM, transport or
+  concrete provider imports. Interfaces translate; shared use cases decide. Bootstrap
+  composes dependencies explicitly. No hidden global mutable application state.
+- Prefer exact reuse and deterministic execution. Selectors propose only installed,
+  version/digest-bound procedures. Statistical output is never its own verifier or
+  an authorization grant. No implicit remote fallback or arbitrary source execution.
+- Persist durable truth before publishing observational events. Queue delivery, process
+  exit, cache residency and provider acceptance are not verified task completion.
+- Validate types, size bounds, ambiguity, effects, deadlines, ownership and cancellation
+  at shared boundaries. Preserve corrupt/stale/replayed-state failures.
+- Add a failing behavioral regression before fixing a defect. Cover relevant failures,
+  races, restart and denial. Protocol doubles prove protocol behavior; live-service
+  support claims require separately recorded real-service evidence.
+- Keep modules cohesive, APIs typed, instructions concise, schemas machine-readable and
+  test commands deterministic. Do not require a large-model context window to work.
+- Read the relevant existing script/workflow before repeating a multistep operation.
+  Register reusable scripts with parameters rather than multiplying one-off workflows.
+- Never fabricate tests, citations, benchmarks, authority, approval or completion.
+  Record material assumptions explicitly as `[ASSUMPTION]`.
+
+## Add behavior
+
+Use `af make procedure --help` and the procedure contributor contracts for procedures;
+use `ServiceProvider` for composition and manager driver registrations for adapters.
+See `docs/application-platform.md`, `docs/testing-conformance.md`, `docs/queue.md`,
+`docs/science-catalogue.md`, and `docs/driver-support.md` as needed. Keep one shared
+behavior across applicable transports, with integration tests for public paths.
+
+## Historical definition registry
+
+`agents/`, `agents.yaml`, `specialisms/`, `traits/`, `skills/` and `workflows/` remain
+validated repository assets. Every agent definition has these H2 headings in order:
+Purpose, Inputs, Outputs, Behavior, Constraints. Register unique IDs, valid tags and
+real paths in `agents.yaml`; follow `agents.md` for its template.
+
+`specs.md`, `decisions.md`, and `agent_runs.md` are strictly append-only. Preserve
+existing bytes and append dated entries for material specifications, decisions and
+execution checkpoints. Do not rewrite history to make validation pass.

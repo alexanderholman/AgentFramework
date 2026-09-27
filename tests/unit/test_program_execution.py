@@ -118,3 +118,20 @@ def test_program_request_rejects_invalid_shapes(argv: object, working_directory:
             working_directory=working_directory,  # type: ignore[arg-type]
             budget=ProgramBudget(timeout=timedelta(seconds=1), max_output_bytes=100),
         )
+
+
+@pytest.mark.asyncio
+async def test_timeout_covers_descendants_holding_capture_pipes(tmp_path: Path) -> None:
+    request = ProgramRequest(
+        argv=(
+            sys.executable,
+            "-c",
+            "import subprocess,sys; subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(30)'])",
+        ),
+        working_directory=tmp_path,
+        budget=ProgramBudget(timeout=timedelta(milliseconds=100), max_output_bytes=1024),
+    )
+    result = await asyncio.wait_for(AsyncSubprocessExecutor().execute(request), timeout=2)
+    assert result.state is ProgramState.TIMED_OUT
+    assert result.elapsed < timedelta(seconds=2)

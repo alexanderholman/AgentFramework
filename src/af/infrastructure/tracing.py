@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from af.framework.errors import TraceNotFound
+from af.framework.trace_privacy import redact_trace
 from af.framework.types import RunTrace, TraceEvent
 from af.infrastructure.database import Database, TraceRow
 
@@ -21,6 +22,7 @@ class InMemoryTraceRepository:
         self._traces: dict[str, RunTrace] = {}
 
     def save(self, trace: RunTrace) -> None:
+        trace = redact_trace(trace)
         if trace.id in self._traces:
             raise ValueError(f"trace is append-only: {trace.id}")
         self._traces[trace.id] = trace
@@ -40,6 +42,7 @@ class SqlAlchemyTraceRepository:
         self._database = database
 
     def save(self, trace: RunTrace) -> None:
+        trace = redact_trace(trace)
         with self._database.sessions.begin() as session:
             if session.get(TraceRow, trace.id) is not None:
                 raise ValueError(f"trace is append-only: {trace.id}")
@@ -80,22 +83,24 @@ class SqlAlchemyTraceRepository:
     def _to_domain(row: TraceRow) -> RunTrace:
         event_values = json.loads(row.events_json)
         argument_values = json.loads(row.arguments_json)
-        return RunTrace(
-            id=row.id,
-            prompt=row.prompt,
-            intent=row.intent,
-            arguments={str(key): str(value) for key, value in argument_values.items()},
-            route=row.route,
-            tier=row.tier,
-            output=row.output,
-            verified=row.verified,
-            reused=row.reused,
-            regression_passed=row.regression_passed,
-            promoted=row.promoted,
-            status=row.status,
-            events=tuple(
-                TraceEvent(stage=str(item["stage"]), detail=str(item["detail"]))
-                for item in event_values
-            ),
-            created_at=_aware(row.created_at),
+        return redact_trace(
+            RunTrace(
+                id=row.id,
+                prompt=row.prompt,
+                intent=row.intent,
+                arguments={str(key): str(value) for key, value in argument_values.items()},
+                route=row.route,
+                tier=row.tier,
+                output=row.output,
+                verified=row.verified,
+                reused=row.reused,
+                regression_passed=row.regression_passed,
+                promoted=row.promoted,
+                status=row.status,
+                events=tuple(
+                    TraceEvent(stage=str(item["stage"]), detail=str(item["detail"]))
+                    for item in event_values
+                ),
+                created_at=_aware(row.created_at),
+            )
         )

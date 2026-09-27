@@ -205,9 +205,32 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
 
     assert payload == [
         {
-            "procedure_id": "character-count",
+            "procedure_id": "catalogue-execute",
             "version": "1.0.0",
             "digest": payload[0]["digest"],
+            "intent": "catalogue.execute",
+            "arguments": [
+                {
+                    "name": "request",
+                    "value_type": "text",
+                    "min_length": 1,
+                    "max_length": 10000,
+                    "allow_blank": False,
+                }
+            ],
+            "effect": "read_only",
+            "risk": "none",
+            "requires_confirmation": False,
+            "tier": "procedural",
+            "pure": True,
+            "replay_safe": True,
+            "has_selection_grounding": False,
+            "metrics": {"cost": 1, "latency": 1, "intelligence": 0},
+        },
+        {
+            "procedure_id": "character-count",
+            "version": "1.0.0",
+            "digest": payload[1]["digest"],
             "intent": "text.character_count",
             "arguments": [
                 {
@@ -236,8 +259,8 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
         },
         {
             "procedure_id": "current-time",
-            "version": "1.0.0",
-            "digest": payload[1]["digest"],
+            "version": "1.1.0",
+            "digest": payload[2]["digest"],
             "intent": "system.current_time",
             "arguments": [
                 {
@@ -245,22 +268,22 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
                     "value_type": "text",
                     "min_length": 1,
                     "max_length": 64,
-                    "allow_blank": True,
+                    "allow_blank": False,
                 },
             ],
             "effect": "read_only",
             "risk": "none",
             "requires_confirmation": False,
             "tier": "static",
-            "pure": True,
-            "replay_safe": True,
+            "pure": False,
+            "replay_safe": False,
             "has_selection_grounding": False,
             "metrics": {"cost": 0, "latency": 0, "intelligence": 0},
         },
         {
             "procedure_id": "hello",
             "version": "1.0.0",
-            "digest": payload[2]["digest"],
+            "digest": payload[3]["digest"],
             "intent": "system.hello",
             "arguments": [],
             "effect": "read_only",
@@ -271,6 +294,29 @@ def test_cli_routes_lists_installed_deterministic_procedures(application) -> Non
             "replay_safe": True,
             "has_selection_grounding": False,
             "metrics": {"cost": 0, "latency": 0, "intelligence": 0},
+        },
+        {
+            "procedure_id": "science-calculate",
+            "version": "1.0.0",
+            "digest": payload[4]["digest"],
+            "intent": "science.calculate",
+            "arguments": [
+                {
+                    "name": "expression",
+                    "value_type": "text",
+                    "min_length": 1,
+                    "max_length": 1024,
+                    "allow_blank": False,
+                },
+            ],
+            "effect": "read_only",
+            "risk": "none",
+            "requires_confirmation": False,
+            "tier": "procedural",
+            "pure": True,
+            "replay_safe": True,
+            "has_selection_grounding": False,
+            "metrics": {"cost": 1, "latency": 1, "intelligence": 0},
         },
     ]
     assert all(item["digest"].startswith("sha256:") for item in payload)
@@ -422,9 +468,8 @@ def test_cli_search_indexes_and_queries_task_and_trace_history() -> None:
 
         assert queried_result.exit_code == 0
         payload = json.loads(queried_result.stdout)
-        assert payload["total"] == 2
+        assert payload["total"] == 1
         assert {item["source_id"] for item in payload["items"]} == {
-            "af_run_traces",
             "af_tasks",
         }
         assert {item["tenant_id"] for item in payload["items"]} == {"af-local"}
@@ -988,7 +1033,7 @@ def test_cli_reports_expected_errors_without_stdout(application) -> None:  # typ
             ["ask", "a" * (PROMPT_MAX_LENGTH + 1)],
             f"prompt must be at most {PROMPT_MAX_LENGTH} characters\n",
         ),
-        (["ask", "make tea"], "no route found for prompt: 'make tea'\n"),
+        (["ask", "make tea"], "no route found for this request\n"),
         (["tasks", "show", "missing"], "task not found: missing\n"),
         (
             ["tasks", "update", "missing", "how many rs in strawberry"],

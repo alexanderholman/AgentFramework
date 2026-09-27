@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import parse_qsl
 
@@ -27,13 +29,32 @@ from graphql import (
     OperationDefinitionNode,
     SelectionNode,
     parse,
+    validate,
 )
+from strawberry.dataloader import DataLoader
+from strawberry.scalars import JSON
 from strawberry.types import Info
 
+from af.application.task_guard import check_task_context
 from af.application.tasks import TaskController
+from af.application.workflow_control import WorkflowController
 from af.domain.tasks import Task
+from af.framework.context import (
+    ExecutionContext,
+    current_context,
+    derive_context,
+    maybe_current_context,
+    use_context,
+)
 from af.framework.errors import AFError, TaskNotFound
+from af.framework.persisted_queries import (
+    PersistedQuery,
+    PersistedQueryRegistry,
+    query_digest,
+    validate_digest,
+)
 from af.framework.types import TASK_LIST_DEFAULT_LIMIT, TASK_LIST_MAX_LIMIT
+from af.framework.workflows import WorkflowError, WorkflowRun
 from af.interfaces.http_body import (
     BOUNDED_BODY_SCOPE_KEY,
     HTTP_MAX_BODY_BYTES,
@@ -44,6 +65,7 @@ from af.interfaces.http_body import (
     read_bounded_receive,
     validate_content_length_header,
 )
+from af.interfaces.workflow_models import WorkflowModel
 
 GRAPHQL_INTERNAL_ERROR_CODE = "INTERNAL_ERROR"
 GRAPHQL_INTERNAL_ERROR_MESSAGE = "internal GraphQL adapter error"
@@ -74,6 +96,7 @@ class _GraphQLRequestPayload:
     query: str
     operation_name: str | None
     variables: dict[str, object] | None
+    persisted_digest: str | None = None
 
 
 class _GraphQLRequestError(Exception):
@@ -132,6 +155,68 @@ class TaskType:
         )
 
 
+@strawberry.type
+class WorkflowNodeType:
+    id: str
+    state: str
+    verified: bool
+
+
+@strawberry.type
+class WorkflowOutputType:
+    node: str
+    value: JSON
+
+
+@strawberry.type
+class WorkflowType:
+    schema_version: str
+    run_id: strawberry.ID
+    revision: int
+    complete: bool
+    cancelled: bool
+    nodes: list[WorkflowNodeType]
+    outputs: list[WorkflowOutputType]
+
+    @classmethod
+    def from_run(cls, run: WorkflowRun) -> WorkflowType:
+        summary = WorkflowModel.from_run(run)
+        return cls(
+            schema_version=summary.schema_version,
+            run_id=strawberry.ID(summary.run_id),
+            revision=summary.revision,
+            complete=summary.complete,
+            cancelled=summary.cancelled,
+            nodes=[
+                WorkflowNodeType(id=node.id, state=node.state, verified=node.verified)
+                for node in summary.nodes
+            ],
+            outputs=[
+                WorkflowOutputType(node=output.node, value=cast(JSON, output.value))
+                for output in summary.outputs
+            ],
+        )
+
+
+def _workflow_controller(info: Info[Any, Any]) -> WorkflowController:
+    controller = info.context.get("workflows")
+    if not isinstance(controller, WorkflowController):
+        raise WorkflowError("workflow operations are not configured")
+    return controller
+
+
+def _workflow_context(info: Info[Any, Any]) -> ExecutionContext:
+    context = info.context.get("execution_context")
+    return context if isinstance(context, ExecutionContext) else current_context()
+
+
+def _workflow_limit(max_nodes: int) -> None:
+    if type(max_nodes) is not int or not 1 <= max_nodes <= 128:
+        raise GraphQLError(
+            "Invalid workflow node limit", extensions={"code": GRAPHQL_BAD_REQUEST_CODE}
+        )
+
+
 @strawberry.input
 class TaskInput:
     prompt: str
@@ -171,6 +256,31 @@ async def _run_graphql_operation[T](operation: Callable[[], Awaitable[T]]) -> T:
     raise AssertionError("unreachable")
 
 
+async def _context_thread[T](
+    context: ExecutionContext | None,
+    operation: Callable[..., T],
+    *args: Any,
+    **kwargs: Any,
+) -> T:
+    def invoke() -> T:
+        check_task_context(context)
+        if context is None:
+            return operation(*args, **kwargs)
+        # Bind in the worker itself: the HTTP request's ambient lease may have
+        # expired while this callback was waiting for threadpool capacity.
+        with use_context(context):
+            return operation(*args, **kwargs)
+
+    return await run_in_threadpool(invoke)
+
+
+async def _graphql_thread[T](
+    info: Info[Any, Any], operation: Callable[..., T], *args: Any, **kwargs: Any
+) -> T:
+    context = cast(ExecutionContext | None, info.context.get("execution_context"))
+    return await _context_thread(context, operation, *args, **kwargs)
+
+
 def _graphql_response_media_type(accept_header: str | None) -> str:
     if accept_header is None or not accept_header.strip():
         return GRAPHQL_RESPONSE_MEDIA_TYPE
@@ -207,7 +317,8 @@ class Query:
         offset: int = 0,
     ) -> list[TaskType]:
         async def load_tasks() -> list[TaskType]:
-            tasks = await run_in_threadpool(
+            tasks = await _graphql_thread(
+                info,
                 _controller(info).list,
                 limit=limit,
                 offset=offset,
@@ -219,13 +330,27 @@ class Query:
     @strawberry.field
     async def task(self, info: Info[Any, Any], id: strawberry.ID) -> TaskType | None:
         async def load_task() -> TaskType | None:
+            loader = cast(DataLoader[str, Task | None] | None, info.context.get("task_loader"))
+            if loader is not None:
+                task = await loader.load(str(id))
+                return None if task is None else TaskType.from_task(task)
             try:
-                task = await run_in_threadpool(_controller(info).get, str(id))
+                task = await _graphql_thread(info, _controller(info).get, str(id))
             except TaskNotFound:
                 return None
             return TaskType.from_task(task)
 
         return await _run_graphql_operation(load_task)
+
+    @strawberry.field
+    async def workflow_status(self, info: Info[Any, Any], id: strawberry.ID) -> WorkflowType:
+        async def inspect() -> WorkflowType:
+            run = await _graphql_thread(
+                info, _workflow_controller(info).inspect, str(id), _workflow_context(info)
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(inspect)
 
 
 @strawberry.type
@@ -234,14 +359,14 @@ class Mutation:
     async def hello(self, info: Info[Any, Any]) -> str:
         """Execute hello as a mutation because the shared pipeline records a trace."""
         outcome = await _run_graphql_operation(
-            lambda: run_in_threadpool(_controller(info).execute, "hello")
+            lambda: _graphql_thread(info, _controller(info).execute, "hello")
         )
         return outcome.output
 
     @strawberry.mutation
     async def create_task(self, info: Info[Any, Any], input: TaskInput) -> TaskType:
         async def create() -> TaskType:
-            task = await run_in_threadpool(_controller(info).create, input.prompt)
+            task = await _graphql_thread(info, _controller(info).create, input.prompt)
             return TaskType.from_task(task)
 
         return await _run_graphql_operation(create)
@@ -254,7 +379,8 @@ class Mutation:
         input: TaskInput,
     ) -> TaskType:
         async def update() -> TaskType:
-            task = await run_in_threadpool(
+            task = await _graphql_thread(
+                info,
                 _controller(info).update,
                 str(id),
                 input.prompt,
@@ -265,11 +391,192 @@ class Mutation:
 
     @strawberry.mutation
     async def delete_task(self, info: Info[Any, Any], id: strawberry.ID) -> bool:
-        await _run_graphql_operation(lambda: run_in_threadpool(_controller(info).delete, str(id)))
+        await _run_graphql_operation(
+            lambda: _graphql_thread(info, _controller(info).delete, str(id))
+        )
         return True
+
+    @strawberry.mutation
+    async def start_workflow(
+        self,
+        info: Info[Any, Any],
+        data: str,
+        name: str = "text.count-total",
+        max_nodes: int = 128,
+    ) -> WorkflowType:
+        _workflow_limit(max_nodes)
+        if not name or len(name) > 128 or len(data.encode()) > 65_536:
+            raise GraphQLError(
+                "Invalid workflow input bounds", extensions={"code": GRAPHQL_BAD_REQUEST_CODE}
+            )
+
+        async def start() -> WorkflowType:
+            run = await _graphql_thread(
+                info,
+                _workflow_controller(info).start,
+                name,
+                data.encode(),
+                _workflow_context(info),
+                max_nodes=max_nodes,
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(start)
+
+    @strawberry.mutation
+    async def resume_workflow(
+        self,
+        info: Info[Any, Any],
+        id: strawberry.ID,
+        max_nodes: int = 128,
+    ) -> WorkflowType:
+        _workflow_limit(max_nodes)
+
+        async def resume() -> WorkflowType:
+            run = await _graphql_thread(
+                info,
+                _workflow_controller(info).resume,
+                str(id),
+                _workflow_context(info),
+                max_nodes=max_nodes,
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(resume)
+
+    @strawberry.mutation
+    async def cancel_workflow(self, info: Info[Any, Any], id: strawberry.ID) -> WorkflowType:
+        async def cancel() -> WorkflowType:
+            run = await _graphql_thread(
+                info, _workflow_controller(info).cancel, str(id), _workflow_context(info)
+            )
+            return WorkflowType.from_run(run)
+
+        return await _run_graphql_operation(cancel)
 
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
+
+type OperationAuthorizer = Callable[[ExecutionContext | None, str, frozenset[str]], bool]
+
+
+def approve_graphql_query(
+    registry: PersistedQueryRegistry,
+    document: str,
+    *,
+    operation_name: str | None = None,
+    tenant_id: str | None = None,
+    policy_version: str = "1",
+) -> PersistedQuery:
+    """Operator-only registration: validate before making a document executable."""
+    parsed = _parse_query_document(document)
+    _select_operation(parsed, operation_name)
+    if validate(schema._schema, parsed):
+        raise ValueError("persisted GraphQL document does not match the schema")
+    query = PersistedQuery(
+        document, query_digest(schema.as_str()), operation_name, tenant_id, policy_version
+    )
+    registry.approve(query)
+    return query
+
+
+def _operation_fields(document: DocumentNode, operation: OperationDefinitionNode) -> frozenset[str]:
+    fragments = {
+        node.name.value: node
+        for node in document.definitions
+        if isinstance(node, FragmentDefinitionNode)
+    }
+    pending = list(operation.selection_set.selections)
+    fields: set[str] = set()
+    expanded: set[str] = set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, FieldNode):
+            fields.add(node.name.value)
+        elif isinstance(node, InlineFragmentNode):
+            pending.extend(node.selection_set.selections)
+        elif isinstance(node, FragmentSpreadNode) and node.name.value not in expanded:
+            expanded.add(node.name.value)
+            fragment = fragments.get(node.name.value)
+            if fragment is not None:
+                pending.extend(fragment.selection_set.selections)
+    return frozenset(fields)
+
+
+def _persisted_digest(extensions: object) -> str | None:
+    if extensions is None:
+        return None
+    if not isinstance(extensions, dict):
+        raise _GraphQLRequestError(
+            "Invalid GraphQL extensions", GRAPHQL_BAD_REQUEST_CODE, status_code=400
+        )
+    value = extensions.get("persistedQuery")
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"version", "sha256Hash"}
+        or type(value["version"]) is not int
+        or value["version"] != 1
+    ):
+        raise _GraphQLRequestError(
+            "Invalid persisted query extension", GRAPHQL_BAD_REQUEST_CODE, status_code=400
+        )
+    digest = value["sha256Hash"]
+    try:
+        validate_digest(digest)
+    except ValueError:
+        raise _GraphQLRequestError(
+            "Invalid persisted query digest", GRAPHQL_BAD_REQUEST_CODE, status_code=400
+        ) from None
+    return cast(str, digest)
+
+
+def _resolve_persisted_query(
+    payload: _GraphQLRequestPayload,
+    registry: PersistedQueryRegistry | None,
+    *,
+    required: bool,
+    context: ExecutionContext | None,
+    policy_version: str,
+) -> _GraphQLRequestPayload:
+    digest = payload.persisted_digest
+    if digest is None:
+        if required:
+            raise _GraphQLRequestError(
+                "An approved persisted query is required",
+                "PERSISTED_QUERY_REQUIRED",
+                status_code=400,
+            )
+        return payload
+    if payload.query and query_digest(payload.query) != digest:
+        raise _GraphQLRequestError(
+            "Persisted query hash mismatch", "PERSISTED_QUERY_HASH_MISMATCH", status_code=400
+        )
+    try:
+        approved = (
+            None
+            if registry is None
+            else registry.resolve(
+                digest,
+                operation_name=payload.operation_name,
+                tenant_id=None if context is None else context.tenant_id,
+                policy_version=policy_version,
+            )
+        )
+    except Exception:
+        raise _GraphQLRequestError(
+            "Persisted query registry unavailable", "PERSISTED_QUERY_UNAVAILABLE", status_code=503
+        ) from None
+    if approved is None:
+        raise _GraphQLRequestError(
+            "Persisted query not found", "PERSISTED_QUERY_NOT_FOUND", status_code=400
+        )
+    if approved.schema_digest != query_digest(schema.as_str()):
+        raise _GraphQLRequestError(
+            "Persisted query schema is stale", "PERSISTED_QUERY_STALE", status_code=400
+        )
+    return replace(payload, query=approved.document)
 
 
 def _graphql_error_response(
@@ -551,7 +858,11 @@ def _parse_get_parameters(request: Request) -> dict[str, str]:
             GRAPHQL_BAD_REQUEST_CODE,
             status_code=status.HTTP_400_BAD_REQUEST,
         ) from None
-    return {key: value for key, value in pairs}
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise _GraphQLRequestError(
+            "Duplicate GraphQL query parameter", GRAPHQL_BAD_REQUEST_CODE, status_code=400
+        )
+    return dict(pairs)
 
 
 async def _read_bounded_body(request: Request) -> bytes:
@@ -596,12 +907,20 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
         query = params.get("query")
         operation_name = params.get("operationName")
         variables_param = params.get("variables")
-        if query is None:
+        try:
+            extensions = json.loads(params["extensions"]) if "extensions" in params else None
+        except (ValueError, RecursionError):
+            raise _GraphQLRequestError(
+                GRAPHQL_INVALID_JSON_MESSAGE, GRAPHQL_BAD_REQUEST_CODE, status_code=400
+            ) from None
+        digest = _persisted_digest(extensions)
+        if query is None and digest is None:
             raise _GraphQLRequestError(
                 "No GraphQL query found in the request",
                 GRAPHQL_BAD_REQUEST_CODE,
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+        query = query or ""
         _validate_bounded_text(query, label="query")
         if operation_name is not None:
             _validate_bounded_text(operation_name, label="operationName")
@@ -625,7 +944,7 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
                 )
             variables = cast(dict[str, object] | None, parsed_variables)
         return _GraphQLRequestPayload(
-            query=query, operation_name=operation_name, variables=variables
+            query=query, operation_name=operation_name, variables=variables, persisted_digest=digest
         )
 
     if _parse_content_type(request.headers.get("content-type")) != "application/json":
@@ -652,6 +971,9 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
     query = payload.get("query")
     variables = payload.get("variables")
     operation_name = payload.get("operationName")
+    digest = _persisted_digest(payload.get("extensions"))
+    if query is None and digest is not None:
+        query = ""
     if not isinstance(query, str):
         raise _GraphQLRequestError(
             "The GraphQL operation's `query` must be a string.",
@@ -674,13 +996,23 @@ async def _parse_request_payload(request: Request) -> _GraphQLRequestPayload:
         query=query,
         operation_name=operation_name,
         variables=variables,
+        persisted_digest=digest,
     )
 
 
 async def _handle_graphql_request(
     request: Request,
     controller: TaskController,
+    workflows: WorkflowController | None = None,
+    *,
+    persisted_queries: PersistedQueryRegistry | None = None,
+    require_persisted_queries: bool = False,
+    operation_timeout_seconds: float = 10.0,
+    authorize_operation: OperationAuthorizer | None = None,
+    query_policy_version: str = "1",
 ) -> JSONResponse:
+    started = datetime.now(UTC)
+    parent = maybe_current_context()
     try:
         media_type = _graphql_response_media_type(request.headers.get("accept"))
     except _GraphQLRequestError as error:
@@ -692,9 +1024,37 @@ async def _handle_graphql_request(
         )
     try:
         payload = await _parse_request_payload(request)
+        payload = _resolve_persisted_query(
+            payload,
+            persisted_queries,
+            required=require_persisted_queries,
+            context=parent,
+            policy_version=query_policy_version,
+        )
         document = _parse_query_document(payload.query)
         if request.method == "GET":
             _validate_get_operation(document, payload.operation_name)
+        operation = _select_operation(document, payload.operation_name)
+        validation_errors = validate(schema._schema, document)
+        if validation_errors:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "data": None,
+                    "errors": [_format_error(error) for error in validation_errors],
+                },
+                media_type=media_type,
+            )
+        fields = _operation_fields(document, operation)
+        if authorize_operation is not None:
+            try:
+                permitted = authorize_operation(parent, operation.operation.value, fields)
+            except Exception:
+                permitted = False
+            if permitted is not True:
+                raise _GraphQLRequestError(
+                    "GraphQL operation is not authorized", "FORBIDDEN", status_code=403
+                )
     except _GraphQLRequestError as error:
         return _graphql_error_response(
             error.message,
@@ -703,12 +1063,50 @@ async def _handle_graphql_request(
             media_type=media_type,
             headers=error.headers,
         )
-    result = await schema.execute(
-        payload.query,
-        variable_values=payload.variables,
-        context_value={"controller": controller},
-        operation_name=payload.operation_name,
+    deadline = started + timedelta(seconds=operation_timeout_seconds)
+    if parent is not None and parent.deadline is not None:
+        deadline = min(deadline, parent.deadline)
+    context = (
+        ExecutionContext(deadline=deadline)
+        if parent is None
+        else derive_context(parent, deadline=deadline)
     )
+
+    async def load_tasks(keys: list[str]) -> list[Task | None]:
+        return await _context_thread(context, controller.get_many, tuple(keys))
+
+    loader = (
+        DataLoader(load_fn=load_tasks, max_batch_size=GRAPHQL_MAX_ROOT_FIELDS)
+        if callable(getattr(controller, "get_many", None))
+        else None
+    )
+    try:
+        if context.cancellation.cancelled or datetime.now(UTC) >= deadline:
+            raise TimeoutError
+        with use_context(context):
+            async with asyncio.timeout((deadline - datetime.now(UTC)).total_seconds()):
+                result = await schema.execute(
+                    payload.query,
+                    variable_values=payload.variables,
+                    context_value={
+                        "controller": controller,
+                        "workflows": workflows,
+                        "execution_context": context,
+                        "task_loader": loader,
+                    },
+                    operation_name=payload.operation_name,
+                )
+    except TimeoutError:
+        context.cancellation.cancel()
+        return _graphql_error_response(
+            "GraphQL operation deadline exceeded",
+            "OPERATION_TIMEOUT",
+            status_code=200,
+            media_type=media_type,
+        )
+    except asyncio.CancelledError:
+        context.cancellation.cancel()
+        raise
     response_body: dict[str, object] = {"data": result.data}
     if result.errors:
         response_body["errors"] = [_format_error(error) for error in result.errors]
@@ -719,16 +1117,53 @@ async def _handle_graphql_request(
     )
 
 
-def create_graphql_router(controller: TaskController) -> APIRouter:
+def create_graphql_router(
+    controller: TaskController,
+    *,
+    workflows: WorkflowController | None = None,
+    persisted_queries: PersistedQueryRegistry | None = None,
+    require_persisted_queries: bool = False,
+    operation_timeout_seconds: float = 10.0,
+    authorize_operation: OperationAuthorizer | None = None,
+    query_policy_version: str = "1",
+) -> APIRouter:
+    if (
+        isinstance(operation_timeout_seconds, bool)
+        or not math.isfinite(operation_timeout_seconds)
+        or not 0 < operation_timeout_seconds <= 600
+    ):
+        raise ValueError("invalid GraphQL operation timeout")
+    if not query_policy_version or len(query_policy_version) > 200:
+        raise ValueError("invalid GraphQL query policy version")
+    if require_persisted_queries and persisted_queries is None:
+        raise ValueError("persisted query enforcement requires a registry")
     router = APIRouter(tags=["graphql"])
 
     @router.get("")
     async def graphql_get(request: Request) -> JSONResponse:
-        return await _handle_graphql_request(request, controller)
+        return await _handle_graphql_request(
+            request,
+            controller,
+            workflows,
+            persisted_queries=persisted_queries,
+            require_persisted_queries=require_persisted_queries,
+            operation_timeout_seconds=operation_timeout_seconds,
+            authorize_operation=authorize_operation,
+            query_policy_version=query_policy_version,
+        )
 
     @router.post("")
     async def graphql_post(request: Request) -> JSONResponse:
-        return await _handle_graphql_request(request, controller)
+        return await _handle_graphql_request(
+            request,
+            controller,
+            workflows,
+            persisted_queries=persisted_queries,
+            require_persisted_queries=require_persisted_queries,
+            operation_timeout_seconds=operation_timeout_seconds,
+            authorize_operation=authorize_operation,
+            query_policy_version=query_policy_version,
+        )
 
     return router
 

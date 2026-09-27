@@ -246,7 +246,12 @@ def test_secret_reference_redacts_key_in_all_public_representations() -> None:
 
 def test_settings_from_environment_uses_layered_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AF_PORT", "8123")
-    assert Settings.from_environment().port == 8123
+    monkeypatch.setenv("AF_ALLOW_REMOTE_INFERENCE", "false")
+    monkeypatch.setenv("AF_RESOURCE_LEASE_MAINTENANCE_INTERVAL_SECONDS", "2.5")
+    configured = Settings.from_environment()
+    assert configured.port == 8123
+    assert configured.allow_remote_inference is False
+    assert configured.resource_lease_maintenance_interval_seconds == 2.5
 
     @dataclass(frozen=True, slots=True, repr=False)
     class CustomSettings(Settings):
@@ -255,6 +260,28 @@ def test_settings_from_environment_uses_layered_loader(monkeypatch: pytest.Monke
     custom = CustomSettings.from_environment()
     assert isinstance(custom, CustomSettings)
     assert custom.host == "subclass-default.example"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"port": float("nan")},
+        {"port": float("inf")},
+        {"port": 8123.5},
+        {"port": True},
+        {"allow_remote_inference": "false"},
+        {"allow_remote_inference": 1},
+        {"resource_lease_maintenance_interval_seconds": True},
+        {"resource_lease_maintenance_interval_seconds": "30"},
+        {"resource_lease_maintenance_interval_seconds": float("nan")},
+        {"resource_lease_maintenance_interval_seconds": 10**1000},
+        {"schedules_path": "\x00private-name"},
+        {"schedules_path": 12},
+    ],
+)
+def test_direct_settings_fail_closed_at_the_same_boundary_as_configured_values(values):
+    with pytest.raises(ValueError):
+        Settings(**values)
 
 
 def test_snapshot_accepts_existing_settings_without_copying() -> None:

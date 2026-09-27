@@ -8,7 +8,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from itertools import islice
-from math import isfinite
 from typing import cast
 
 from af.framework.errors import InvalidProviderConfiguration, PlatformError, PlatformReason
@@ -57,15 +56,32 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     mcp_transport: str = "stdio"
+    http_auth_required: bool = False
+    auth_tenant_id: str = "local"
+    passkey_rp_id: str | None = None
+    passkey_origin: str | None = None
     session_cookie_signing_key: str = "af-local-session-signing-key"
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()
     allow_remote_inference: bool = False
     selector_confidence_threshold: float = 0.8
+    decision_enabled: bool = False
+    decision_model: str = "jev-1.13.0"
+    decision_timeout_seconds: float = 30.0
+    decision_token_price_usd: str = "0.000000042"
+    selector_provider: str = "disabled"
+    selector_model: str | None = None
+    selector_endpoint: str = "http://127.0.0.1:11434"
+    selector_timeout_seconds: float = 600.0
     resource_lease_backend: ResourceLeaseBackend = ResourceLeaseBackend.MEMORY
     resource_lease_sqlite_path: str = "storage/af-resource-leases.sqlite3"
     resource_lease_maintenance_host_id: str | None = None
     resource_lease_maintenance_interval_seconds: float = 30.0
+    schedules_path: str | None = None
+    engineering_repository: str | None = None
+    self_development_unit: str | None = None
+    inspector_enabled: bool = False
+    metrics_enabled: bool = False
     worker_queue_sqlite_path: str | None = None
     worker_optimization_profile_path: str | None = None
 
@@ -156,17 +172,34 @@ _ENV_NAMES = {
     "AF_HOST": "host",
     "AF_PORT": "port",
     "AF_MCP_TRANSPORT": "mcp_transport",
+    "AF_HTTP_AUTH_REQUIRED": "http_auth_required",
+    "AF_AUTH_TENANT_ID": "auth_tenant_id",
+    "AF_PASSKEY_RP_ID": "passkey_rp_id",
+    "AF_PASSKEY_ORIGIN": "passkey_origin",
     "AF_SESSION_COOKIE_SIGNING_KEY": "session_cookie_signing_key",
     "AF_ALLOWED_HOSTS": "allowed_hosts",
     "AF_ALLOWED_ORIGINS": "allowed_origins",
     "AF_ALLOW_REMOTE_INFERENCE": "allow_remote_inference",
     "AF_SELECTOR_CONFIDENCE_THRESHOLD": "selector_confidence_threshold",
+    "AF_DECISION_ENABLED": "decision_enabled",
+    "AF_DECISION_MODEL": "decision_model",
+    "AF_DECISION_TIMEOUT_SECONDS": "decision_timeout_seconds",
+    "AF_DECISION_TOKEN_PRICE_USD": "decision_token_price_usd",
+    "AF_SELECTOR_PROVIDER": "selector_provider",
+    "AF_SELECTOR_MODEL": "selector_model",
+    "AF_SELECTOR_ENDPOINT": "selector_endpoint",
+    "AF_SELECTOR_TIMEOUT_SECONDS": "selector_timeout_seconds",
     "AF_RESOURCE_LEASE_BACKEND": "resource_lease_backend",
     "AF_RESOURCE_LEASE_SQLITE_PATH": "resource_lease_sqlite_path",
     "AF_RESOURCE_LEASE_MAINTENANCE_HOST_ID": "resource_lease_maintenance_host_id",
     "AF_RESOURCE_LEASE_MAINTENANCE_INTERVAL_SECONDS": (
         "resource_lease_maintenance_interval_seconds"
     ),
+    "AF_SCHEDULES_PATH": "schedules_path",
+    "AF_ENGINEERING_REPOSITORY": "engineering_repository",
+    "AF_SELF_DEVELOPMENT_UNIT": "self_development_unit",
+    "AF_INSPECTOR_ENABLED": "inspector_enabled",
+    "AF_METRICS_ENABLED": "metrics_enabled",
     "AF_WORKER_QUEUE_SQLITE_PATH": "worker_queue_sqlite_path",
     "AF_WORKER_OPTIMIZATION_PROFILE_PATH": "worker_optimization_profile_path",
 }
@@ -177,6 +210,7 @@ _NON_CONFIG_ENV_NAMES = frozenset(
         "AF_APPEND_ONLY_BASE_STRATEGY",
         "AF_ROUTER_CLI",
         "AF_EPIC_MODEL",
+        "AF_MACHINE_ROOT",
     }
 )
 
@@ -309,6 +343,8 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
         return value
     if name in {
         "selector_confidence_threshold",
+        "selector_timeout_seconds",
+        "decision_timeout_seconds",
         "resource_lease_maintenance_interval_seconds",
     }:
         if textual and isinstance(value, str):
@@ -322,13 +358,25 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
         name
         in {
             "resource_lease_maintenance_host_id",
+            "selector_model",
+            "passkey_rp_id",
+            "passkey_origin",
+            "schedules_path",
+            "engineering_repository",
+            "self_development_unit",
             "worker_queue_sqlite_path",
             "worker_optimization_profile_path",
         }
         and value is None
     ):
         return None
-    if name == "allow_remote_inference":
+    if name in {
+        "allow_remote_inference",
+        "decision_enabled",
+        "http_auth_required",
+        "inspector_enabled",
+        "metrics_enabled",
+    }:
         if textual and isinstance(value, str):
             normalized = value.lower()
             if normalized in {"1", "true", "yes", "on"}:
@@ -355,7 +403,49 @@ def _parse_value(name: str, value: object, *, textual: bool) -> object:
 
 
 def _validate_settings(settings: Settings) -> None:
-    if settings.port < 1 or settings.port > 65535:
+    if settings.selector_provider not in {"disabled", "ollama", "openai"}:
+        raise ValueError("selector provider is unsupported")
+    if settings.selector_provider != "disabled" and settings.selector_model is None:
+        raise ValueError("enabled selector requires an explicit model")
+    if settings.selector_model is not None:
+        _validate_single_line(settings.selector_model, "selector_model")
+    _validate_single_line(settings.selector_endpoint, "selector_endpoint")
+    if (
+        type(settings.selector_timeout_seconds) not in {int, float}
+        or not 0 < settings.selector_timeout_seconds <= 600
+    ):
+        raise ValueError("selector timeout must be positive and at most ten minutes")
+    if type(settings.http_auth_required) is not bool:
+        raise ValueError("HTTP authentication required must be boolean")
+    if type(settings.allow_remote_inference) is not bool:
+        raise ValueError("remote inference setting must be boolean")
+    if type(settings.inspector_enabled) is not bool or type(settings.metrics_enabled) is not bool:
+        raise ValueError("observability settings must be boolean")
+    _validate_single_line(settings.auth_tenant_id, "auth_tenant_id")
+    if (settings.passkey_rp_id is None) != (settings.passkey_origin is None):
+        raise ValueError("passkeys require both a relying-party ID and an exact origin")
+    if settings.passkey_rp_id is not None:
+        _validate_single_line(settings.passkey_rp_id, "passkey_rp_id")
+    if settings.passkey_origin is not None:
+        _validate_single_line(settings.passkey_origin, "passkey_origin")
+    if settings.self_development_unit is not None:
+        _validate_single_line(settings.self_development_unit, "self_development_unit")
+        if settings.engineering_repository is None:
+            raise ValueError("self-development requires engineering_repository")
+    if settings.engineering_repository is not None:
+        _validate_single_line(settings.engineering_repository, "engineering_repository")
+    if settings.schedules_path is not None:
+        _validate_single_line(settings.schedules_path, "schedules_path")
+    if type(settings.decision_enabled) is not bool:
+        raise ValueError("decision enabled must be boolean")
+    _validate_single_line(settings.decision_model, "decision_model")
+    _validate_single_line(settings.decision_token_price_usd, "decision_token_price_usd")
+    if (
+        type(settings.decision_timeout_seconds) not in {int, float}
+        or not 0 < settings.decision_timeout_seconds <= 600
+    ):
+        raise ValueError("decision timeout must be positive and at most ten minutes")
+    if type(settings.port) is not int or not 1 <= settings.port <= 65535:
         raise ValueError("port is outside its supported range")
     threshold = settings.selector_confidence_threshold
     if parse_probability(threshold) is None:
@@ -364,9 +454,8 @@ def _validate_settings(settings: Settings) -> None:
         )
     maintenance_interval = settings.resource_lease_maintenance_interval_seconds
     if (
-        not isfinite(maintenance_interval)
-        or maintenance_interval <= 0
-        or maintenance_interval > _MAX_MAINTENANCE_INTERVAL_SECONDS
+        type(maintenance_interval) not in {int, float}
+        or not 0 < maintenance_interval <= _MAX_MAINTENANCE_INTERVAL_SECONDS
     ):
         raise ValueError("resource lease maintenance interval is outside its supported range")
     for name in (

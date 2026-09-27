@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 import json
+from asyncio import to_thread
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
-from typing import Literal, cast
+from typing import Annotated, Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from af import __version__
+from af.application.human_decisions import HumanDecisionService
 from af.application.search import SearchController
 from af.application.self_design_execution import (
     SelfDesignExecutionController,
     SelfDesignExecutionResult,
 )
 from af.application.tasks import TaskController
+from af.application.workflow_control import WorkflowController
 from af.bootstrap import AFApplication, create_application
 from af.domain.agent_routing import (
     AgentRole,
@@ -29,10 +32,18 @@ from af.domain.agent_routing import (
     AgentRouteStatus,
 )
 from af.domain.tasks import Task
+from af.framework.container import InvocationKind
+from af.framework.context import (
+    AcceptanceScope,
+    ExecutionContext,
+    maybe_current_context,
+    without_context,
+)
 from af.framework.errors import AFError, InvalidProviderConfiguration, ServiceNotBound
 from af.framework.routing import ProcedureRegistry
 from af.framework.self_design_operation import SelfDesignOperation
 from af.framework.types import ExecutionOutcome
+from af.framework.workflows import WorkflowRun
 from af.interfaces.http_trust import (
     ParsedHost,
     format_host,
@@ -40,6 +51,7 @@ from af.interfaces.http_trust import (
     parse_host_value,
     parse_origin_value,
 )
+from af.interfaces.workflow_models import WorkflowModel
 
 MCP_INTERNAL_ERROR_MESSAGE = "internal MCP adapter error (MCP_INTERNAL_ERROR)"
 
@@ -204,6 +216,165 @@ def _assemble_mcp_server(resolved: AFApplication) -> FastMCP[None]:
         stateless_http=True,
         transport_security=transport_security,
     )
+
+    def human_context() -> ExecutionContext:
+        return maybe_current_context() or ExecutionContext(
+            requested_scope=AcceptanceScope.DETERMINISTIC,
+            effective_scope=AcceptanceScope.DETERMINISTIC,
+        )
+
+    def human_operation(
+        operation: Callable[[HumanDecisionService, ExecutionContext], dict[str, object]],
+        context: ExecutionContext,
+    ) -> dict[str, object]:
+        # Capture authority on the caller before crossing to the worker thread.
+        # The explicit handoff gets its own message lease; an inherited container
+        # lease remains correctly restricted to its original execution owner.
+        with (
+            without_context(),
+            resolved.container.invocation_scope(context=context, kind=InvocationKind.MESSAGE),
+        ):
+            return _invoke_mcp_tool(
+                lambda: operation(resolved.container.resolve(HumanDecisionService), context)
+            )
+
+    @server.tool(
+        name="af_request_human_decision",
+        description="Pause an exact bounded request for a human choice; returns a one-use secret.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    async def af_request_human_decision(
+        prompt: Annotated[str, Field(min_length=1, max_length=10_000)],
+        expires_in: Annotated[int, Field(ge=1, le=3600, strict=True)] = 300,
+    ) -> dict[str, object]:
+        return await to_thread(
+            human_operation,
+            lambda service, context: service.submit(prompt, context, expires_in=expires_in),
+            human_context(),
+        )
+
+    @server.tool(
+        name="af_get_human_decision",
+        description="Inspect a pending human decision under the same caller authority.",
+        annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+        structured_output=True,
+    )
+    async def af_get_human_decision(
+        decision_id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")],
+    ) -> dict[str, object]:
+        return await to_thread(
+            human_operation,
+            lambda service, context: service.inspect(decision_id, context),
+            human_context(),
+        )
+
+    @server.tool(
+        name="af_respond_human_decision",
+        description="Consume a one-use response for an exact authorized human choice.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    async def af_respond_human_decision(
+        decision_id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")],
+        response_secret: Annotated[str, Field(min_length=1, max_length=128)],
+        choice_id: Annotated[str, Field(min_length=1, max_length=64)],
+    ) -> dict[str, object]:
+        return await to_thread(
+            human_operation,
+            lambda service, context: service.resume(
+                decision_id, response_secret, choice_id, context
+            ),
+            human_context(),
+        )
+
+    @server.tool(
+        name="af_revoke_human_decision",
+        description="Revoke a caller-owned pending human decision without executing it.",
+        annotations=_annotations(read_only=False, destructive=True, idempotent=False),
+        structured_output=True,
+    )
+    async def af_revoke_human_decision(
+        decision_id: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")],
+    ) -> dict[str, object]:
+        return await to_thread(
+            human_operation,
+            lambda service, context: service.revoke(decision_id, context),
+            human_context(),
+        )
+
+    def workflow_operation(
+        operation: Callable[[WorkflowController, ExecutionContext], WorkflowRun],
+    ) -> WorkflowModel:
+        context = maybe_current_context() or ExecutionContext(
+            requested_scope=AcceptanceScope.DETERMINISTIC,
+            effective_scope=AcceptanceScope.DETERMINISTIC,
+        )
+        with resolved.container.invocation_scope(context=context, kind=InvocationKind.MESSAGE):
+            return _invoke_mcp_tool(
+                lambda: WorkflowModel.from_run(
+                    operation(resolved.container.resolve(WorkflowController), context)
+                )
+            )
+
+    @server.tool(
+        name="af_start_workflow",
+        description="Start an installed, durable workflow using bounded JSON input.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    async def af_start_workflow(
+        data: Annotated[str, Field(max_length=65_536)],
+        name: Annotated[str, Field(min_length=1, max_length=128)] = "text.count-total",
+        max_nodes: Annotated[int, Field(ge=1, le=128, strict=True)] = 128,
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation,
+            lambda controller, context: controller.start(
+                name, data.encode(), context, max_nodes=max_nodes
+            ),
+        )
+
+    @server.tool(
+        name="af_get_workflow",
+        description="Inspect an existing workflow checkpoint under the caller's authority.",
+        annotations=_annotations(read_only=True, destructive=False, idempotent=True),
+        structured_output=True,
+    )
+    async def af_get_workflow(
+        run_id: Annotated[str, Field(min_length=1, max_length=128)],
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation, lambda controller, context: controller.inspect(run_id, context)
+        )
+
+    @server.tool(
+        name="af_resume_workflow",
+        description="Resume an installed workflow from its verified checkpoint.",
+        annotations=_annotations(read_only=False, destructive=False, idempotent=False),
+        structured_output=True,
+    )
+    async def af_resume_workflow(
+        run_id: Annotated[str, Field(min_length=1, max_length=128)],
+        max_nodes: Annotated[int, Field(ge=1, le=128, strict=True)] = 128,
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation,
+            lambda controller, context: controller.resume(run_id, context, max_nodes=max_nodes),
+        )
+
+    @server.tool(
+        name="af_cancel_workflow",
+        description="Cancel unfinished nodes in a caller-owned workflow checkpoint.",
+        annotations=_annotations(read_only=False, destructive=True, idempotent=True),
+        structured_output=True,
+    )
+    async def af_cancel_workflow(
+        run_id: Annotated[str, Field(min_length=1, max_length=128)],
+    ) -> WorkflowModel:
+        return await to_thread(
+            workflow_operation, lambda controller, context: controller.cancel(run_id, context)
+        )
 
     @server.tool(
         name="af_hello",
@@ -483,7 +654,11 @@ def _transport_security_for(
         _canonical_transport_hosts(settings.allowed_hosts, port=settings.port)
     if settings.allowed_origins:
         _canonical_transport_origins(settings.allowed_origins)
-    if _is_loopback_host(settings.host):
+    if not _is_loopback_host(settings.host):
+        raise InvalidProviderConfiguration(
+            "MCP HTTP remains loopback-only until a transport authentication adapter is installed"
+        )
+    if not settings.allowed_hosts and not settings.allowed_origins:
         return None
     if not settings.allowed_hosts or not settings.allowed_origins:
         raise InvalidProviderConfiguration(
@@ -541,7 +716,13 @@ def _canonical_transport_origins(values: tuple[str, ...]) -> list[str]:
 
 
 def main() -> None:
-    application = create_application()
+    from af.bootstrap_setup import create_machine_application, machine_root
+
+    application = (
+        create_machine_application()
+        if (machine_root() / "machine.json").exists()
+        else create_application()
+    )
     try:
         transport: Literal["stdio", "streamable-http"]
         if application.settings.mcp_transport == "streamable-http":

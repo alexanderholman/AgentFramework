@@ -1,0 +1,14 @@
+"""The generated factory uses the same public console as the framework."""
+
+from __PACKAGE__.application import build_application
+from typer.testing import CliRunner
+
+from af.interfaces.console import create_cli
+
+
+def test_application_owned_cli(tmp_path):
+    result = CliRunner().invoke(
+        create_cli(application_factory=lambda: build_application(tmp_path)), ["ask", "hello"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert result.stdout == "Hello, world!\n"

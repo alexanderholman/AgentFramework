@@ -361,3 +361,45 @@ def test_exhausted_cursor_closes_itself() -> None:
             next(cursor)
         with pytest.raises(DatabaseOperationError):
             next(cursor)
+
+
+def test_sqlite_rollback_only_prevents_caught_failure_commit() -> None:
+    with SQLiteDriver(":memory:") as driver:
+        _create_schema(driver)
+        with (
+            pytest.raises(DatabaseOperationError) as captured,
+            driver.transaction() as transaction,
+        ):
+            transaction.execute(
+                DatabaseStatement(
+                    "INSERT INTO records (tenant, value) VALUES ('tenant-a', 'discarded')"
+                )
+            )
+            transaction.mark_rollback_only()
+        with driver.transaction(read_only=True) as transaction:
+            rows = transaction.query(DatabaseStatement("SELECT id FROM records", read_only=True))
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert captured.value.stage == "database.transaction.rollback-only"
+    assert rows == ()
+
+
+def test_sqlite_transaction_operation_claim_is_irreversible_and_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with SQLiteDriver(":memory:") as driver:
+        with driver.transaction() as transaction:
+            assert transaction.claim_operation("search_projection_source_a") is True
+            assert transaction.claim_operation("search_projection_source_a") is False
+            with pytest.raises(ValueError):
+                transaction.claim_operation("not canonical")
+        with pytest.raises(DatabaseOperationError):
+            transaction.claim_operation("search_projection_source_a")
+        with driver.transaction() as fresh:
+            assert fresh.claim_operation("search_projection_source_a") is True
+        monkeypatch.setattr(sqlite_module, "_MAX_OPERATION_CLAIMS", 1)
+        with driver.transaction() as bounded:
+            assert bounded.claim_operation("search_projection_source_a") is True
+            with pytest.raises(DatabaseOperationError) as captured:
+                bounded.claim_operation("search_projection_source_b")
+            assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE

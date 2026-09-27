@@ -192,10 +192,11 @@ def execution_environment(action: str) -> dict[str, str]:
     environment.update(
         {name: value for name, value in os.environ.items() if name.startswith("AF_APPEND_ONLY_")}
     )
+    if cache := os.environ.get("UV_CACHE_DIR"):
+        environment["UV_CACHE_DIR"] = str(Path(cache).resolve())
     environment.update(
         {
             "PYTHONNOUSERSITE": "1",
-            "UV_CACHE_DIR": str(Path(".cache/uv").resolve()),
             "UV_LOCKED": "1",
             "UV_NO_CONFIG": "1",
             "UV_NO_PROGRESS": "1",

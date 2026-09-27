@@ -24,10 +24,10 @@ reuse, or persistence rules.
 ## Composition root
 
 `af.bootstrap.create_application()` is the composition root. It creates an explicit
-`Container`, applies three service providers, and returns an `AFApplication` containing the
+`Container`, applies explicit service providers, and returns an `AFApplication` containing the
 resolved settings and public runtime services.
 
-The providers are:
+The core providers include:
 
 1. `_PersistenceProvider`, which installs a `Database`, `TaskRepository`, and
    `TraceRepository`, or accepts injected repository test doubles.
@@ -36,11 +36,15 @@ The providers are:
 3. `_ApplicationProvider`, which binds a singleton `TaskService` and transient
    `TaskController`.
 
+Composition also installs the finite science/catalogue, Ideon, search and queue/worker
+providers. Optional extensions are explicit; introspection reports the actual provider graph.
+
 The container uses explicit factories rather than constructor inspection or implicit
 autowiring. `create_application()` also accepts replacement Task and trace repositories,
 reuse storage, settings, and an optional selector. A selector may only propose an
-installed typed procedure, and the current reference application does not bundle a real
-local or remote selector provider adapter.
+installed typed procedure. Optional configured local selector adapters and separately
+consented decision adapters remain infrastructure behind typed ports; they do not supply
+final-answer execution or silently enable a remote fallback. See [decision providers](decision-providers.md).
 
 ### Container contracts and lifetimes
 
@@ -104,12 +108,14 @@ sandbox. Hostile extensions require a separate process boundary.
    fastest.
 3. **Select (unknown work only).** An optional selector may propose a registered procedure,
    typed arguments, and confidence. AF validates that proposal against the immutable
-   catalogue, rejects remote execution, enforces pre-execution policy, and fails closed to
+   catalogue, rejects unauthorized remote selection, enforces pre-execution policy, and fails closed to
    human handoff on any malformed or unsupported proposal.
 4. **Execute.** AF first looks in `ReuseStore`; a miss invokes the chosen procedure.
 5. **Verify.** `DeterministicVerifier` independently checks the procedure output.
-6. **Record.** The pipeline builds an append-style trace containing the classification,
-   route, output, verification result, and ordered lifecycle events.
+6. **Record.** The pipeline builds an append-style trace containing registered intent,
+   route, verification result, and ordered lifecycle metadata. Prompt, typed arguments,
+   result content and free-form verifier detail are minimized before persistence;
+   see [trace privacy](trace-privacy.md).
 7. **Test.** A pure, replay-safe result is executed again through
    `ReplayRegressionGate` before promotion.
 8. **Reuse.** A passing result is promoted to the in-process reuse store. A later hit is
@@ -171,7 +177,7 @@ cache entries.
 | HTML MVC | `af.interfaces.web.create_web_router()` | Jinja Task pages and form actions |
 | REST | `af.interfaces.rest.create_rest_router()` | `/api/v1/hello` and `/api/v1/tasks` CRUD |
 | GraphQL | `af.interfaces.graphql.create_graphql_router()` | Task queries and mutations at `/graphql` |
-| MCP | `af.interfaces.mcp.create_mcp_server()` | Nine `af_*` tools and `af://manifest` |
+| MCP | `af.interfaces.mcp.create_mcp_server()` | Typed task, workflow, decision and installed extension tools plus `af://manifest` |
 
 `af.interfaces.http.create_http_app()` combines HTML, REST, and GraphQL in one FastAPI
 application and places the shared `AFApplication` on `app.state.af`. MCP is currently a

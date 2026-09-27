@@ -7,6 +7,9 @@ from math import isfinite
 from typing import Never
 from uuid import uuid4
 
+from af.framework.classification_hierarchy import FunctionRoute, NoRoute, TracedClassifier
+from af.framework.constitution import classification_input, decision_scope, procedure_decision
+from af.framework.context import maybe_current_context
 from af.framework.contracts import (
     Classifier,
     Procedure,
@@ -24,6 +27,7 @@ from af.framework.errors import (
     VerificationFailed,
 )
 from af.framework.routing import LadderRouter, ProcedureRegistry
+from af.framework.trace_privacy import RedactingTraceRepository
 from af.framework.types import (
     PROCEDURE_ARGUMENT_COUNT_MAX,
     PROCEDURE_ID_MAX_LENGTH,
@@ -51,11 +55,15 @@ from af.framework.types import (
     is_valid_classifier_id,
     is_valid_procedure_id,
     is_valid_procedure_intent,
+    is_valid_procedure_version,
     normalize_prompt,
     parse_probability,
 )
 
 _HANDOFF_REASON_CODES = {
+    SelectionHandoffReason.CANCELLED: SelectionReasonCode.CANCELLED,
+    SelectionHandoffReason.TIMEOUT: SelectionReasonCode.TIMEOUT,
+    SelectionHandoffReason.MALFORMED: SelectionReasonCode.MALFORMED,
     SelectionHandoffReason.AMBIGUOUS: SelectionReasonCode.AMBIGUOUS,
     SelectionHandoffReason.UNAVAILABLE: SelectionReasonCode.UNAVAILABLE,
     SelectionHandoffReason.UNSUPPORTED: SelectionReasonCode.UNSUPPORTED,
@@ -83,7 +91,7 @@ class PipelineAgent:
         self._registry = registry
         self._router = router
         self._verifier = verifier
-        self._traces = traces
+        self._traces = RedactingTraceRepository(traces)
         self._regression_gate = regression_gate
         self._reuse_store = reuse_store
         self._selector = selector
@@ -122,9 +130,39 @@ class PipelineAgent:
         trace_id = str(uuid4())
         created_at = datetime.now(UTC)
         events: list[TraceEvent] = []
+        hierarchy_selector_metadata: SelectorMetadata | None = None
 
         if classification is None:
-            classification = self._classifier.classify(request)
+            with decision_scope():
+                hierarchy = (
+                    self._classifier.classify_with_trace(classification_input(request))
+                    if isinstance(self._classifier, TracedClassifier)
+                    else None
+                )
+                if hierarchy is None:
+                    classification = self._classifier.classify(classification_input(request))
+                else:
+                    events.extend(hierarchy.events)
+                    hierarchy_selector_metadata = hierarchy.selector_metadata
+                    if isinstance(hierarchy.outcome, FunctionRoute):
+                        proposal = hierarchy.outcome.proposal
+                        descriptor = self._registry.descriptor(proposal.procedure_id)
+                        if (
+                            descriptor is not None
+                            and descriptor.version == proposal.version
+                            and descriptor.digest == proposal.digest
+                        ):
+                            classification = Classification(
+                                proposal.intent,
+                                dict(proposal.arguments),
+                                proposal.confidence,
+                                hierarchy.visits[-1].node_id,
+                            )
+                            expected_procedure_id = proposal.procedure_id
+                        else:
+                            events.append(TraceEvent("classify-stop", "stale_catalogue"))
+                    elif isinstance(hierarchy.outcome, NoRoute):
+                        classification = Classification("unknown", {}, 0.0, "hierarchy")
         else:
             events.append(TraceEvent("classify", classification.intent))
         if classification is None:
@@ -149,16 +187,17 @@ class PipelineAgent:
                 )
             )
             raise UnsupportedWork(request.prompt, trace_id)
-        if not events:
+        if not any(event.stage == "classify" for event in events):
             events.append(TraceEvent("classify", classification.intent))
 
-        classification, selected_procedure_id = self._resolve_classification(
-            request,
-            classification,
-            trace_id=trace_id,
-            created_at=created_at,
-            events=events,
-        )
+        with decision_scope():
+            classification, selected_procedure_id = self._resolve_classification(
+                request,
+                classification,
+                trace_id=trace_id,
+                created_at=created_at,
+                events=events,
+            )
         expected_procedure_id = selected_procedure_id or expected_procedure_id
 
         return self._execute_classification(
@@ -168,6 +207,7 @@ class PipelineAgent:
             created_at=created_at,
             events=events,
             expected_procedure_id=expected_procedure_id,
+            selector_metadata=hierarchy_selector_metadata,
         )
 
     def _execute_classification(
@@ -179,6 +219,7 @@ class PipelineAgent:
         created_at: datetime,
         events: list[TraceEvent],
         expected_procedure_id: str | None,
+        selector_metadata: SelectorMetadata | None = None,
     ) -> ExecutionOutcome:
         try:
             procedure = self._router.route(classification, prompt=request.prompt)
@@ -207,6 +248,22 @@ class PipelineAgent:
                 TraceEvent(
                     "select",
                     f"selector proposal did not match routed procedure: {expected_procedure_id}",
+                )
+            )
+            self._record_unsupported_trace(
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+            raise UnsupportedWork(request.prompt, trace_id)
+        constitutional = procedure_decision(descriptor)
+        if not constitutional.allowed:
+            events.append(
+                TraceEvent(
+                    "constitution-policy",
+                    f"{constitutional.reason} constitution={constitutional.constitution_digest}",
                 )
             )
             self._record_unsupported_trace(
@@ -246,10 +303,53 @@ class PipelineAgent:
                 events=events,
             )
             raise UnsupportedWork(request.prompt, trace_id)
+        if selector_metadata is not None:
+            if classification.confidence < self._selector_confidence_threshold:
+                self._fail_closed_selection(
+                    SelectionReasonCode.BELOW_THRESHOLD,
+                    trace_id=trace_id,
+                    request=request,
+                    classification=classification,
+                    created_at=created_at,
+                    events=events,
+                    selector_metadata=selector_metadata,
+                )
+            with decision_scope():
+                self._enforce_selection_policy(
+                    request=request,
+                    classification=classification,
+                    procedure=procedure,
+                    descriptor=descriptor,
+                    trace_id=trace_id,
+                    created_at=created_at,
+                    events=events,
+                    selector_metadata=selector_metadata,
+                )
         events.append(TraceEvent("route", procedure.id))
 
         result = self._reuse_store.lookup(classification, procedure)
         reused = result is not None
+        context = maybe_current_context()
+        stop_reason = (
+            SelectionReasonCode.CANCELLED
+            if context is not None and context.cancellation.cancelled
+            else SelectionReasonCode.TIMEOUT
+            if context is not None
+            and context.deadline is not None
+            and datetime.now(UTC) >= context.deadline
+            else None
+        )
+        if stop_reason is not None:
+            self._fail_closed_selection(
+                stop_reason,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+                stage="route-policy",
+                selector_metadata=selector_metadata,
+            )
         if result is None:
             result = procedure.execute(classification)
         events.append(TraceEvent("execute", "reused" if reused else procedure.id))
@@ -448,6 +548,18 @@ class PipelineAgent:
                 events=events,
             )
 
+        if (proposal.version is not None and proposal.version != descriptor.version) or (
+            proposal.digest is not None and proposal.digest != descriptor.digest
+        ):
+            self._fail_closed_selection(
+                SelectionReasonCode.STALE_PROCEDURE,
+                trace_id=trace_id,
+                request=request,
+                classification=classification,
+                created_at=created_at,
+                events=events,
+            )
+
         if proposal.intent != descriptor.intent:
             self._fail_closed_selection(
                 SelectionReasonCode.UNSUPPORTED_INTENT,
@@ -580,6 +692,16 @@ class PipelineAgent:
             or type(proposal.intent) is not str
             or not proposal.intent
             or len(proposal.intent) > PROCEDURE_INTENT_MAX_LENGTH
+            or (proposal.version is not None and not is_valid_procedure_version(proposal.version))
+            or (
+                proposal.digest is not None
+                and (
+                    type(proposal.digest) is not str
+                    or len(proposal.digest) != 71
+                    or not proposal.digest.startswith("sha256:")
+                    or any(char not in "0123456789abcdef" for char in proposal.digest[7:])
+                )
+            )
         ):
             self._fail_closed_selection(
                 SelectionReasonCode.INVALID_DECISION,
@@ -603,6 +725,8 @@ class PipelineAgent:
                 intent=proposal.intent,
                 arguments=canonical_arguments,
                 confidence=proposal.confidence,
+                version=proposal.version,
+                digest=proposal.digest,
             ),
             None,
         )
@@ -762,8 +886,10 @@ class PipelineAgent:
         trace_id: str,
         created_at: datetime,
         events: list[TraceEvent],
+        selector_metadata: SelectorMetadata | None = None,
     ) -> None:
-        if self._selector_metadata is None:
+        metadata = selector_metadata or self._selector_metadata
+        if metadata is None:
             self._fail_closed_selection(
                 SelectionReasonCode.NO_SELECTOR,
                 trace_id=trace_id,
@@ -772,8 +898,9 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
                 stage="select-policy",
+                selector_metadata=metadata,
             )
-        if self._selector_metadata.locality is SelectorLocality.REMOTE:
+        if metadata.locality is SelectorLocality.REMOTE:
             self._fail_closed_selection(
                 SelectionReasonCode.REMOTE_SELECTION,
                 trace_id=trace_id,
@@ -782,6 +909,7 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
                 stage="select-policy",
+                selector_metadata=metadata,
             )
         if (
             not descriptor.pure
@@ -797,6 +925,7 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
                 stage="select-policy",
+                selector_metadata=metadata,
             )
         if not descriptor.has_selection_grounding:
             self._fail_closed_selection(
@@ -807,6 +936,7 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
                 stage="select-policy",
+                selector_metadata=metadata,
             )
         # Raise after the except block so provider grounding failures do not remain
         # reachable through the sanitized UnsupportedWork traceback or context.
@@ -825,6 +955,7 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
                 stage="select-policy",
+                selector_metadata=metadata,
             )
         if type(grounded) is not bool or not grounded:
             self._fail_closed_selection(
@@ -835,11 +966,12 @@ class PipelineAgent:
                 created_at=created_at,
                 events=events,
                 stage="select-policy",
+                selector_metadata=metadata,
             )
         events.append(
             TraceEvent(
                 "select-policy",
-                self._selection_event_detail(SelectionReasonCode.APPROVED),
+                self._selection_event_detail(SelectionReasonCode.APPROVED, metadata),
             )
         )
 
@@ -853,8 +985,11 @@ class PipelineAgent:
         created_at: datetime,
         events: list[TraceEvent],
         stage: str = "select",
+        selector_metadata: SelectorMetadata | None = None,
     ) -> Never:
-        events.append(TraceEvent(stage, self._selection_event_detail(reason_code)))
+        events.append(
+            TraceEvent(stage, self._selection_event_detail(reason_code, selector_metadata))
+        )
         self._record_unsupported_trace(
             trace_id=trace_id,
             request=request,
@@ -864,10 +999,13 @@ class PipelineAgent:
         )
         raise UnsupportedWork(request.prompt, trace_id)
 
-    def _selection_event_detail(self, reason_code: SelectionReasonCode) -> str:
-        if self._selector_metadata is None:
+    def _selection_event_detail(
+        self, reason_code: SelectionReasonCode, metadata: SelectorMetadata | None = None
+    ) -> str:
+        metadata = metadata or self._selector_metadata
+        if metadata is None:
             return f"code={reason_code.value}"
-        return f"provider={self._selector_metadata.provider_id} code={reason_code.value}"
+        return f"provider={metadata.provider_id} code={reason_code.value}"
 
     def _normalize_typed_envelope(
         self,

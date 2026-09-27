@@ -4156,3 +4156,70 @@ measurements.
 - Updated: `src/af/queue/worker.py`
 - Updated: `tests/unit/test_queue_worker.py`
 - Related: SPEC-065 and issue #21
+
+---
+
+## 2026-09-26 — Integrated private v0.1 foundations on the mission branch
+
+The current user mission authorizes reversible repository-wide engineering and useful
+checkpoint publication to `v1/autonomous-completion`; historical worker holds are not
+new approval requirements for this mission. No production deployment or public release
+is authorized by this engineering checkpoint.
+
+Decision: keep a single shared typed implementation behind each transport; make
+optional network decisions fail closed without configuration and one-use consent;
+store reference extension state in the local SQLite database where compatible;
+restore authenticated workflow keys with verified backups; publish honest driver
+capabilities instead of dictionary-backed claims of external graph persistence.
+OpenCode and Copilot now use one concise root engineering contract. The root package
+version remains alpha while integration/release gates and roadmap work continue.
+
+## 2026-09-26 — Finite operational reference paths and independent qualification
+
+Use the actual installed pipeline and shared application bus for the finite v0.1
+catalogues, generated-component admission, TUI/starters and operational observations.
+Reuse the persisted host key through domain-separated derivation for account secrets;
+keep notifications encrypted until explicit local export or configured delivery.
+Machine setup provisions local SQLite capabilities and records unsupported engine
+installation honestly; it does not simulate downloads or readiness.
+
+Non-loopback HTTP now requires scoped authentication and a private session key.
+MCP HTTP remains loopback-only until its own transport authentication is installed;
+an HTTP host/origin allowlist alone cannot authorize exposure. Package smoke forbids
+Python network/DNS and subprocess egress; this is bounded trusted-runtime evidence,
+not a claim of an operating-system sandbox. Native Bare offline startup and signed
+IPC conformance are distinct from DHT/hole-punch/mobile qualification.
+
+## 2026-09-26 — Stabilize the assembled private v0.1
+
+The user reaffirmed freezing speculative expansion. Published a narrow correction
+for the reviewed Ruff/TUI test failures as 4d74e926acea8cfccad5daabb3ecdf666a77ab35;
+its complete local gate and all six Python/relational/search CI workflows pass.
+Later changes are restricted to reproduced defects and missing live-roadmap
+boundaries already under implementation. Security source reviews bind exact
+candidate fingerprints and line digests, expire within 180 days, retain every
+finding and explicitly identify automated review; they confer no human approval.
+The package smoke uses a fresh target with locked runtime-only dependencies and
+Python -I -S. That is current-host isolated installation evidence, not an OS sandbox
+or cross-platform certification. No release tag, merge or deployment is authorized.
+
+
+## 2026-09-26 — Search receipt archaeology
+
+Port agent/issue-18-transactional-projector semantically into af.search.projection_receipts and the existing relational/embedded search boundaries. Reuse TransactionalProjectionGuard; translate vendor unique-key codes in adapters into DatabaseUniqueConflict so messaging never imports SQLite or SQLAlchemy. Only typed unique conflicts become retryable projection races. Keep all existing cancellation/locking improvements.
+
+
+## 2026-09-26 — InnoDB restart and inventory review
+
+Treat vendor errors 1205/1213 as transient in the MySQL adapter shared by MariaDB, mark the transaction rollback-only, retain the first retry error, and skip invalid savepoint cleanup while the outer boundary rolls back. The real first-writer race accepts either unique/CAS conflict or transaction restart but still requires transient classification, fresh replay as DUPLICATE and preserved content. Reviewed 295 exact non-secret Git object hash candidates in the archaeology inventory against fetched GitHub identities; no scanner rule or coverage changed.
+
+## 2026-09-27 — Keep archaeology bounded to demonstrated v0.1 invariants
+
+Classify historical intent against current tests before porting. Preserve the
+qualified 773d9fa baseline except for demonstrated missing invariants. #54 remains
+an existing v0.1 requirement and its hierarchy is composed through the current
+PipelineAgent; no historical executor or provider-specific core is revived.
+A historical UoW test exposed suppressed rollback being mistaken for success;
+retain one regression and a minimal failure-propagation fix. Draft epics #213+
+remain outside PR #212. Stop archaeology once every historical head has a semantic
+disposition and these demonstrated regressions are qualified.

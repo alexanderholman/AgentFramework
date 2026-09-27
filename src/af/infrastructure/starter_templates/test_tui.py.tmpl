@@ -1,0 +1,8 @@
+"""Headless events exercise the same typed app and scoped task controller as the terminal."""
+
+from __PACKAGE__.tui import run_once
+
+
+def test_tui_primary_entrypoint(tmp_path):
+    result = run_once("how many rs in strawberry?", tmp_path)
+    assert result == {"exit_code": 0, "reason": "completed", "output": "3"}

@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from af.application.locales import LocaleSelection, Localizer
 from af.application.operations import (
     LifecycleStateValue,
     LivenessValue,
@@ -18,6 +19,9 @@ from af.application.operations import (
 from af.application.tasks import TaskController
 from af.domain.tasks import Task
 from af.framework.types import PROMPT_MAX_LENGTH
+from af.interfaces.http_operations import expected_version, task_etag
+from af.interfaces.locale_http import LocalePresentation, content_language, request_locale
+from af.interfaces.locale_presenters import localize_outcome, localize_task
 
 
 class TaskPrompt(BaseModel):
@@ -46,6 +50,7 @@ class TaskResponse(BaseModel):
     trace_id: str
     created_at: datetime
     updated_at: datetime
+    presentation: LocalePresentation | None = None
 
     @classmethod
     def from_task(cls, task: Task) -> TaskResponse:
@@ -120,13 +125,35 @@ class OperationsResponse(BaseModel):
 def create_rest_router(
     controller: TaskController,
     operations: OperationsController | None = None,
+    *,
+    localizer: Localizer | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
+    def select_locale(request: Request, response: Response) -> LocaleSelection | None:
+        selection = request_locale(request)
+        if selection is not None:
+            if localizer is None:
+                raise HTTPException(400, detail="locale_unavailable")
+            response.headers["Content-Language"] = content_language(localizer, selection)
+        return selection
+
+    selected_locale = Depends(select_locale)
+
+    def present(task: Task, selection: LocaleSelection | None) -> TaskResponse:
+        if localizer is not None and selection is not None:
+            return TaskResponse.model_validate(localize_task(task, localizer, selection))
+        return TaskResponse.from_task(task)
+
     @router.post("/hello")
-    def hello() -> dict[str, object]:
+    def hello(
+        selection: LocaleSelection | None = selected_locale,
+    ) -> dict[str, object]:
         outcome = controller.execute("hello")
-        return {"output": outcome.output, "verified": outcome.verified}
+        result: dict[str, object] = {"output": outcome.output, "verified": outcome.verified}
+        if localizer is not None and selection is not None:
+            result["presentation"] = localize_outcome(outcome, localizer, selection)["presentation"]
+        return result
 
     if operations is not None:
 
@@ -134,29 +161,79 @@ def create_rest_router(
         def get_operations() -> OperationsResponse:
             return OperationsResponse.from_snapshot(operations.snapshot())
 
-    @router.get("/tasks", response_model=TaskListResponse)
-    def list_tasks() -> TaskListResponse:
-        items = [TaskResponse.from_task(task) for task in controller.list()]
+    @router.get("/tasks", response_model=TaskListResponse, response_model_exclude_unset=True)
+    def list_tasks(
+        selection: LocaleSelection | None = selected_locale,
+    ) -> TaskListResponse:
+        items = [present(task, selection) for task in controller.list()]
         return TaskListResponse(items=items, total=len(items))
 
-    @router.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
-    def create_task(payload: TaskPrompt, response: Response) -> TaskResponse:
+    @router.post(
+        "/tasks",
+        response_model=TaskResponse,
+        status_code=status.HTTP_201_CREATED,
+        response_model_exclude_unset=True,
+    )
+    def create_task(
+        payload: TaskPrompt,
+        response: Response,
+        request: Request,
+        selection: LocaleSelection | None = selected_locale,
+    ) -> TaskResponse:
         task = controller.create(payload.prompt)
         response.headers["Location"] = f"/api/v1/tasks/{task.id}"
-        return TaskResponse.from_task(task)
+        if selection is None:
+            response.headers["ETag"] = task_etag(
+                task, getattr(request.state, "af_representation", "json")
+            )
+        return present(task, selection)
 
-    @router.get("/tasks/{task_id}", response_model=TaskResponse)
-    def get_task(task_id: str) -> TaskResponse:
-        return TaskResponse.from_task(controller.get(task_id))
+    @router.get("/tasks/{task_id}", response_model=TaskResponse, response_model_exclude_unset=True)
+    def get_task(
+        task_id: str,
+        response: Response,
+        request: Request,
+        selection: LocaleSelection | None = selected_locale,
+    ) -> TaskResponse:
+        task = controller.get(task_id)
+        if selection is None:
+            response.headers["ETag"] = task_etag(
+                task, getattr(request.state, "af_representation", "json")
+            )
+        return present(task, selection)
 
-    @router.patch("/tasks/{task_id}", response_model=TaskResponse)
-    @router.put("/tasks/{task_id}", response_model=TaskResponse, include_in_schema=False)
-    def update_task(task_id: str, payload: TaskPrompt) -> TaskResponse:
-        return TaskResponse.from_task(controller.update(task_id, payload.prompt))
+    @router.patch(
+        "/tasks/{task_id}", response_model=TaskResponse, response_model_exclude_unset=True
+    )
+    @router.put(
+        "/tasks/{task_id}",
+        response_model=TaskResponse,
+        include_in_schema=False,
+        response_model_exclude_unset=True,
+    )
+    def update_task(
+        task_id: str,
+        payload: TaskPrompt,
+        request: Request,
+        response: Response,
+        selection: LocaleSelection | None = selected_locale,
+    ) -> TaskResponse:
+        task = controller.update(
+            task_id, payload.prompt, expected_version=expected_version(request)
+        )
+        if selection is None:
+            response.headers["ETag"] = task_etag(
+                task, getattr(request.state, "af_representation", "json")
+            )
+        return present(task, selection)
 
-    @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-    def delete_task(task_id: str) -> Response:
-        controller.delete(task_id)
+    @router.delete(
+        "/tasks/{task_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(select_locale)],
+    )
+    def delete_task(task_id: str, request: Request) -> Response:
+        controller.delete(task_id, expected_version=expected_version(request))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

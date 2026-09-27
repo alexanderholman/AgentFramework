@@ -174,11 +174,12 @@ class CharacterCountProcedure(PureProcedureMixin, BaseProcedure):
         }
 
 
-class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
+class CurrentTimeProcedure(BaseProcedure):
     id = "current-time"
+    version = "1.1.0"
     selection_descriptor = ProcedureDescriptor(
         procedure_id=id,
-        version=BaseProcedure.version,
+        version=version,
         intent="system.current_time",
         arguments=(
             ProcedureArgumentDescriptor(
@@ -186,7 +187,7 @@ class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
                 value_type=ArgumentValueType.TEXT,
                 min_length=1,
                 max_length=64,
-                allow_blank=True,
+                allow_blank=False,
             ),
         ),
         effect=ProcedureEffect.READ_ONLY,
@@ -200,19 +201,13 @@ class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
         return classification.intent == "system.current_time"
 
     def execute(self, classification: Classification) -> ProcedureResult:
-        tz_name = classification.arguments.get("timezone")
-        if tz_name:
-            try:
-                tz = ZoneInfo(tz_name)
-            except (KeyError, ValueError):
-                tz = ZoneInfo("UTC")
-            now = dt.datetime.now(tz)
-        else:
-            now = dt.datetime.now(dt.UTC)
+        self.validate(classification)
+        tz_name = classification.arguments.get("timezone", "UTC")
+        now = dt.datetime.now(ZoneInfo(tz_name))
         iso = now.isoformat()
         return ProcedureResult(
             output=iso,
-            evidence={"timezone": tz_name or "UTC", "iso": iso},
+            evidence={"timezone": tz_name, "iso": iso},
         )
 
     def validate(self, classification: Classification) -> None:
@@ -221,3 +216,10 @@ class CurrentTimeProcedure(PureProcedureMixin, BaseProcedure):
         allowed = {"timezone"}
         if not set(classification.arguments.keys()).issubset(allowed):
             raise InvalidSelectionProposal("invalid arguments for current-time")
+        zone = classification.arguments.get("timezone", "UTC")
+        if type(zone) is not str or not 1 <= len(zone) <= 64:
+            raise InvalidSelectionProposal("invalid IANA timezone for current-time")
+        try:
+            ZoneInfo(zone)
+        except (KeyError, ValueError):
+            raise InvalidSelectionProposal("invalid IANA timezone for current-time") from None

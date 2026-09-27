@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from heapq import nlargest
+from threading import RLock
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 
-from af.domain.tasks import Task
+from af.domain.tasks import Task, TaskConflict
 from af.framework.errors import TaskNotFound
 from af.infrastructure.database import Database, TaskRow
 
@@ -19,16 +21,22 @@ def _aware(value: datetime) -> datetime:
 class InMemoryTaskRepository:
     def __init__(self) -> None:
         self._tasks: dict[str, Task] = {}
+        self._lock = RLock()
 
     def save(self, task: Task) -> Task:
-        self._tasks[task.id] = task
-        return task
+        with self._lock:
+            self._tasks[task.id] = task
+            return task
 
     def get(self, task_id: str) -> Task:
         try:
             return self._tasks[task_id]
         except KeyError as error:
             raise TaskNotFound(task_id) from error
+
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        with self._lock:
+            return [self._tasks.get(task_id) for task_id in task_ids]
 
     def list_recent(self, *, limit: int) -> list[Task]:
         return nlargest(
@@ -46,9 +54,22 @@ class InMemoryTaskRepository:
         return tasks
 
     def delete(self, task_id: str) -> None:
-        if task_id not in self._tasks:
-            raise TaskNotFound(task_id)
-        del self._tasks[task_id]
+        with self._lock:
+            if task_id not in self._tasks:
+                raise TaskNotFound(task_id)
+            del self._tasks[task_id]
+
+    def compare_and_save(self, task: Task, *, expected: Task) -> Task:
+        with self._lock:
+            if task.id != expected.id or self._tasks.get(expected.id) != expected:
+                raise TaskConflict()
+            return self.save(task)
+
+    def compare_and_delete(self, expected: Task) -> None:
+        with self._lock:
+            if self._tasks.get(expected.id) != expected:
+                raise TaskConflict()
+            del self._tasks[expected.id]
 
 
 class SqlAlchemyTaskRepository:
@@ -71,6 +92,14 @@ class SqlAlchemyTaskRepository:
                 raise TaskNotFound(task_id)
             return self._to_domain(row)
 
+    def get_many(self, task_ids: tuple[str, ...]) -> list[Task | None]:
+        if not task_ids:
+            return []
+        with self._database.sessions() as session:
+            rows = session.scalars(select(TaskRow).where(TaskRow.id.in_(task_ids))).all()
+            found = {row.id: self._to_domain(row) for row in rows}
+            return [found.get(task_id) for task_id in task_ids]
+
     def list_recent(self, *, limit: int) -> list[Task]:
         with self._database.sessions() as session:
             statement = (
@@ -92,6 +121,30 @@ class SqlAlchemyTaskRepository:
             if row is None:
                 raise TaskNotFound(task_id)
             session.delete(row)
+
+    def compare_and_save(self, task: Task, *, expected: Task) -> Task:
+        if task.id != expected.id:
+            raise TaskConflict()
+        with self._database.sessions.begin() as session:
+            statement = (
+                update(TaskRow)
+                .where(*(getattr(TaskRow, key) == value for key, value in asdict(expected).items()))
+                .values(**asdict(task))
+                .returning(TaskRow.id)
+            )
+            if session.execute(statement).scalar_one_or_none() is None:
+                raise TaskConflict()
+        return task
+
+    def compare_and_delete(self, expected: Task) -> None:
+        with self._database.sessions.begin() as session:
+            statement = (
+                delete(TaskRow)
+                .where(*(getattr(TaskRow, key) == value for key, value in asdict(expected).items()))
+                .returning(TaskRow.id)
+            )
+            if session.execute(statement).scalar_one_or_none() is None:
+                raise TaskConflict()
 
     @staticmethod
     def _copy_to_row(task: Task, row: TaskRow) -> None:

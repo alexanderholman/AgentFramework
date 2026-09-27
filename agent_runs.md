@@ -4271,3 +4271,122 @@ stale value. Hard expiry falls back to a bounded one-owner cold fill.
 - Issue #177
 - Issue #21
 - PR #206
+
+---
+
+## 2026-09-26 — Autonomous mission integrated foundation checkpoint
+
+### Work
+
+Integrated workflow restart/transport parity, science/locales, machine-readable CLI,
+local model and consented Jev decisions, tokens/OAuth, scheduling, data lifecycle,
+content/runtime/paired peers, real queue protocol adapters and graph/storage repairs.
+Preserved original Git ancestry and the mission branch's newer starting state.
+
+### Evidence
+
+Focused suites passed: cache/queue/graph 595; science/locale/scheduling and neighboring
+CLI/pipeline 303; workflow/self-operation/data 82; headless auth/OAuth 49; storage/mail
+38; paired peer/process runtime 8. These overlap and are not a total suite count.
+Real local Redis 6.2.14 cache/queue qualification passed 3 tests, using a temporary
+server process. Loopback SMTP, content HTTP and paired signed-procedure execution
+were exercised. Strict mypy passed 296 source files; governance passed all 36 checks.
+
+### Continuing work
+
+A complete canonical gate has not yet passed for this enlarged tree. Full integration
+runs during concurrent test-first development encountered transient missing modules;
+remaining stable failures and coverage are being resolved. Account/OIDC/passkey,
+algorithm/problem/interpreter catalogue and engineering/promotion work continues.
+External database/search/graph/cloud qualification is not inferred from fakes. Keep
+this as a recovery checkpoint, retain alpha versioning, and continue the mission.
+
+## 2026-09-26 — Full foundation gate and installed operational integration
+
+The fixed foundation snapshot passed the complete canonical gate: 3,738 passed,
+58 skipped, 90.75% branch coverage, strict typing/format/lint, nine OpenCode route
+tests, sdist/wheel inspection and clean temporary install smoke, 36 governance
+checks. External-service skips remain explicit. This supersedes the preceding
+"not yet completed" status for the foundation snapshot only.
+
+Subsequent focused journeys verified account reset across restarts; encrypted
+notification persistence; software-authenticator WebAuthn cryptography; signed
+human-decision restart/replay denial; actual temporary-Git engineering, admission,
+direct reuse and invalidation; real SQLite stream recovery; graph projection
+generation cutover; local setup/apply/reconciliation; independent observations;
+locale HTML/REST and generated starter entry points. Fixed unsafe time-result reuse,
+JSON depth/finite-number bounds, credential output cleanup and context handoff.
+
+The enlarged tree is entering another fixed-snapshot gate. API concurrency controls,
+native networking qualification and release tooling remain under active audit.
+No public release, production deployment, external delivery, paid model call or
+issue-closure claim was made. Keep engineering checkpoint evidence separate from
+candidate-bound target-host and maintainer approvals.
+
+## 2026-09-26 — Green CI foundation and stabilization snapshot
+
+Rechecked PR #212 and live branch; preserved a1382d8 and all newer local work.
+Published 4d74e926acea8cfccad5daabb3ecdf666a77ab35 with only import ordering and
+correctly scoped terminal-session assertions. Exact source tree passed 4,098 tests,
+58 skips and 91.70% branch coverage plus the full canonical package/governance gate.
+GitHub AF Python, PostgreSQL, MySQL, MariaDB, OpenSearch and Elasticsearch workflows
+then all completed successfully at that head; service evidence was read from job
+logs, not inferred from mocks.
+
+Subsequent focused verification passed cache fencing/Memcached regressions and
+trace minimization (57 combined regression checks and 196 neighboring privacy
+checks), API/GraphQL controls, policy boundaries and installed self-development
+restart/direct reuse. Added bounded Hypothesis science properties. Runtime-only
+wheel-from-sdist smoke passed with development packages excluded. Classified actual
+secret-scan candidates as exact synthetic fixtures/public metadata; no actual
+credential or independent approval is claimed. Dependency advisory scanning remains
+unproved locally due DNS and must run in CI at the next exact candidate.
+
+Keyword audit of runtime source found abstract provider/procedure methods,
+documented unsupported file-cache locks and isolated flush boundaries, comparison
+NotImplemented sentinels, explicit test doubles, error/status cases and real
+temporary-file cleanup. These were retained rather than mechanically removed.
+The larger stabilization snapshot still requires its own complete fixed-tree gate,
+clean-room journeys and candidate-bound CI before completion can be claimed.
+
+
+## 2026-09-26 — Stabilization CI follow-through
+
+Checkpoint `3d98ebb` passed the fresh local canonical gate (4,255 passed, 59 skipped,
+91.57% branch coverage) and actual clean-room CLI/recovery/native/cache journeys.
+CI exposed a cryptography advisory and a runtime-only installer dependence on
+registry index metadata absent from a fresh wheel cache. Both are release blockers,
+not environmental excuses: upgrade to locked cryptography 50.0.1 and preserve
+PEP 751 artifact URLs/hashes for offline installation. Reproduced the cache failure
+before the fix. The roadmap audit also found the absent `af test` command; its thin
+pytest adapter passed an actual subprocess pass/fail/no-state regression. Continue
+exact-head full/service/security qualification; no release approval is claimed.
+
+
+## 2026-09-26 — Search receipt archaeology
+
+Archaeology checkpoint: historical receipt tests first failed import against the completion implementation. Adapted the SQLite race expectation to its existing BEGIN IMMEDIATE fence. Focused receipt, guard, relational and embedded suites: 186 passed, 6 explicit missing-service skips; Ruff and strict mypy passed (374 source files). Recovered eight transaction-claim/rollback regressions and four embedded file-generation/receipt regressions. Added service CI cases; final service and canonical qualification pending.
+
+
+## 2026-09-26 — InnoDB restart and inventory review
+
+At 1312fd0, Python, PostgreSQL, MySQL, OpenSearch, Elasticsearch and Copilot CI passed. MariaDB certification exposed a first-delivery race failure followed by lost-savepoint cleanup; the common canonical gate passed. Security Bandit and pip-audit passed; detect-secrets found 295 unreviewed Git object hashes in the new inventory. Added explicit hash reviews and reproducing server-abort tests before correcting adapter recovery; focused MySQL/MariaDB/projector/unique-conflict suite: 91 passed. Final exact-head service rerun pending.
+
+## 2026-09-27 — MariaDB repair qualified; bounded final archaeology regressions
+
+Canonical repair candidate: 4,339 passed, 65 skipped, 91.46% branch coverage,
+Ruff, strict mypy, nine OpenCode tests, package clean install/smoke and 36 governance
+checks. Published b235679; live MariaDB certification and release-security passed
+at inspection, remaining workflow stages pending. Hierarchy public regressions
+failed before injection and policy integration; 165 focused checks then passed.
+Historical UoW suppression test failed before a minimal propagation repair.
+Rechecked all 113 branches and 143 PRs; only the completion branch advanced.
+No final completion or all-head disposition claim is made by this checkpoint.
+
+## 2026-09-27 — Correct MariaDB evidence after raw-log inspection
+
+The earlier successful step conclusion was continue-on-error presentation, not
+service success. Raw job 108520786699 still has one first-writer savepoint failure;
+16 service tests passed and 20 skipped; canonical passed; enforcement correctly failed.
+Add bounded numeric vendor-code diagnostics to the unchanged assertion and investigate.
+All 160 historical heads now have recorded semantic dispositions; stop archaeology.

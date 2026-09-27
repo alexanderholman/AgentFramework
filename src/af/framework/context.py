@@ -121,6 +121,16 @@ class CancellationToken:
                     self._waiters.discard(waiter)
                 continue
 
+    def run_if_active(self, action: Callable[[], None]) -> bool:
+        """Atomically perform a child action without completing this parent token."""
+        if not callable(action):
+            raise TypeError("active action must be callable")
+        with self._lock:
+            if self._cancelled:
+                return False
+            action()
+            return True
+
     def commit_completion(self, action: Callable[[], None]) -> bool:
         """Atomically commit a terminal action unless cancellation already won."""
         if not callable(action):

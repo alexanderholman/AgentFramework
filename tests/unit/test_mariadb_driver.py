@@ -4,7 +4,7 @@ from typing import cast
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
 from af.framework.errors import PlatformReason
@@ -49,7 +49,10 @@ def test_mariadb_driver_executes_savepoints_and_read_only_transactions(
                     {"id": 1, "value": "kept"},
                 )
             )
-            with pytest.raises(RuntimeError, match="discard"), transaction.savepoint("nested"):
+            with (
+                pytest.raises(RuntimeError, match="discard"),
+                transaction.savepoint("nested"),
+            ):
                 transaction.execute(
                     DatabaseStatement(
                         "INSERT INTO records (id, value) VALUES (:id, :value)",
@@ -137,6 +140,19 @@ def test_mariadb_rejects_other_dialects_and_sanitizes_connect_failure(
     assert "secret" not in repr(captured.value)
 
 
+def test_record_changed_error_is_retryable() -> None:
+    error = OperationalError(
+        "UPDATE projection checkpoint",
+        {},
+        Exception(1020, "record changed since last read"),
+    )
+
+    translated = mysql_module._failure(error, stage="database.execute")
+
+    assert translated.reason is PlatformReason.TRANSIENT_FAILURE
+    assert translated.stage == "database.execute"
+
+
 def test_mariadb_transaction_contract_fails_closed_and_recovers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -170,7 +186,9 @@ def test_mariadb_transaction_contract_fails_closed_and_recovers(
     assert closed.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
-def test_mariadb_stream_is_bounded_by_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mariadb_stream_is_bounded_by_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with _driver(monkeypatch) as driver:
         with driver.transaction(read_only=True) as transaction:
             cursor = transaction.stream(DatabaseStatement("SELECT 1 AS value", read_only=True))
@@ -180,7 +198,9 @@ def test_mariadb_stream_is_bounded_by_transaction(monkeypatch: pytest.MonkeyPatc
         assert captured.value.reason is PlatformReason.SHUTDOWN_FAILED
 
 
-def test_mariadb_cancel_uses_separate_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mariadb_cancel_uses_separate_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class KillerResult:
         closed = False
 
@@ -279,3 +299,44 @@ def test_caught_mariadb_cancellation_taints_transaction_and_rolls_back(
         )
     assert rows[0]["count"] == 0
     driver.close()
+
+
+def test_mariadb_rollback_only_prevents_caught_failure_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _driver(monkeypatch) as driver:
+        with driver.transaction() as transaction:
+            transaction.execute(DatabaseStatement("CREATE TABLE records (id INTEGER)"))
+        with (
+            pytest.raises(DatabaseOperationError) as captured,
+            driver.transaction() as transaction,
+        ):
+            transaction.execute(DatabaseStatement("INSERT INTO records VALUES (1)"))
+            transaction.mark_rollback_only()
+        with driver.transaction(read_only=True) as transaction:
+            rows = transaction.query(DatabaseStatement("SELECT id FROM records", read_only=True))
+
+    assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
+    assert captured.value.stage == "database.transaction.rollback-only"
+    assert rows == ()
+
+
+def test_mariadb_transaction_operation_claim_is_irreversible_and_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _driver(monkeypatch) as driver:
+        with driver.transaction() as transaction:
+            assert transaction.claim_operation("search_projection_source_a") is True
+            assert transaction.claim_operation("search_projection_source_a") is False
+            with pytest.raises(ValueError):
+                transaction.claim_operation("not canonical")
+        with pytest.raises(DatabaseOperationError):
+            transaction.claim_operation("search_projection_source_a")
+        with driver.transaction() as fresh:
+            assert fresh.claim_operation("search_projection_source_a") is True
+        monkeypatch.setattr(mysql_module, "_MAX_OPERATION_CLAIMS", 1)
+        with driver.transaction() as bounded:
+            assert bounded.claim_operation("search_projection_source_a") is True
+            with pytest.raises(DatabaseOperationError) as captured:
+                bounded.claim_operation("search_projection_source_b")
+            assert captured.value.reason is PlatformReason.CAPABILITY_UNAVAILABLE

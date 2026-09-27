@@ -233,3 +233,30 @@ def test_cancelling_program_job_stops_process_and_persists_state(tmp_path: Path)
     assert [event.state for event in service.events_after(job_id)][-1] is JobState.CANCELLED
     assert results.get(job_id) is None
     database.close()
+
+
+def test_expired_program_deadline_never_executes(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    database, events, results = _dependencies(tmp_path)
+    queue = RecordingQueue()
+    service = ProgramJobService(queue, events, results)
+    job_id = service.submit(
+        ProgramRequest(
+            argv=(sys.executable, "-c", "from pathlib import Path; Path('expired-effect').touch()"),
+            working_directory=tmp_path,
+            budget=ProgramBudget(timeout=timedelta(seconds=3), max_output_bytes=256),
+        )
+    )
+    job = queue.jobs[0]
+    old = datetime.now(UTC) - timedelta(minutes=1)
+    metadata = replace(job.envelope.metadata, occurred_at=old, deadline=old + timedelta(seconds=3))
+    expired = replace(
+        job, envelope=MessageEnvelope.create(metadata=metadata, payload=job.envelope.payload_copy())
+    )
+    ProgramJobHandler(AsyncSubprocessExecutor(), events, results).invoke(
+        expired, cancellation=CancellationToken()
+    )
+    assert not (tmp_path / "expired-effect").exists()
+    assert service.events_after(job_id)[-1].state == JobState.BUDGET_EXHAUSTED
+    database.close()

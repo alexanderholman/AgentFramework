@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -158,10 +159,28 @@ class ProgramJobHandler:
         )
         if not self._results.claim(job_id):
             return
-        self._events.append(job_id, JobState.RUNNING, stage="program.execute")
         if cancellation.cancelled:
             self._events.append(job_id, JobState.CANCELLED, stage="program.execute")
             return
+        deadline = job.envelope.metadata.deadline
+        if deadline is not None:
+            remaining = deadline - datetime.now(UTC)
+            if remaining <= timedelta(0):
+                self._events.append(
+                    job_id,
+                    JobState.BUDGET_EXHAUSTED,
+                    stage="program.execute",
+                    detail="deadline_expired",
+                )
+                return
+            request = replace(
+                request,
+                budget=ProgramBudget(
+                    timeout=min(request.budget.timeout, remaining),
+                    max_output_bytes=request.budget.max_output_bytes,
+                ),
+            )
+        self._events.append(job_id, JobState.RUNNING, stage="program.execute")
         run = asyncio.create_task(self._executor.execute(request))
         stop = asyncio.create_task(cancellation.wait())
         try:

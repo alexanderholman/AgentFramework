@@ -1208,9 +1208,9 @@ def test_http_requires_explicit_allowed_hosts_for_non_loopback_bind() -> None:
         create_http_app(application)
 
 
-def test_http_allows_configured_host_for_non_loopback_bind() -> None:
+def test_http_allows_configured_host_alias_on_loopback_bind() -> None:
     application = create_application(
-        settings=Settings(host="0.0.0.0", allowed_hosts=("af.internal",)),
+        settings=Settings(host="127.0.0.1", allowed_hosts=("af.internal",)),
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
     )
@@ -1238,7 +1238,7 @@ def test_http_accepts_loopback_ipv6_and_configured_hosts_with_ports() -> None:
         assert client.get("/", headers={"host": "evil.invalid"}).status_code == 400
 
     lan = create_application(
-        settings=Settings(host="0.0.0.0", allowed_hosts=("af.internal", "192.168.1.20")),
+        settings=Settings(host="127.0.0.1", allowed_hosts=("af.internal", "192.168.1.20")),
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
     )

@@ -1,0 +1,55 @@
+"""Application-owned typed TUI; business work stays in AF's shared task controller."""
+
+from af.application.tasks import TaskController
+from af.framework.errors import AFError
+from af.framework.tui import KeyEvent, TextEvent, TuiEvent, TuiTurn, TuiView, TuiWidget, WidgetKind
+
+
+class StarterTui:
+    def __init__(self) -> None:
+        self.prompt = ""
+        self.output = ""
+        self.status = "Enter a request; Tab moves focus, Enter runs, Esc exits."
+        self.done = False
+
+    def start(self, turn: TuiTurn) -> TuiView:
+        return self._view()
+
+    def handle(self, event: TuiEvent, turn: TuiTurn) -> TuiView:
+        if isinstance(event, TextEvent) and turn.focused_id == "prompt":
+            candidate = self.prompt + event.text
+            if len(candidate) > 10_000:
+                self.status = "Request limit exceeded; input was not added"
+            else:
+                self.prompt = candidate
+                self.output = ""
+                self.status = "Ready"
+        elif isinstance(event, KeyEvent):
+            if event.key == "escape" or (event.key == "enter" and turn.focused_id == "quit"):
+                self.done = True
+            elif event.key == "backspace" and turn.focused_id == "prompt":
+                self.prompt = self.prompt[:-1]
+            elif event.key == "enter" and turn.focused_id in {"prompt", "run"}:
+                try:
+                    result = turn.container.resolve(TaskController).execute(self.prompt)
+                    self.output = result.output
+                    self.status = "Verified" if result.verified else "Needs review"
+                except AFError:
+                    self.status = "Request could not be completed"
+        return self._view()
+
+    def _view(self) -> TuiView:
+        return TuiView(
+            "__PACKAGE__",
+            (
+                TuiWidget("prompt", WidgetKind.INPUT, "Request", self.prompt),
+                TuiWidget("run", WidgetKind.BUTTON, "Run"),
+                TuiWidget("output", WidgetKind.TEXT, "Result", self.output),
+                TuiWidget("quit", WidgetKind.BUTTON, "Quit"),
+            ),
+            status=self.status,
+            done=self.done,
+        )
+
+    def close(self) -> None:
+        pass

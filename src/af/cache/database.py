@@ -199,31 +199,36 @@ class DatabaseCacheDriver:
                     )
                     if row is None:
                         return None
-                    value = _validated_value(bytes(row["value"]))
-                    expires_at = self._expiry(row["expires_at"])
-                    if expires_at is not None and expires_at <= self._now():
-                        connection.execute(
-                            text(
-                                "DELETE FROM af_cache_entries "
-                                "WHERE application_id = :application_id "
-                                "AND tenant_id = :tenant_id "
-                                "AND namespace = :namespace "
-                                "AND key = :key"
-                            ),
-                            {
-                                "application_id": namespace.application_id,
-                                "tenant_id": namespace.tenant_id,
-                                "namespace": namespace.name,
-                                "key": key.value,
-                            },
-                        )
-                        return None
-                    return value
+                    try:
+                        value = _validated_value(bytes(row["value"]))
+                        expires_at = self._expiry(row["expires_at"])
+                        if expires_at is None or expires_at > self._now():
+                            return value
+                    except (TypeError, ValueError):
+                        pass
+                    # A separate driver can replace this row after our read.
+                    # Expiry/corruption cleanup may remove only that exact snapshot.
+                    connection.execute(
+                        text(
+                            "DELETE FROM af_cache_entries "
+                            "WHERE application_id = :application_id "
+                            "AND tenant_id = :tenant_id AND namespace = :namespace "
+                            "AND key = :key AND value = :observed_value "
+                            "AND (expires_at = :observed_expiry "
+                            "OR (expires_at IS NULL AND :observed_expiry IS NULL))"
+                        ),
+                        {
+                            "application_id": namespace.application_id,
+                            "tenant_id": namespace.tenant_id,
+                            "namespace": namespace.name,
+                            "key": key.value,
+                            "observed_value": row["value"],
+                            "observed_expiry": row["expires_at"],
+                        },
+                    )
+                    return None
             except SQLAlchemyError as error:
                 raise _failure(error, stage="cache.database.get") from None
-            except (TypeError, ValueError):
-                self.delete(namespace, key)
-                return None
 
     def set(
         self,
@@ -485,9 +490,10 @@ class DatabaseCacheDriver:
                 return False
             try:
                 with self._engine.begin() as connection:
-                    deleted = connection.execute(
+                    released = connection.execute(
                         text(
-                            "DELETE FROM af_cache_locks WHERE application_id = :application_id "
+                            "UPDATE af_cache_locks SET expires_at = :released_at "
+                            "WHERE application_id = :application_id "
                             "AND tenant_id = :tenant_id AND namespace = :namespace AND key = :key "
                             "AND owner = :owner AND fencing_token = :fencing_token "
                             "AND expires_at = :expires_at"
@@ -500,9 +506,10 @@ class DatabaseCacheDriver:
                             "owner": lease.owner.value,
                             "fencing_token": lease.fencing_token,
                             "expires_at": lease.expires_at.isoformat(),
+                            "released_at": now.isoformat(),
                         },
                     )
-                    return deleted.rowcount > 0
+                    return released.rowcount > 0
             except SQLAlchemyError as error:
                 raise _failure(error, stage="cache.database.lock.release") from None
 

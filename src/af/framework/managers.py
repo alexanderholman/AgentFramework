@@ -699,6 +699,12 @@ class Manager[T]:
             return tuple(sorted(self._cache))
 
     @property
+    def driver_manifests(self) -> tuple[DriverManifest, ...]:
+        """Return inert registration declarations without resolving any connection."""
+        with self._lock:
+            return tuple(self._registrations[name].manifest for name in sorted(self._registrations))
+
+    @property
     def quarantined_connections(self) -> tuple[str, ...]:
         with self._lock:
             return tuple(sorted(self._quarantined))

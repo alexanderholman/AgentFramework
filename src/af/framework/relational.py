@@ -22,6 +22,7 @@ __all__ = (
     "DatabaseRow",
     "DatabaseStatement",
     "DatabaseTransaction",
+    "DatabaseUniqueConflict",
     "DatabaseValue",
     "UnsupportedDatabaseFeature",
 )
@@ -60,6 +61,17 @@ class DatabaseOperationError(PlatformError):
         protected_cause: BaseException | None = None,
     ) -> None:
         super().__init__(reason, stage=stage, protected_cause=protected_cause)
+
+
+class DatabaseUniqueConflict(DatabaseOperationError):
+    """A unique key already exists; callers decide whether their operation is retryable."""
+
+    def __init__(self, *, stage: str, protected_cause: BaseException | None = None) -> None:
+        super().__init__(
+            reason=PlatformReason.INTEGRITY_FAILURE,
+            stage=stage,
+            protected_cause=protected_cause,
+        )
 
 
 class UnsupportedDatabaseFeature(DatabaseOperationError):
@@ -186,6 +198,18 @@ class DatabaseTransaction(Protocol):
     def stream(self, statement: DatabaseStatement, /) -> DatabaseCursor: ...
 
     def savepoint(self, name: str, /) -> AbstractContextManager[None]: ...
+
+    def mark_rollback_only(self) -> None:
+        """Irreversibly prevent commit; this must not fail while the transaction is active."""
+        ...
+
+    def claim_operation(self, name: str, /) -> bool:
+        """Irreversibly claim a bounded canonical name on the underlying outer transaction.
+
+        Transaction wrappers must delegate this method to the wrapped transaction so separate
+        wrappers cannot obtain independent claims.
+        """
+        ...
 
 
 class DatabaseDriver(Protocol):

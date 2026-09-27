@@ -1,128 +1,93 @@
-from __future__ import annotations
+"""OrientDB REST protocol tests; no live service certification is implied."""
+
+from collections.abc import Mapping
 
 import pytest
 
-from af.framework.managers import CapabilitySet
+from af.framework.errors import PlatformError
 from af.graph.contracts import GraphFeature, GraphQuery
 from af.graph.drivers.orientdb import OrientDBDriver
 
 
-class TestOrientDBDriver:
-    """Tests for OrientDB driver conforming to GraphDriver protocol."""
+class Response:
+    def __init__(self, result: object) -> None:
+        self.result = result
 
-    def test_driver_reports_query_capability(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        result = driver.verify_capabilities({GraphFeature.QUERY})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.QUERY.value in result.values
+    def raise_for_status(self) -> None:
+        pass
 
-    def test_driver_reports_persistence_capability(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        result = driver.verify_capabilities({GraphFeature.PERSISTENCE})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.PERSISTENCE.value in result.values
+    def json(self) -> object:
+        return {"result": self.result}
 
-    def test_driver_reports_indexing_capability(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        result = driver.verify_capabilities({GraphFeature.INDEXING})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.INDEXING.value in result.values
 
-    def test_driver_reports_missing_cancellation_capability(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        result = driver.verify_capabilities({GraphFeature.CANCELLATION})
-        assert isinstance(result, CapabilitySet)
-        assert GraphFeature.CANCELLATION.value not in result.values
+class Client:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Mapping[str, object], float]] = []
+        self.rows: list[dict[str, object]] = []
+        self.closed = False
 
-    def test_driver_query_returns_empty_results(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        query = GraphQuery(text="SELECT FROM V", limit=10)
-        results = driver.query(query)
-        assert isinstance(results, list)
-        assert len(results) == 0
+    def post(self, url: str, *, json: Mapping[str, object], timeout: float) -> Response:
+        self.calls.append((url, json, timeout))
+        return Response(self.rows)
 
-    def test_driver_query_rejects_untrusted_text(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        with pytest.raises(ValueError, match="untrusted"):
-            driver.query(
-                GraphQuery(
-                    text="SELECT FROM V; DROP CLUSTER",
-                    limit=10,
-                )
-            )
+    def close(self) -> None:
+        self.closed = True
 
-    def test_driver_create_node_stores_node(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={"name": "test"},
+
+def test_unconfigured_orientdb_never_claims_persistence_or_success() -> None:
+    driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
+    assert not driver.verify_capabilities(set(GraphFeature)).values
+    with pytest.raises(PlatformError):
+        driver.query(GraphQuery("SELECT FROM V"))
+    with pytest.raises(PlatformError):
+        driver.create_node("a", ("Person",), {})
+
+
+def test_orientdb_binds_json_parameters_deadline_and_bounded_real_results() -> None:
+    client = Client()
+    client.rows = [
+        {"node_id": "a", "labels": ["Person"], "score": 0.8},
+        {"node_id": "b", "labels": ["Person"], "score": 0.3},
+    ]
+    driver = OrientDBDriver(uri="https://orient.example:2480", database="graphdb", client=client)
+    value = "'; DROP CLASS; --"
+    results = driver.query(
+        GraphQuery(
+            "SELECT af_id AS node_id, af_labels AS labels FROM AFNode WHERE name = $name",
+            parameters={"name": value},
+            limit=1,
+            deadline_ms=350,
         )
-        assert driver.get_node("entity-001") is not None
+    )
+    assert [row.node_id for row in results] == ["a"]
+    url, payload, timeout = client.calls[0]
+    assert url == "https://orient.example:2480/command/graphdb/sql"
+    assert payload["parameters"] == {"name": value}
+    assert value not in str(payload["command"])
+    assert ":name" in str(payload["command"])
+    assert "LIMIT 1 TIMEOUT 350 EXCEPTION" in str(payload["command"])
+    assert timeout == 0.35
 
-    def test_driver_create_edge_stores_edge(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_node(
-            node_id="entity-002",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_edge(
-            edge_id="rel-001",
-            source_id="entity-001",
-            target_id="entity-002",
-            relation_type="KNOWS",
-            properties={},
-        )
-        edge = driver.get_edge("rel-001")
-        assert edge is not None
-        assert edge.edge_id == "rel-001"
 
-    def test_driver_delete_node_removes_node(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.delete_node("entity-001")
-        assert driver.get_node("entity-001") is None
+def test_orientdb_crud_reaches_backend_with_portable_label_storage() -> None:
+    client = Client()
+    driver = OrientDBDriver(uri="https://orient.example", database="graphdb", client=client)
+    driver.create_node("a", ("Person", "Researcher"), {"name": "Alice"})
+    assert "CREATE VERTEX AFNode" in str(client.calls[-1][1]["command"])
+    client.rows = [
+        {"node_id": "a", "labels": ["Person", "Researcher"], "properties": {"name": "Alice"}}
+    ]
+    node = driver.get_node("a")
+    assert node is not None and node.labels == ("Person", "Researcher")
+    driver.create_edge("ab", "a", "b", "KNOWS", {})
+    assert "CREATE EDGE AFEdge" in str(client.calls[-1][1]["command"])
+    driver.delete_edge("ab")
+    driver.delete_node("a")
+    driver.close()
+    assert client.closed
 
-    def test_driver_delete_edge_removes_edge(self) -> None:
-        driver = OrientDBDriver(uri="remote://localhost:2424", database="graphdb")
-        driver.create_node(
-            node_id="entity-001",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_node(
-            node_id="entity-002",
-            labels=("Entity",),
-            properties={},
-        )
-        driver.create_edge(
-            edge_id="rel-001",
-            source_id="entity-001",
-            target_id="entity-002",
-            relation_type="KNOWS",
-            properties={},
-        )
-        driver.delete_edge("rel-001")
-        assert driver.get_edge("rel-001") is None
 
-    def test_driver_requires_uri(self) -> None:
-        with pytest.raises(ValueError, match="uri"):
-            OrientDBDriver(uri="", database="graphdb")
-
-    def test_driver_requires_database(self) -> None:
-        with pytest.raises(ValueError, match="database"):
-            OrientDBDriver(uri="remote://localhost:2424", database="")
-
-    def test_driver_uri_must_be_remote(self) -> None:
-        with pytest.raises(ValueError, match="remote"):
-            OrientDBDriver(uri="http://localhost:2480", database="graphdb")
+@pytest.mark.parametrize("uri", ["", "ftp://localhost", "https://user:secret@host"])
+def test_orientdb_rejects_invalid_or_credential_bearing_uri(uri: str) -> None:
+    with pytest.raises(ValueError):
+        OrientDBDriver(uri=uri, database="graphdb")

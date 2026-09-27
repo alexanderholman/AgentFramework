@@ -10,7 +10,13 @@ from types import TracebackType
 from typing import Literal, Never, cast
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Connection, CursorResult, Engine, RootTransaction, make_url
+from sqlalchemy.engine import (
+    Connection,
+    CursorResult,
+    Engine,
+    RootTransaction,
+    make_url,
+)
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
@@ -21,6 +27,7 @@ from af.framework.relational import (
     DatabaseOperationError,
     DatabaseRow,
     DatabaseStatement,
+    DatabaseUniqueConflict,
     DatabaseValue,
     UnsupportedDatabaseFeature,
 )
@@ -28,6 +35,7 @@ from af.framework.relational import (
 __all__ = ("MySQLDriver",)
 
 _SAVEPOINT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_MAX_OPERATION_CLAIMS = 1_024
 _CORE_FEATURES = frozenset(
     {
         DatabaseFeature.TRANSACTIONS,
@@ -45,6 +53,16 @@ def _cancelled(error: BaseException) -> bool:
 
 
 def _failure(error: BaseException, *, stage: str) -> DatabaseOperationError:
+    original = getattr(error, "orig", error)
+    arguments: tuple[object, ...] = tuple(getattr(original, "args", ()))
+    if arguments and arguments[0] == 1062:
+        return DatabaseUniqueConflict(stage=stage, protected_cause=error)
+    if arguments and arguments[0] in {1020, 1205, 1213}:
+        return DatabaseOperationError(
+            reason=PlatformReason.TRANSIENT_FAILURE,
+            stage=stage,
+            protected_cause=error,
+        )
     if _cancelled(error):
         reason = PlatformReason.CANCELLED
     elif stage == "database.connect":
@@ -97,12 +115,13 @@ class _MySQLCursor(DatabaseCursor):
                 reason=PlatformReason.SHUTDOWN_FAILED,
                 stage="database.cursor",
             )
+        self._transaction._assert_usable()
         if self._transaction.cancellation_requested():
             _cancel_after_cleanup(self.close, stage="database.cursor")
         try:
             raw = self._result.fetchone()
         except SQLAlchemyError as error:
-            raise _failure(error, stage="database.cursor") from None
+            raise self._transaction._failure(error, stage="database.cursor") from None
         if self._transaction.cancellation_requested():
             _cancel_after_cleanup(self.close, stage="database.cursor")
         if raw is None:
@@ -149,6 +168,10 @@ class _MySQLSavepoint(AbstractContextManager[None]):
                 reason=PlatformReason.SHUTDOWN_FAILED,
                 stage="database.savepoint",
             )
+        if self._transaction.restart_error is not None:
+            # InnoDB may already have rolled back this entire transaction. The
+            # outer boundary must roll back and report the original retry reason.
+            return False
         if error_type is not None:
             self._transaction._control(f"ROLLBACK TO SAVEPOINT {self._name}")
         self._transaction._control(f"RELEASE SAVEPOINT {self._name}")
@@ -167,11 +190,34 @@ class _MySQLTransaction:
         self._cancellation = cancellation
         self._read_only = read_only
         self._active = True
+        self._rollback_only = False
+        self._restart_error: DatabaseOperationError | None = None
+        self._operation_claims: set[str] = set()
         self._cursors: list[_MySQLCursor] = []
 
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def rollback_only(self) -> bool:
+        return self._rollback_only
+
+    @property
+    def restart_error(self) -> DatabaseOperationError | None:
+        return self._restart_error
+
+    def _assert_usable(self) -> None:
+        self._assert_active()
+        if self._restart_error is not None:
+            raise self._restart_error
+
+    def _failure(self, error: BaseException, *, stage: str) -> DatabaseOperationError:
+        translated = _failure(error, stage=stage)
+        if translated.reason is PlatformReason.TRANSIENT_FAILURE:
+            self._rollback_only = True
+            self._restart_error = translated
+        return translated
 
     def cancellation_requested(self) -> bool:
         return self._cancellation.is_set()
@@ -184,15 +230,15 @@ class _MySQLTransaction:
             )
 
     def _control(self, sql: str) -> None:
-        self._assert_active()
+        self._assert_usable()
         try:
             result = self._connection.exec_driver_sql(sql)
         except SQLAlchemyError as error:
-            raise _failure(error, stage="database.savepoint") from None
+            raise self._failure(error, stage="database.savepoint") from None
         result.close()
 
     def execute(self, statement: DatabaseStatement, /) -> int:
-        self._assert_active()
+        self._assert_usable()
         if self.cancellation_requested():
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
@@ -208,7 +254,7 @@ class _MySQLTransaction:
         try:
             result = self._connection.execute(text(statement.sql), dict(statement.parameters))
         except SQLAlchemyError as error:
-            raise _failure(error, stage="database.execute") from None
+            raise self._failure(error, stage="database.execute") from None
         if self.cancellation_requested():
             _cancel_after_cleanup(result.close, stage="database.execute")
         try:
@@ -220,7 +266,7 @@ class _MySQLTransaction:
                 raise _failure(error, stage="database.cursor-close") from None
 
     def stream(self, statement: DatabaseStatement, /) -> DatabaseCursor:
-        self._assert_active()
+        self._assert_usable()
         if self.cancellation_requested():
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
@@ -239,7 +285,7 @@ class _MySQLTransaction:
                 dict(statement.parameters),
             )
         except SQLAlchemyError as error:
-            raise _failure(error, stage="database.query") from None
+            raise self._failure(error, stage="database.query") from None
         if self.cancellation_requested():
             _cancel_after_cleanup(result.close, stage="database.query")
         cursor = _MySQLCursor(
@@ -262,10 +308,29 @@ class _MySQLTransaction:
             raise ValueError("database savepoint name must be canonical")
         return _MySQLSavepoint(self, name)
 
+    def mark_rollback_only(self) -> None:
+        self._assert_active()
+        self._rollback_only = True
+
+    def claim_operation(self, name: str, /) -> bool:
+        self._assert_active()
+        if type(name) is not str or _SAVEPOINT.fullmatch(name) is None:
+            raise ValueError("database operation claim must be canonical")
+        if name in self._operation_claims:
+            return False
+        if len(self._operation_claims) >= _MAX_OPERATION_CLAIMS:
+            raise DatabaseOperationError(
+                reason=PlatformReason.CAPABILITY_UNAVAILABLE,
+                stage="database.transaction.claim",
+            )
+        self._operation_claims.add(name)
+        return True
+
     def finish(self) -> None:
         for cursor in self._cursors:
             cursor.close()
         self._cursors.clear()
+        self._operation_claims.clear()
         self._active = False
 
 
@@ -328,6 +393,7 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
         transaction = self._transaction
         root = self._root
         cancelled = transaction is not None and transaction.cancellation_requested()
+        rollback_only = transaction is not None and transaction.rollback_only
         try:
             if root is None:
                 raise DatabaseOperationError(
@@ -344,7 +410,7 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
                     raise _failure(database_error, stage="database.transaction") from None
                 raise
             try:
-                if error_type is None and not cancelled:
+                if error_type is None and not cancelled and not rollback_only:
                     root.commit()
                 else:
                     root.rollback()
@@ -357,6 +423,13 @@ class _MySQLTransactionContext(AbstractContextManager[_MySQLTransaction]):
             raise DatabaseOperationError(
                 reason=PlatformReason.CANCELLED,
                 stage="database.transaction",
+            )
+        if rollback_only and error_type is None:
+            if transaction is not None and transaction.restart_error is not None:
+                raise transaction.restart_error
+            raise DatabaseOperationError(
+                reason=PlatformReason.INTEGRITY_FAILURE,
+                stage="database.transaction.rollback-only",
             )
         return False
 

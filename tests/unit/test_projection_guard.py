@@ -9,12 +9,14 @@ from af.framework.relational import (
     DatabaseOperationError,
     DatabaseStatement,
     DatabaseTransaction,
+    DatabaseUniqueConflict,
 )
 from af.infrastructure.sqlite import SQLiteDriver
 from af.messaging import (
     InboxRecord,
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
+    ProjectionConflictError,
     ProjectionDecision,
     ProjectionGapError,
     ProjectionIntegrityError,
@@ -446,8 +448,9 @@ def test_direct_checkpoint_advance_detects_stale_optimistic_state() -> None:
     with driver.transaction() as transaction:
         checkpoints.advance(transaction, first, second)
 
-    with pytest.raises(ProjectionIntegrityError), driver.transaction() as transaction:
+    with pytest.raises(ProjectionConflictError) as conflict, driver.transaction() as transaction:
         checkpoints.advance(transaction, first, second)
+    assert conflict.value.reason is PlatformReason.TRANSIENT_FAILURE
 
     del guard
     driver.close()
@@ -471,4 +474,75 @@ def test_duplicate_inbox_insert_rolls_back_caller_transaction() -> None:
         )
     assert values == ()
     del guard
+    driver.close()
+
+
+def test_projection_guard_can_skip_unbounded_stale_inbox_evidence() -> None:
+    driver, guard = _setup()
+    with driver.transaction() as transaction:
+        assert (
+            _prepare(guard, transaction, message_id="event-5", position=5)
+            is ProjectionDecision.APPLY
+        )
+    with driver.transaction() as transaction:
+        assert (
+            guard.prepare(
+                transaction,
+                projection_name="search.records",
+                source_name="records.v1.partition-0",
+                message_id="event-3",
+                position=3,
+                processed_at=_NOW,
+                record_stale=False,
+            )
+            is ProjectionDecision.STALE
+        )
+    with driver.transaction(read_only=True) as transaction:
+        assert (
+            TransactionalInbox().find(
+                transaction,
+                consumer_name="search.records",
+                source_name="records.v1.partition-0",
+                message_id="event-3",
+            )
+            is None
+        )
+    with pytest.raises(ValueError, match="boolean"), driver.transaction() as transaction:
+        guard.prepare(
+            transaction,
+            projection_name="search.records",
+            source_name="records.v1.partition-0",
+            message_id="event-3",
+            position=3,
+            processed_at=_NOW,
+            record_stale=1,  # type: ignore[arg-type]
+        )
+    driver.close()
+
+
+@pytest.mark.parametrize("unique", [True, False])
+def test_projection_guard_retries_only_typed_unique_insert_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+    unique: bool,
+) -> None:
+    driver, guard = _setup()
+    error = (
+        DatabaseUniqueConflict(stage="database.execute")
+        if unique
+        else DatabaseOperationError(reason=PlatformReason.INTEGRITY_FAILURE)
+    )
+
+    def fail_start(
+        self: ProjectionCheckpointStore,
+        transaction: DatabaseTransaction,
+        checkpoint: ProjectionCheckpoint,
+    ) -> None:
+        raise error
+
+    monkeypatch.setattr(ProjectionCheckpointStore, "start", fail_start)
+    with pytest.raises(DatabaseOperationError) as captured, driver.transaction() as transaction:
+        _prepare(guard, transaction, message_id="event-1", position=1)
+    assert isinstance(captured.value, ProjectionConflictError) is unique
+    if not unique:
+        assert captured.value is error
     driver.close()

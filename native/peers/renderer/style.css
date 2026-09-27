@@ -1,0 +1,9 @@
+:root { color-scheme: light dark; font: 1rem/1.5 system-ui, sans-serif; }
+body { margin: 0; }
+main { max-width: 48rem; margin: 2rem auto; padding: 1rem; }
+label { display: block; margin-top: 1rem; }
+input, textarea { width: 100%; box-sizing: border-box; font: inherit; }
+textarea { min-height: 10rem; }
+button { font: inherit; margin: 1rem .5rem 0 0; padding: .5rem 1rem; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+:focus-visible { outline: .2rem solid #267dcc; outline-offset: .2rem; }

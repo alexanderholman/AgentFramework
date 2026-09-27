@@ -3345,3 +3345,69 @@ fully reconciled permit, while preserving renewal failures that are unrelated to
 - SPEC-075 (resource permit lifecycle at worker admission)
 - SPEC-101 (terminal resource-permit release boundary)
 - Issue #21
+
+---
+
+## 2026-09-26 — Autonomous completion integration checkpoint
+
+The private completion branch adds executable bounded workflows, consented decision
+providers, typed science/locales, durable scheduling, scoped headless tokens/OAuth,
+verified content/peer execution, and concrete storage/queue/communication adapters.
+Shared application controllers remain authoritative across transports. Imported
+capability declarations, fixture evidence, provider acceptance and protocol conformance
+MUST NOT confer execution authority, verified completion or real-service certification.
+Authenticated backup restoration MUST retain the checkpoint signing identity. Runtime
+admission and self-operation review are separate from repository engineering autonomy.
+This checkpoint is an engineering increment, not completion of the v0.1 release gate.
+
+## 2026-09-26 — Durable decisions, admission, and installed reference operations
+
+Human responses MUST narrow a stored request to one pinned installed operation,
+retain expiry/authority/policy bounds, reject replay and corrupted history, and bind
+the revalidated context during execution. Interrupted accepted responses remain
+inconclusive rather than silently repeating work. Finite interpretation preserves
+ambiguity and cannot itself authorize execution.
+
+The confined local engineering path MUST derive route exhaustion from installed
+services, run test-first generation and independent gates, authenticate admission,
+and expose a direct reusable route that immediately honors invalidation. A resolver
+lease MUST NOT escape a dependency factory or cross execution owners implicitly.
+Current-time results MUST NOT enter exact deterministic reuse caches.
+
+Machine setup MUST offer a read-only plan, explicit apply, actual bounded readiness
+probes, durable recovery receipts and data-retaining disable operations. Optional
+observational products MUST be removable without changing task semantics and redact
+before persistence. Network host allowlists are not authentication authority.
+
+## 2026-09-26 — Stabilization and candidate qualification
+
+Every deterministic or selected Task route MUST enforce the same descriptor effect
+and risk baseline before execution or reuse. Untyped principal claims and locale
+presentation MUST NOT become routing or authorization signals. Execution traces
+MUST minimize request/argument/output content before invoking a persistence port;
+Task records remain explicit user content. Conditional API writes MUST compare
+atomic versions; idempotency receipts MUST bind authority and preserve uncertain
+outcomes without replay. Package smoke MUST execute with only hash-verified locked
+runtime dependencies and no development or user-site imports. Exact expiring source
+reviews may classify proven synthetic secret candidates, but MUST retain findings,
+reject changed lines and never suppress dependency or static security findings.
+
+
+## 2026-09-26 — Search receipt archaeology
+
+Recover the historical issue-18 atomic search receipt contract with explicit physical generation/version, deterministic source ownership, target-behind-checkpoint denial, and rollback-only outer transactions. Existing search sink behavior and stronger SQLite writer fencing remain intact. External search adapters do not acquire an unproved atomic-receipt capability.
+
+
+## 2026-09-26 — InnoDB restart and inventory review
+
+MySQL/MariaDB InnoDB lock timeout and deadlock errors require a fresh outer transaction. A caught retryable error must prevent further statements or commit; savepoint cleanup must not replace the original retry reason when server rollback removed savepoints.
+
+## 2026-09-27 — Existing #54 hierarchy and transaction failure preservation
+
+Classifiers traverse host-declared, versioned, bounded catalogue trees and ordered
+rungs. Parent-owned sibling recovery follows only NoRoute; ambiguity, denial,
+malformed output, cancellation and exhausted budgets are terminal. Statistical
+ancestors require existing selector grounding/policy at the shared execution
+boundary. Live procedure identities are revalidated and traces retain no prompt
+or argument content. UnitOfWork must propagate a failed body even if a transaction
+adapter suppresses it after rollback; rollback cannot appear as completed work.

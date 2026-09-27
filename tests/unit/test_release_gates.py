@@ -472,14 +472,23 @@ def test_distribution_inspection_rejects_missing_typing_marker(tmp_path: Path) -
         raise AssertionError("missing typing marker was accepted")
 
 
-def test_distribution_inspection_rejects_runtime_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "runtime_path",
+    [
+        "storage/af.sqlite3",
+        "af/account.workflow-key",
+        "af/private.pem",
+        "af/.env",
+    ],
+)
+def test_distribution_inspection_rejects_runtime_state(tmp_path: Path, runtime_path: str) -> None:
     module = _load_module()
-    sdist, wheel = _write_distribution_fixture(tmp_path, extra_wheel_path="storage/af.sqlite3")
+    sdist, wheel = _write_distribution_fixture(tmp_path, extra_wheel_path=runtime_path)
 
     try:
         module.inspect_distribution(REPO_ROOT, sdist, wheel)
     except module.ManifestError as exc:
-        assert "wheel contains forbidden path: storage/af.sqlite3" in str(exc)
+        assert f"wheel contains forbidden path: {runtime_path}" in str(exc)
     else:
         raise AssertionError("runtime state was accepted in the wheel")
 
@@ -736,6 +745,41 @@ def test_package_smoke_rejects_missing_entry_point_attribute(tmp_path: Path) -> 
     assert "installed wheel entry-point target failed to load: af" in completed.stderr
 
 
+@pytest.mark.parametrize("attempt_egress", [False, True])
+def test_package_smoke_exercises_stdio_contract_under_egress_guard(
+    tmp_path: Path, attempt_egress: bool
+) -> None:
+    module = _load_module()
+    target = tmp_path / "installed"
+    shutil.copytree(REPO_ROOT / "src/af", target / "af")
+    dist_info = target / "af_agent_framework-0.1.0a0.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: af-agent-framework\nVersion: 0.1.0a0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "entry_points.txt").write_text(
+        "[console_scripts]\naf = af.interfaces.console:app\naf-mcp = af.interfaces.mcp:main\n",
+        encoding="utf-8",
+    )
+    if attempt_egress:
+        with (target / "af" / "__init__.py").open("a") as stream:
+            stream.write('\nimport socket\nsocket.getaddrinfo("example.com", 443)\n')
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", module.PACKAGE_SMOKE, str(target)],
+        capture_output=True,
+        check=False,
+        cwd=tmp_path,
+        text=True,
+        timeout=60,
+    )
+    if attempt_egress:
+        assert completed.returncode != 0
+        assert "offline package smoke forbids network and process egress" in completed.stderr
+    else:
+        assert completed.returncode == 0, completed.stderr
+
+
 def test_package_build_is_a_dry_run_without_execute() -> None:
     completed = _run("--action", "package")
 
@@ -746,6 +790,45 @@ def test_package_build_is_a_dry_run_without_execute() -> None:
     assert "build the wheel from that sdist" in completed.stdout
     assert "uv pip install --offline --no-deps" in completed.stdout
     assert "Dry run only. Re-run with --execute to build and smoke the package." in completed.stdout
+
+
+def test_runtime_install_is_isolated_from_development_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    target = tmp_path / "runtime"
+    target.mkdir()
+    uv = shutil.which("uv")
+    assert uv is not None
+    source_cache = subprocess.check_output([uv, "cache", "dir", "--no-config"], text=True).strip()
+    wheel_cache = tmp_path / "wheel-cache"
+    # A fresh `uv sync --locked` caches lock-addressed wheels, but need not
+    # populate registry index metadata. Reproduce that CI state without touching
+    # the real cache; installation must remain offline and hash-verified.
+    shutil.copytree(
+        source_cache,
+        wheel_cache,
+        symlinks=True,
+        ignore=shutil.ignore_patterns("simple-v*", "flat-index-v*", "sdists-v*", "builds-v*"),
+    )
+    monkeypatch.setenv("UV_CACHE_DIR", str(wheel_cache))
+    environment = module._release_environment(tmp_path)
+    module._install_runtime_dependencies(REPO_ROOT, target, uv, environment)
+    script = (
+        "import sys, importlib.util; sys.path.insert(0, sys.argv[1]); "
+        "import fastapi, sqlalchemy, typer; "
+        "assert importlib.util.find_spec('pytest') is None; "
+        "assert importlib.util.find_spec('hatchling') is None; "
+        "assert importlib.util.find_spec('webauthn') is None"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", script, str(target)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_package_execute_returns_two_when_uv_is_unavailable() -> None:

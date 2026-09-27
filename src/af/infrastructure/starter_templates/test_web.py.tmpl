@@ -1,0 +1,24 @@
+"""Boot the actual app-owned HTTP factory with isolated local state."""
+
+from __PACKAGE__.web import build_web
+from fastapi.testclient import TestClient
+
+
+def test_http_primary_entrypoint(tmp_path):
+    web = build_web(tmp_path)
+    with TestClient(web, base_url="http://127.0.0.1") as client:
+        result = client.post("/api/v1/tasks", json={"prompt": "how many rs in strawberry?"})
+        assert result.status_code == 201, result.text
+        assert result.json()["output"] == "3"
+        assert result.json()["verified"] is True
+        assert client.get("/openapi.json").status_code == 200
+        if __REST_ONLY__:
+            assert client.get("/app").status_code == 404
+        else:
+            page = client.get("/app")
+            assert page.status_code == 200
+            assert "__PACKAGE__" in page.text
+            assert client.get("/starter-assets/app.js").status_code == 200
+    # A fresh process/application resolves the same persisted task record.
+    with TestClient(build_web(tmp_path), base_url="http://127.0.0.1") as client:
+        assert client.get(f"/api/v1/tasks/{result.json()['id']}").status_code == 200

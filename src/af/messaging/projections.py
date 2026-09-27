@@ -13,12 +13,14 @@ from af.framework.relational import (
     DatabaseRow,
     DatabaseStatement,
     DatabaseTransaction,
+    DatabaseUniqueConflict,
 )
 
 __all__ = (
     "InboxRecord",
     "ProjectionCheckpoint",
     "ProjectionCheckpointStore",
+    "ProjectionConflictError",
     "ProjectionDecision",
     "ProjectionGapError",
     "ProjectionIntegrityError",
@@ -39,6 +41,17 @@ class ProjectionIntegrityError(DatabaseOperationError):
         super().__init__(
             reason=PlatformReason.INTEGRITY_FAILURE,
             stage="projection.integrity",
+            protected_cause=protected_cause,
+        )
+
+
+class ProjectionConflictError(DatabaseOperationError):
+    """An optimistic projection writer lost a race and must retry fresh."""
+
+    def __init__(self, *, protected_cause: BaseException | None = None) -> None:
+        super().__init__(
+            reason=PlatformReason.TRANSIENT_FAILURE,
+            stage="projection.conflict",
             protected_cause=protected_cause,
         )
 
@@ -351,7 +364,7 @@ class ProjectionCheckpointStore:
             )
         )
         if type(changed) is not int or changed != 1:
-            raise ProjectionIntegrityError()
+            raise ProjectionConflictError()
 
     @staticmethod
     def _checkpoint(
@@ -415,7 +428,10 @@ class TransactionalProjectionGuard:
         message_id: str,
         position: int,
         processed_at: datetime,
+        record_stale: bool = True,
     ) -> ProjectionDecision:
+        if type(record_stale) is not bool:
+            raise ValueError("projection stale-evidence flag must be boolean")
         candidate = InboxRecord(
             consumer_name=projection_name,
             source_name=source_name,
@@ -447,26 +463,48 @@ class TransactionalProjectionGuard:
             updated_at=candidate.processed_at,
         )
         if previous is None:
-            self._checkpoints.start(transaction, current)
-            self._inbox.record(transaction, candidate)
+            try:
+                self._checkpoints.start(transaction, current)
+                self._inbox.record(transaction, candidate)
+            except DatabaseOperationError as error:
+                _translate_constraint_conflict(error)
+                raise
             return ProjectionDecision.APPLY
 
         if current.position < previous.position:
-            self._inbox.record(transaction, candidate)
+            if record_stale:
+                try:
+                    self._inbox.record(transaction, candidate)
+                except DatabaseOperationError as error:
+                    _translate_constraint_conflict(error)
+                    raise
             return ProjectionDecision.STALE
 
         if current.position == previous.position and current.message_id != previous.message_id:
             raise ProjectionIntegrityError()
         if current.position == previous.position:
-            self._inbox.record(transaction, candidate)
+            try:
+                self._inbox.record(transaction, candidate)
+            except DatabaseOperationError as error:
+                _translate_constraint_conflict(error)
+                raise
             return ProjectionDecision.DUPLICATE
 
         if current.position != previous.position + 1:
             raise ProjectionGapError()
 
         self._checkpoints.advance(transaction, previous, current)
-        self._inbox.record(transaction, candidate)
+        try:
+            self._inbox.record(transaction, candidate)
+        except DatabaseOperationError as error:
+            _translate_constraint_conflict(error)
+            raise
         return ProjectionDecision.APPLY
+
+
+def _translate_constraint_conflict(error: DatabaseOperationError) -> None:
+    if isinstance(error, DatabaseUniqueConflict):
+        raise ProjectionConflictError(protected_cause=error) from None
 
 
 def _name(value: str, field: str) -> str:

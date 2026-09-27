@@ -8,12 +8,22 @@ from typing import Literal, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from af import __version__
+from af.application.authentication import AuthenticationService
+from af.application.http_operations import HttpOperations
+from af.application.human_decisions import HumanDecisionService
+from af.application.human_interpreter import HumanInterpreter
+from af.application.locales import Localizer
+from af.application.workflow_control import WorkflowController
 from af.bootstrap import AFApplication, create_application
+from af.bootstrap_http import create_http_operations
+from af.domain.tasks import TaskConflict
+from af.framework.authentication import AuthenticationDenied
 from af.framework.container import InvocationKind
 from af.framework.context import AcceptanceScope, ExecutionContext
 from af.framework.errors import (
@@ -23,13 +33,17 @@ from af.framework.errors import (
     UnsupportedWork,
     VerificationFailed,
 )
+from af.framework.persisted_queries import PersistedQueryRegistry
+from af.interfaces.api_explorer import create_api_explorer_router
 from af.interfaces.graphql import (
     GRAPHQL_BAD_REQUEST_CODE,
     GRAPHQL_REQUEST_TOO_LARGE_CODE,
+    OperationAuthorizer,
     _graphql_error_response,
     _graphql_response_media_type,
     _GraphQLRequestError,
     create_graphql_router,
+    schema,
 )
 from af.interfaces.http_body import (
     BOUNDED_BODY_SCOPE_KEY,
@@ -42,10 +56,17 @@ from af.interfaces.http_body import (
     replay_receive,
     validate_content_length_header,
 )
+from af.interfaces.http_operations import HttpOperationsMiddleware
 from af.interfaces.http_trust import format_host, host_matches, parse_host_value
+from af.interfaces.human_decisions import create_human_decision_router
+from af.interfaces.human_interpreter import create_human_interpreter_router
 from af.interfaces.ideons import create_ideon_router
 from af.interfaces.rest import create_rest_router
+from af.interfaces.rest_negotiation import RestNegotiationMiddleware
+from af.interfaces.soap_contract import SoapSecurityVerifier
 from af.interfaces.web import WebProfile, create_web_router
+from af.interfaces.workflows import create_workflow_router
+from af.interfaces.xml_api import create_xml_router
 
 _WEB_PROFILES = ("basic", "experimental", "pretty")
 
@@ -191,7 +212,36 @@ class _RequestContextMiddleware:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
+        principal = None
+        headers = _scope_header_values(scope, "authorization")
+        if self._application.settings.http_auth_required or headers:
+            try:
+                if (
+                    len(headers) != 1
+                    or not headers[0].startswith("Bearer ")
+                    or len(headers[0]) > 1024
+                ):
+                    raise AuthenticationDenied()
+                authentication = self._application.container.resolve(AuthenticationService)
+                principal = await run_in_threadpool(
+                    authentication.authenticate,
+                    headers[0][7:],
+                    tenant_id=self._application.settings.auth_tenant_id,
+                    required_scopes=("af:read",)
+                    if scope["method"] in {"GET", "HEAD", "OPTIONS"}
+                    else ("af:write",),
+                )
+            except (AuthenticationDenied, ValueError):
+                response = JSONResponse(
+                    status_code=401,
+                    content={"detail": "authentication required"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+                await response(scope, receive, send)
+                return
         context = ExecutionContext(
+            principal=principal,
+            tenant_id=self._application.settings.auth_tenant_id if principal else None,
             correlation_id=str(uuid4()),
             requested_scope=AcceptanceScope.DETERMINISTIC,
             effective_scope=AcceptanceScope.DETERMINISTIC,
@@ -277,6 +327,14 @@ class _TrustedHostMiddleware:
 def create_http_app(
     application: AFApplication | None = None,
     *,
+    http_operations: HttpOperations | None = None,
+    api_policy_version: str = "af-api-v1",
+    soap_security: SoapSecurityVerifier | None = None,
+    graphql_persisted_queries: PersistedQueryRegistry | None = None,
+    graphql_require_persisted_queries: bool = False,
+    graphql_operation_timeout_seconds: float = 10.0,
+    graphql_authorize_operation: OperationAuthorizer | None = None,
+    graphql_query_policy_version: str = "1",
     bind_host: str | None = None,
     allowed_hosts: Sequence[str] | None = None,
     web_profile: str = "basic",
@@ -296,6 +354,14 @@ def create_http_app(
         return _assemble_http_app(
             resolved,
             owns_application=owns_application,
+            http_operations=http_operations,
+            api_policy_version=api_policy_version,
+            soap_security=soap_security,
+            graphql_persisted_queries=graphql_persisted_queries,
+            graphql_require_persisted_queries=graphql_require_persisted_queries,
+            graphql_operation_timeout_seconds=graphql_operation_timeout_seconds,
+            graphql_authorize_operation=graphql_authorize_operation,
+            graphql_query_policy_version=graphql_query_policy_version,
             bind_host=resolved_bind_host,
             allowed_hosts=resolved_allowed_hosts,
             web_profile=resolved_web_profile,
@@ -312,32 +378,70 @@ def _assemble_http_app(
     resolved: AFApplication,
     *,
     owns_application: bool,
+    http_operations: HttpOperations | None,
+    api_policy_version: str,
+    soap_security: SoapSecurityVerifier | None,
+    graphql_persisted_queries: PersistedQueryRegistry | None,
+    graphql_require_persisted_queries: bool,
+    graphql_operation_timeout_seconds: float,
+    graphql_authorize_operation: OperationAuthorizer | None,
+    graphql_query_policy_version: str,
     bind_host: str,
     allowed_hosts: Sequence[str],
     web_profile: WebProfile,
     experimental_state: Literal["disabled", "fallback", "enabled"],
 ) -> FastAPI:
 
+    trusted_hosts = _trusted_hosts_for(bind_host, allowed_hosts)
+    if not _is_loopback_host(bind_host):
+        if not resolved.settings.http_auth_required:
+            raise InvalidProviderConfiguration("non-loopback HTTP requires authentication")
+        key = resolved.settings.session_cookie_signing_key
+        if key == "af-local-session-signing-key" or len(key) < 32:
+            raise InvalidProviderConfiguration("non-loopback HTTP requires a private session key")
+
+    if not isinstance(api_policy_version, str) or not 1 <= len(api_policy_version) <= 128:
+        raise ValueError("API policy version must be bounded")
+    graphql_router = create_graphql_router(
+        resolved.tasks,
+        workflows=resolved.container.resolve(WorkflowController),
+        persisted_queries=graphql_persisted_queries,
+        require_persisted_queries=graphql_require_persisted_queries,
+        operation_timeout_seconds=graphql_operation_timeout_seconds,
+        authorize_operation=graphql_authorize_operation,
+        query_policy_version=graphql_query_policy_version,
+    )
+    operations = http_operations or create_http_operations(resolved)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
+            if http_operations is None:
+                await run_in_threadpool(operations.close)
             if owns_application:
                 await resolved.ashutdown()
 
     app = FastAPI(
         title=resolved.settings.app_name,
+        docs_url=None,
+        redoc_url=None,
         version=__version__,
         description="Classification-heavy, inference-light AF reference application",
         lifespan=lifespan,
     )
+    app.include_router(create_api_explorer_router(app.openapi, schema.as_str))
     app.state.af = resolved
+    app.add_middleware(RestNegotiationMiddleware)
+    app.add_middleware(
+        HttpOperationsMiddleware, operations=operations, policy_version=api_policy_version
+    )
     app.add_middleware(_RequestContextMiddleware, application=resolved)
     app.add_middleware(_BoundedBodyMiddleware)
     app.add_middleware(
         _TrustedHostMiddleware,
-        allowed_hosts=_trusted_hosts_for(bind_host, allowed_hosts),
+        allowed_hosts=trusted_hosts,
     )
     app.add_middleware(_SecurityHeadersMiddleware)
     app.include_router(
@@ -347,11 +451,28 @@ def _assemble_http_app(
             experimental_state=experimental_state,
             session_cookie_signing_key=resolved.settings.session_cookie_signing_key,
             operations=resolved.operations,
+            localizer=resolved.container.resolve(Localizer),
         )
     )
-    app.include_router(create_rest_router(resolved.tasks, resolved.operations))
+    app.include_router(
+        create_rest_router(
+            resolved.tasks, resolved.operations, localizer=resolved.container.resolve(Localizer)
+        )
+    )
     app.include_router(create_ideon_router(resolved.ideons))
-    app.include_router(create_graphql_router(resolved.tasks), prefix="/graphql")
+    app.include_router(
+        create_human_decision_router(lambda: resolved.container.resolve(HumanDecisionService))
+    )
+    app.include_router(
+        create_human_interpreter_router(resolved.container.resolve(HumanInterpreter))
+    )
+    app.include_router(create_xml_router(resolved.tasks, security=soap_security))
+    app.include_router(create_workflow_router(resolved.container.resolve(WorkflowController)))
+    app.include_router(graphql_router, prefix="/graphql")
+
+    @app.exception_handler(TaskConflict)
+    async def task_conflict(_: Request, error: TaskConflict) -> JSONResponse:
+        return JSONResponse(status_code=412, content={"detail": str(error)})
 
     @app.exception_handler(TaskNotFound)
     async def task_not_found(_: Request, error: TaskNotFound) -> JSONResponse:

@@ -127,7 +127,10 @@ Before release:
 
 The package action introduced with this profile covers steps 1 through 4. It builds from a
 clean commit-derived snapshot, uses an uncredentialed temporary home, disables inherited uv
-configuration, keeps uv resolution offline, and uses temporary paths. Those controls do not
+configuration, keeps uv resolution offline, and uses temporary paths. It exports runtime-only
+requirements from the exact lock and installs hash-verified wheels from the primed uv cache
+with source builds disabled. Python `-I -S` smoke checks use only that temporary target, without
+development site packages. This is a runtime-only installation on the current host. Those controls do not
 create an operating-system network sandbox for the backend or installed code; the separate
 no-egress gate remains unmet. Clean-host installation, signatures/provenance, deployment
 evidence, publication, and final version authorization also remain blocked.
@@ -250,3 +253,12 @@ candidate proves that it passed.
 Broader drivers and peer/model capabilities should proceed after this baseline or under
 separate profiles. They must not weaken the deterministic, stdio-only, evidence, or fail-closed
 properties required here.
+
+## Local security tooling added after the initial profile
+
+[Release security tooling](release-security.md) now supplies an offline complete
+Python lock SBOM, pinned Bandit/detect-secrets/pip-audit runner, and explicit-key
+Ed25519 artifact statement signing/verification. Tool availability does not change
+manifest declarations to `met`: current candidate scans, reviewed key policy,
+independent review, target-host evidence and final maintainer approval are still
+required. Missing prerequisites and findings block; no approval is synthesized.

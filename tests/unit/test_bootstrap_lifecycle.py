@@ -117,6 +117,7 @@ def test_opt_in_sqlite_resource_leases_are_boot_owned_and_survive_restart(
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
     )
+    first_driver = first.container.resolve(SQLiteDriver)
     created = first.leases.create_lease(
         "lease-bootstrap-persistent",
         budget,
@@ -132,13 +133,18 @@ def test_opt_in_sqlite_resource_leases_are_boot_owned_and_survive_restart(
         task_repository=InMemoryTaskRepository(),
         trace_repository=InMemoryTraceRepository(),
     )
+    second_driver = second.container.resolve(SQLiteDriver)
     try:
         assert second.leases.get_lease(created.id) == created
         assert second.leases.get_lease(created.id).state is LeaseState.RESERVED
     finally:
         second.shutdown()
 
-    assert len(close_calls) == 2
+    # Schema verification borrows additional wrappers; assert ownership of the
+    # actual application resource drivers rather than unrelated wrapper counts.
+    assert first_driver is not second_driver
+    assert close_calls.count(first_driver) == 1
+    assert close_calls.count(second_driver) == 1
 
 
 def test_default_ideon_runtime_is_constructed_during_boot(

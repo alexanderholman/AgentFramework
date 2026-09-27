@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import threading
+import time
 import uuid as _uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -134,8 +136,11 @@ class PubSubSubscription:
     ordering_key: str | None = None
     consumer_group: str | None = None
     replay_from: ReplayCursor | None = None
-    backpressure: BackpressurePolicy = BackpressurePolicy.DROP_OLDEST
+    backpressure: BackpressurePolicy = BackpressurePolicy.BUFFER
     slow_consumer: SlowConsumerPolicy = SlowConsumerPolicy.LOG
+    since_time: datetime | None = None
+    since_sequence: int | None = None
+    max_pending: int = 1024
 
     def __post_init__(self) -> None:
         if not isinstance(self.topic, PubSubTopic):
@@ -149,6 +154,20 @@ class PubSubSubscription:
             raise InvalidPubSubSchema("subscription backpressure policy is invalid")
         if not isinstance(self.slow_consumer, SlowConsumerPolicy):
             raise InvalidPubSubSchema("subscription slow-consumer policy is invalid")
+        if self.replay_from is not None and not isinstance(self.replay_from, ReplayCursor):
+            raise InvalidPubSubSchema("subscription replay cursor is invalid")
+        if self.replay_from is ReplayCursor.SINCE_TIME:
+            if self.since_time is None or self.since_time.utcoffset() is None:
+                raise InvalidPubSubSchema("time replay requires an aware since_time")
+        elif self.since_time is not None:
+            raise InvalidPubSubSchema("since_time requires time replay")
+        if self.replay_from is ReplayCursor.SINCE_SEQUENCE:
+            if type(self.since_sequence) is not int or self.since_sequence < 0:
+                raise InvalidPubSubSchema("sequence replay requires a nonnegative sequence")
+        elif self.since_sequence is not None:
+            raise InvalidPubSubSchema("since_sequence requires sequence replay")
+        if type(self.max_pending) is not int or not 1 <= self.max_pending <= 100_000:
+            raise InvalidPubSubSchema("subscription backlog must be bounded")
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +202,7 @@ class CheckpointCursor:
     subscriber_id: str
     sequence: int
     committed_at: datetime
+    ownership_token: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.topic, PubSubTopic):
@@ -192,6 +212,13 @@ class CheckpointCursor:
             raise InvalidPubSubSchema("checkpoint sequence must be a non-negative integer")
         if not isinstance(self.committed_at, datetime) or self.committed_at.utcoffset() is None:
             raise InvalidPubSubSchema("checkpoint committed_at must be timezone-aware")
+        if self.ownership_token is not None and (
+            type(self.ownership_token) is not str
+            or not 1 <= len(self.ownership_token) <= 128
+            or not self.ownership_token.isascii()
+            or not self.ownership_token.isalnum()
+        ):
+            raise InvalidPubSubSchema("checkpoint ownership token is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,192 +398,206 @@ def _identifier(value: object, field: str) -> str:
 
 
 class _TopicState:
-    """Mutable state for a single topic."""
-
-    __slots__ = ("log", "sequence")
-
     def __init__(self) -> None:
-        self.log: list[MessageEnvelope] = []
-        self.sequence: int = 0
+        self.log: list[tuple[int, MessageEnvelope, str | None]] = []
+        self.sequence = 0
 
 
 class _SubscriptionState:
-    """Mutable state for a single subscription."""
-
-    __slots__ = (
-        "active",
-        "checkpointed_seq",
-        "handle",
-        "lock",
-        "pending",
-        "subscription",
-    )
-
     def __init__(
         self,
         handle: PubSubSubscriptionHandle,
         subscription: PubSubSubscription,
-        pending: list[MessageEnvelope] | None = None,
-        checkpointed_seq: int = 0,
-        active: bool = True,
+        pending: list[tuple[int, MessageEnvelope, str | None]],
     ) -> None:
         self.handle = handle
         self.subscription = subscription
-        self.pending: list[MessageEnvelope] = pending if pending is not None else []
-        self.checkpointed_seq = checkpointed_seq
-        self.active = active
-        self.lock = threading.Lock()
+        self.pending = pending
+        self.checkpointed_seq = 0
+        self.delivered_seq = 0
 
 
 class LocalPubSubDriver:
-    """In-process pub-sub driver with durable replay, consumer groups, and checkpoints."""
+    """Bounded in-process pub-sub. Restart loses every event and checkpoint.
 
-    def __init__(self) -> None:
+    For durable recovery use a persistent stream adapter. Local BLOCK policy
+    refuses subscription because synchronous volatile delivery has no wait lease.
+    """
+
+    def __init__(self, *, max_events: int = 10_000, max_subscriptions: int = 1024) -> None:
+        if any(type(n) is not int or n < 1 for n in (max_events, max_subscriptions)):
+            raise InvalidPubSubSchema("local stream bounds must be positive")
+        self._max_events = max_events
+        self._max_subscriptions = max_subscriptions
         self._lock = threading.Lock()
         self._topics: dict[str, _TopicState] = {}
         self._subscriptions: dict[str, _SubscriptionState] = {}
         self._consumer_groups: dict[str, ConsumerGroup] = {}
         self._consumer_assignments: dict[str, list[ConsumerGroupAssignment]] = defaultdict(list)
 
-    # -- PubSubDriver --
-
     def publish(self, topic: PubSubTopic, envelope: MessageEnvelope) -> None:
         with self._lock:
-            state = self._topics.setdefault(topic.name, _TopicState())
-            new_seq = state.sequence + 1
-            state.sequence = new_seq
-            state.log.append(envelope)
-            # Fan-out to active subscriptions
-            for sub_state in self._subscriptions.values():
-                if not sub_state.active:
+            self._publish_locked(topic, envelope, None)
+
+    def _matches(self, sub: PubSubSubscription, envelope: MessageEnvelope, key: str | None) -> bool:
+        if sub.ordering_key is not None and sub.ordering_key != key:
+            return False
+        if sub.since_time is not None and envelope.metadata.occurred_at < sub.since_time:
+            return False
+        if sub.consumer_group:
+            group = self._consumer_groups.get(sub.consumer_group)
+            if group is None:
+                return False
+            partition = (
+                int.from_bytes(
+                    hashlib.sha256((key or envelope.metadata.message_id).encode()).digest()[:8],
+                    "big",
+                )
+                % group.partitions
+            )
+            return any(
+                a.subscriber_id == sub.subscriber_id and a.partition == partition
+                for a in self._consumer_assignments[sub.consumer_group]
+            )
+        return True
+
+    def _publish_locked(
+        self, topic: PubSubTopic, envelope: MessageEnvelope, key: str | None
+    ) -> None:
+        if sum(len(state.log) for state in self._topics.values()) >= self._max_events:
+            raise PubSubOperationError(stage="pubsub.retention_capacity")
+        targets = [
+            sub
+            for sub in self._subscriptions.values()
+            if sub.subscription.topic == topic and self._matches(sub.subscription, envelope, key)
+        ]
+        for sub in targets:
+            if (
+                len(sub.pending) >= sub.subscription.max_pending
+                and sub.subscription.backpressure is BackpressurePolicy.BUFFER
+            ):
+                raise PubSubOperationError(stage="pubsub.subscriber_capacity")
+        state = self._topics.setdefault(topic.name, _TopicState())
+        state.sequence += 1
+        item = (state.sequence, envelope, key)
+        state.log.append(item)
+        for sub in targets:
+            if len(sub.pending) >= sub.subscription.max_pending:
+                if sub.subscription.backpressure is BackpressurePolicy.DROP_NEWEST:
                     continue
-                if sub_state.subscription.topic.name != topic.name:
-                    continue
-                # Consumer group: only deliver to assigned member
-                if sub_state.subscription.consumer_group:
-                    cg_name = sub_state.subscription.consumer_group
-                    assignments = self._consumer_assignments.get(cg_name, [])
-                    if not any(
-                        a.subscriber_id == sub_state.handle.subscriber_id for a in assignments
-                    ):
-                        continue
-                with sub_state.lock:
-                    sub_state.pending.append(envelope)
+                sub.pending.pop(0)
+            sub.pending.append(item)
+
+    def _replay_locked(
+        self, subscription: PubSubSubscription
+    ) -> list[tuple[int, MessageEnvelope, str | None]]:
+        state = self._topics.get(subscription.topic.name)
+        if state is None or subscription.replay_from is ReplayCursor.LATEST:
+            return []
+        pending = [
+            item
+            for item in state.log
+            if item[0] > (subscription.since_sequence or 0)
+            and self._matches(subscription, item[1], item[2])
+        ]
+        if len(pending) > subscription.max_pending:
+            raise PubSubOperationError(stage="pubsub.replay_capacity")
+        return pending
 
     def subscribe(self, subscription: PubSubSubscription) -> PubSubSubscriptionHandle:
-        sid = _uuid.uuid4().hex
-        handle = PubSubSubscriptionHandle(
-            subscription_id=sid,
-            topic=subscription.topic,
-            subscriber_id=subscription.subscriber_id,
-            consumer_group=subscription.consumer_group,
-        )
-        # Handle replay
-        pending: list[MessageEnvelope] = []
-        if subscription.replay_from == ReplayCursor.BEGINNING:
-            topic_state = self._topics.get(subscription.topic.name)
-            if topic_state:
-                pending = list(topic_state.log)
-        elif subscription.replay_from == ReplayCursor.SINCE_TIME:
-            # TODO: filter by occurred_at
-            pass
-        elif subscription.replay_from == ReplayCursor.SINCE_SEQUENCE:
-            # TODO: filter by sequence
-            pass
-        # If no replay cursor or LATEST, pending stays empty
-
-        sub_state = _SubscriptionState(
-            handle=handle,
-            subscription=subscription,
-            pending=pending,
-        )
+        if subscription.backpressure is BackpressurePolicy.BLOCK:
+            raise UnsupportedPubSubFeature("local_blocking_backpressure")
+        if subscription.slow_consumer is not SlowConsumerPolicy.LOG:
+            raise UnsupportedPubSubFeature("local_slow_consumer_action")
         with self._lock:
-            self._subscriptions[sid] = sub_state
-        return handle
+            if len(self._subscriptions) >= self._max_subscriptions:
+                raise PubSubOperationError(stage="pubsub.subscription_capacity")
+            if subscription.consumer_group:
+                group = self._consumer_groups.get(subscription.consumer_group)
+                if group is None or group.topic != subscription.topic:
+                    raise PubSubOperationError(stage="pubsub.group_missing")
+            sid = _uuid.uuid4().hex
+            handle = PubSubSubscriptionHandle(
+                sid, subscription.topic, subscription.subscriber_id, subscription.consumer_group
+            )
+            pending = self._replay_locked(subscription) if subscription.replay_from else []
+            self._subscriptions[sid] = _SubscriptionState(handle, subscription, pending)
+            return handle
 
     def unsubscribe(self, handle: PubSubSubscriptionHandle) -> None:
         with self._lock:
-            sub_state = self._subscriptions.get(handle.subscription_id)
-            if sub_state:
-                sub_state.active = False
+            state = self._subscriptions.get(handle.subscription_id)
+            if state is not None and state.handle == handle:
+                del self._subscriptions[handle.subscription_id]
 
     def next_event(
-        self,
-        handle: PubSubSubscriptionHandle,
-        *,
-        timeout: timedelta | None = None,
+        self, handle: PubSubSubscriptionHandle, *, timeout: timedelta | None = None
     ) -> MessageEnvelope | None:
-        with self._lock:
-            sub_state = self._subscriptions.get(handle.subscription_id)
-            if not sub_state or not sub_state.active:
+        seconds = timeout.total_seconds() if timeout else 0
+        if not 0 <= seconds <= 30:
+            raise InvalidPubSubSchema("local read timeout must be bounded")
+        deadline = time.monotonic() + seconds
+        while True:
+            with self._lock:
+                state = self._subscriptions.get(handle.subscription_id)
+                if state is None or state.handle != handle:
+                    return None
+                if state.pending:
+                    sequence, envelope, _ = state.pending.pop(0)
+                    state.delivered_seq = sequence
+                    return envelope
+            if time.monotonic() >= deadline:
                 return None
-        with sub_state.lock:
-            # Skip already checkpointed events
-            pending = list(sub_state.pending)
-            # Filter by checkpoint: keep only events after checkpointed_seq
-            # The checkpoint sequence refers to the global topic sequence,
-            # so we need to map it. For simplicity, we track how many events
-            # have been consumed relative to the pending list.
-            # Actually, the checkpoint stores the global sequence number.
-            # We need to know which pending events correspond to sequences > checkpointed_seq.
-            # For the local driver, we'll use a simpler approach: the checkpoint
-            # tells us to skip the first N events from the replay buffer.
-            topic_state = self._topics.get(sub_state.subscription.topic.name)
-            if topic_state and sub_state.checkpointed_seq > 0:
-                # Find the index in the topic log that corresponds to checkpointed_seq
-                # Then skip all pending events that appear at or before that position
-                log = topic_state.log
-                checkpoint_idx = min(sub_state.checkpointed_seq, len(log))
-                # Build a set of envelope ids to skip
-                skip_ids = {id(e) for e in log[:checkpoint_idx]}
-                pending = [e for e in pending if id(e) not in skip_ids]
-
-            if not pending:
-                return None
-            envelope = pending[0]
-            # Remove delivered event
-            sub_state.pending = pending[1:]
-            return envelope
-
-    # -- DurableStreamDriver --
+            time.sleep(min(0.01, max(0, deadline - time.monotonic())))
 
     def create_consumer_group(self, group: ConsumerGroup) -> None:
         with self._lock:
+            existing = self._consumer_groups.get(group.name)
+            if existing is not None and existing != group:
+                raise PubSubOperationError(stage="pubsub.group_conflict")
+            if existing is None and len(self._consumer_groups) >= self._max_subscriptions:
+                raise PubSubOperationError(stage="pubsub.group_capacity")
             self._consumer_groups[group.name] = group
 
     def assign_consumer(self, assignment: ConsumerGroupAssignment) -> None:
         with self._lock:
-            self._consumer_assignments[assignment.consumer_group].append(assignment)
+            group = self._consumer_groups.get(assignment.consumer_group)
+            if (
+                group is None
+                or assignment.partitions_total != group.partitions
+                or assignment.partition >= group.partitions
+            ):
+                raise PubSubOperationError(stage="pubsub.assignment_invalid")
+            assignments = self._consumer_assignments[assignment.consumer_group]
+            for existing in assignments:
+                if existing.partition == assignment.partition:
+                    if existing != assignment:
+                        raise PubSubOperationError(stage="pubsub.partition_owned")
+                    return
+            assignments.append(assignment)
 
     def checkpoint(self, cursor: CheckpointCursor) -> None:
         with self._lock:
-            # Find subscription for this subscriber/topic combo
-            for _sid, sub_state in self._subscriptions.items():
+            for state in self._subscriptions.values():
                 if (
-                    sub_state.subscription.subscriber_id == cursor.subscriber_id
-                    and sub_state.subscription.topic.name == cursor.topic.name
+                    state.subscription.subscriber_id == cursor.subscriber_id
+                    and state.subscription.topic == cursor.topic
                 ):
-                    sub_state.checkpointed_seq = cursor.sequence
-                    break
+                    if not state.checkpointed_seq <= cursor.sequence <= state.delivered_seq:
+                        raise PubSubOperationError(stage="pubsub.checkpoint_undelivered")
+                    state.checkpointed_seq = cursor.sequence
+                    return
+            raise PubSubOperationError(stage="pubsub.subscription_unknown")
 
     def replay(self, subscription: PubSubSubscription) -> ReplayReport:
         with self._lock:
-            topic_state = self._topics.get(subscription.topic.name)
-            if not topic_state:
-                return ReplayReport(
-                    topic=subscription.topic,
-                    subscriber_id=subscription.subscriber_id,
-                    events_replayed=0,
-                    from_sequence=0,
-                    to_sequence=0,
-                )
-            log = topic_state.log
+            pending = self._replay_locked(subscription)
             return ReplayReport(
-                topic=subscription.topic,
-                subscriber_id=subscription.subscriber_id,
-                events_replayed=len(log),
-                from_sequence=1,
-                to_sequence=len(log),
+                subscription.topic,
+                subscription.subscriber_id,
+                len(pending),
+                pending[0][0] if pending else 0,
+                pending[-1][0] if pending else 0,
             )
 
 
@@ -708,39 +749,13 @@ class LocalStreamDriver(LocalPubSubDriver, StreamDriver):
         * ``KEY`` - per-key counter (``ordering_key`` used).
         * ``NONE`` - delegates to ``publish`` (no ordering guarantee).
         """
-        if scope == OrderingScope.NONE:
-            self.publish(topic, envelope)
-            return
-
+        _identifier(ordering_key, "ordering key")
+        if not isinstance(scope, OrderingScope):
+            raise InvalidPubSubSchema("stream ordering scope is invalid")
         with self._lock:
-            state = self._topics.setdefault(topic.name, _TopicState())
-
-            if scope == OrderingScope.GLOBAL:
+            self._publish_locked(topic, envelope, ordering_key)
+            if scope is OrderingScope.GLOBAL:
                 self._global_sequence += 1
-                new_seq = self._global_sequence
-            else:
-                new_seq = state.sequence + 1
-
-            state.sequence = new_seq
-
-            if scope == OrderingScope.KEY:
+            elif scope is OrderingScope.KEY:
                 key = f"{topic.name}/{ordering_key}"
-                self._key_sequences[key] = new_seq
-
-            state.log.append(envelope)
-
-            # Fan-out to active subscriptions
-            for sub_state in self._subscriptions.values():
-                if not sub_state.active:
-                    continue
-                if sub_state.subscription.topic.name != topic.name:
-                    continue
-                if sub_state.subscription.consumer_group:
-                    cg_name = sub_state.subscription.consumer_group
-                    assignments = self._consumer_assignments.get(cg_name, [])
-                    if not any(
-                        a.subscriber_id == sub_state.handle.subscriber_id for a in assignments
-                    ):
-                        continue
-                with sub_state.lock:
-                    sub_state.pending.append(envelope)
+                self._key_sequences[key] = self._key_sequences.get(key, 0) + 1

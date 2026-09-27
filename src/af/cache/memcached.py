@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from math import ceil
 from pathlib import Path
 from typing import Protocol, cast
+from uuid import uuid4
 
 from af.cache.contracts import (
     CacheKey,
@@ -503,9 +504,16 @@ class MemcachedCacheDriver:
             raise _failure(error, stage="cache.memcached.lock.release") from None
         if current != lease or current.expires_at <= now:
             return False
-        release_ttl = timedelta(minutes=1)
+        # Memcached has no atomic compare-and-delete operation.  Deleting after a
+        # successful CAS is unsafe: if this process stalls until the marker expires,
+        # an unconditional delete can remove a replacement owner's lease.  Instead,
+        # CAS the owned lease to a short-lived tombstone and let Memcached expire it.
+        # This trades at most one second of reacquisition latency for ownership safety.
+        release_ttl = timedelta(seconds=1)
         release_marker = LockLease(
-            owner=lease.owner,
+            # A distinct identity also invalidates the released handle when its
+            # original deadline happens to equal the tombstone deadline.
+            owner=LockOwner(f"released:{uuid4().hex}"),
             fencing_token=lease.fencing_token,
             expires_at=now + release_ttl,
         )
@@ -517,12 +525,9 @@ class MemcachedCacheDriver:
                 expire=self._expire(release_ttl),
                 noreply=False,
             )
-            if claimed is not True:
-                return False
-            self._client.delete(lock_key, noreply=False)
         except Exception as error:
             raise _failure(error, stage="cache.memcached.lock.release") from None
-        return True
+        return claimed is True
 
     def close(self) -> None:
         if self._closed:

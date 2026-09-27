@@ -127,7 +127,7 @@ FORBIDDEN_WHEEL_PREFIXES = (
     "tests/",
     "scripts/",
 )
-FORBIDDEN_ARCHIVE_SUFFIXES = (".db", ".sqlite", ".sqlite3")
+FORBIDDEN_ARCHIVE_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".workflow-key", ".pem", ".p12", ".pfx")
 UV_BUILD_OPTIONS = (
     "--offline",
     "--no-sources",
@@ -139,6 +139,14 @@ from importlib.resources import files
 from pathlib import Path
 import json
 import sys
+
+network_attempts = []
+def deny_egress(event, arguments):
+    if event in {"socket.connect", "socket.getaddrinfo", "socket.gethostbyname",
+                 "socket.gethostbyaddr", "subprocess.Popen", "os.system"}:
+        network_attempts.append(event)
+        raise RuntimeError("offline package smoke forbids network and process egress")
+sys.addaudithook(deny_egress)
 
 target = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(target))
@@ -187,6 +195,24 @@ if hello.exit_code != 0 or hello.stdout.strip() != "Hello, world!":
     raise SystemExit("installed wheel failed the hello smoke")
 if counted.exit_code != 0 or counted.stdout.strip() != "3":
     raise SystemExit("installed wheel failed the character-count smoke")
+
+import anyio
+from mcp.shared.memory import create_connected_server_and_client_session
+from af.interfaces.mcp import create_mcp_server
+
+async def mcp_smoke():
+    server = create_mcp_server(application)
+    async with create_connected_server_and_client_session(server) as session:
+        hello = await session.call_tool("af_hello", {})
+        counted = await session.call_tool(
+            "af_count_characters", {"text":"strawberry", "character":"r"}
+        )
+        if hello.isError or counted.isError:
+            raise SystemExit("installed wheel MCP deterministic smoke failed")
+        if (hello.structuredContent["output"] != "Hello, world!"
+            or counted.structuredContent["output"] != "3"):
+            raise SystemExit("installed wheel MCP output smoke failed")
+anyio.run(mcp_smoke)
 application.shutdown()
 
 profile_path = target / "af_release_operator_profile.py"
@@ -307,6 +333,8 @@ if (
     or ambient_database.exists()
 ):
     raise SystemExit("installed wheel migration profile did not fail before ambient boot")
+if network_attempts:
+    raise SystemExit("installed deterministic smoke attempted prohibited egress")
 """.strip()
 
 
@@ -582,7 +610,8 @@ def _forbidden_archive_path(name: str, *, wheel: bool) -> bool:
     return (
         normalized.startswith(prefixes)
         or "/__pycache__/" in f"/{normalized}"
-        or normalized.endswith(FORBIDDEN_ARCHIVE_SUFFIXES)
+        or normalized.lower().endswith(FORBIDDEN_ARCHIVE_SUFFIXES)
+        or PurePosixPath(normalized).name in {".env", "id_rsa", "id_ed25519"}
     )
 
 
@@ -983,6 +1012,79 @@ def _release_environment(temporary_root: Path) -> dict[str, str]:
     return environment
 
 
+def _install_runtime_dependencies(
+    root: Path, target: Path, uv_executable: str, environment: Mapping[str, str]
+) -> None:
+    """Install only hashed locked runtime dependencies from the primed uv cache."""
+    # PEP 751 preserves exact artifact URLs as well as hashes. requirements.txt
+    # would require cached index metadata that a lock-only sync need not fetch.
+    requirements = target.parent / "pylock.runtime.toml"
+    _run_release_command(
+        (
+            uv_executable,
+            "export",
+            "--no-config",
+            "--offline",
+            "--locked",
+            "--no-sources",
+            "--no-dev",
+            "--no-default-groups",
+            "--no-emit-project",
+            "--format",
+            "pylock.toml",
+            "--output-file",
+            str(requirements),
+        ),
+        cwd=root,
+        environment=environment,
+        stage="runtime lock export",
+        timeout=60,
+    )
+    cache_environment = {
+        name: value
+        for name in ("HOME", "PATH", "LOCALAPPDATA", "XDG_CACHE_HOME")
+        if (value := os.environ.get(name))
+    }
+    cache_environment.update({"UV_NO_CONFIG": "1", "UV_OFFLINE": "1"})
+    if cache := os.environ.get("UV_CACHE_DIR"):
+        cache_environment["UV_CACHE_DIR"] = str(Path(cache).resolve())
+    cache_result = _run_release_command(
+        (uv_executable, "cache", "dir", "--no-config"),
+        cwd=target.parent,
+        environment=cache_environment,
+        stage="runtime cache lookup",
+        timeout=30,
+    )
+    cache_path = Path(cache_result.stdout.strip())
+    if not cache_path.is_absolute() or not cache_path.is_dir():
+        raise ArtifactError("runtime cache must be primed by the locked development install")
+    runtime_environment = dict(environment, UV_CACHE_DIR=str(cache_path.resolve()))
+    _run_release_command(
+        (
+            uv_executable,
+            "pip",
+            "install",
+            "--offline",
+            "--no-config",
+            "--python",
+            sys.executable,
+            "--target",
+            str(target),
+            "--require-hashes",
+            "--no-deps",
+            "--no-build",
+            "--link-mode",
+            "copy",
+            "--requirements",
+            str(requirements),
+        ),
+        cwd=target.parent,
+        environment=runtime_environment,
+        stage="locked runtime dependency installation",
+        timeout=300,
+    )
+
+
 def build_and_validate_distribution(
     root: Path, uv_command: str = "uv", git_command: str = "git"
 ) -> ArtifactSummary:
@@ -1073,6 +1175,8 @@ def build_and_validate_distribution(
         summary = inspect_distribution(reference_root, sdists[0], wheels[0])
         wheel_sha256 = summary.wheel_sha256
 
+        _install_runtime_dependencies(reference_root, target, uv_executable, environment)
+
         _run_release_command(
             (
                 uv_executable,
@@ -1094,7 +1198,7 @@ def build_and_validate_distribution(
         if _sha256(wheels[0]) != wheel_sha256:
             raise ArtifactError("wheel changed while it was being installed")
         _run_release_command(
-            (sys.executable, "-I", "-c", PACKAGE_SMOKE, str(target)),
+            (sys.executable, "-I", "-S", "-c", PACKAGE_SMOKE, str(target)),
             cwd=temporary_root,
             environment=environment,
             stage="installed-wheel smoke",
@@ -1125,7 +1229,9 @@ def _render_package_plan(uv_command: str) -> str:
             "build the wheel from that sdist in a temporary directory",
             "inspect artifact identity, entry points, templates, typing, and forbidden state",
             "install the wheel with uv pip install --offline --no-deps into a temporary target",
-            "run deterministic smoke checks outside the source checkout",
+            "install only hash-verified runtime dependencies from the locked, primed uv cache",
+            "run deterministic smoke outside the checkout "
+            "with user and environment site packages disabled",
             "Dry run only. Re-run with --execute to build and smoke the package.",
         )
     )

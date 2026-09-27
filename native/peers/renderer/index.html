@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>AF trusted peers</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="renderer.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Trusted peers</h1>
+    <p>Pairing and exact procedure leases are approved by the local operator.</p>
+    <button id="refresh" type="button">Refresh status</button>
+    <button id="stop" type="button">Stop peer connections</button>
+    <pre id="status" role="status" aria-live="polite">Native worker has not connected.</pre>
+    <form id="send">
+      <label for="peer">Paired peer public key</label>
+      <input id="peer" pattern="[0-9a-f]{64}" maxlength="64" required autocomplete="off">
+      <label for="envelope">Signed request with an approved lease</label>
+      <textarea id="envelope" required spellcheck="false" maxlength="524288"></textarea>
+      <button type="submit">Send signed request</button>
+    </form>
+    <p>Replies require independent signature and result verification. A received reply is not verified completion.</p>
+    <pre id="result" role="status" aria-live="polite"></pre>
+  </main>
+</body>
+</html>

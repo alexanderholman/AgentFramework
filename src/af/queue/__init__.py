@@ -1,5 +1,8 @@
 """Queue contracts, manager, and built-in drivers."""
 
+from af.queue.beanstalkd import BeanstalkdQueueDriver
+from af.queue.beanstalkd_manager import beanstalkd_queue_registration
+from af.queue.codec import QueueJobCodec
 from af.queue.contracts import (
     QueueDeadLetter,
     QueueDeadLetterReplayReceipt,
@@ -31,6 +34,10 @@ from af.queue.process import (
     WorkerProcessSupervisorState,
     WorkerSignalStopAdapter,
 )
+from af.queue.rabbitmq import RabbitMQQueueDriver
+from af.queue.rabbitmq_manager import rabbitmq_queue_registration
+from af.queue.redis import RedisQueueDriver
+from af.queue.redis_manager import redis_queue_registration
 from af.queue.runtime import (
     ContainerJobHandlerFactory,
     OwnedManagerConnectionRecycler,
@@ -43,6 +50,8 @@ from af.queue.runtime import (
     WorkerSupervisorMaintenance,
     WorkerSupervisorState,
 )
+from af.queue.sqs import SQSQueueDriver
+from af.queue.sqs_manager import sqs_queue_registration
 from af.queue.sync import SyncQueueDriver
 from af.queue.sync_manager import sync_queue_registration
 from af.queue.worker import (
@@ -60,6 +69,7 @@ from af.queue.worker import (
 )
 
 __all__ = (
+    "BeanstalkdQueueDriver",
     "ContainerJobHandlerFactory",
     "CooperativeJobHandler",
     "DatabaseQueueDriver",
@@ -76,11 +86,15 @@ __all__ = (
     "QueueDriver",
     "QueueFeature",
     "QueueJob",
+    "QueueJobCodec",
     "QueueJobTags",
     "QueueManager",
     "QueueOperationError",
     "QueueReservation",
     "QueueReservationLost",
+    "RabbitMQQueueDriver",
+    "RedisQueueDriver",
+    "SQSQueueDriver",
     "SpawnWorkerProcess",
     "SyncQueueDriver",
     "UnsupportedQueueFeature",
@@ -108,7 +122,11 @@ __all__ = (
     "WorkerSupervisor",
     "WorkerSupervisorMaintenance",
     "WorkerSupervisorState",
+    "beanstalkd_queue_registration",
     "bind_queue_manager",
     "database_queue_registration",
+    "rabbitmq_queue_registration",
+    "redis_queue_registration",
+    "sqs_queue_registration",
     "sync_queue_registration",
 )

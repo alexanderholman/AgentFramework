@@ -31,13 +31,17 @@ class TestParameterizedQuery:
                 limit=10,
             )
 
-    def test_query_rejects_untrusted_parameter_values(self) -> None:
-        with pytest.raises(ValueError, match="untrusted"):
-            GraphQuery(
-                text="MATCH (n {id: $nodeId}) RETURN n",
-                parameters={"nodeId": "'; DROP DATABASE; --"},
-                limit=10,
-            )
+    def test_query_keeps_sql_like_bound_values_as_data(self) -> None:
+        query = GraphQuery(
+            text="MATCH (n {id: $nodeId}) RETURN n",
+            parameters={"nodeId": "'; DROP DATABASE; --"},
+            limit=10,
+        )
+        assert query.parameters["nodeId"] == "'; DROP DATABASE; --"
+
+    def test_placeholders_inside_literals_and_comments_are_not_bindings(self) -> None:
+        query = GraphQuery(text="RETURN '$literal' AS value // $comment")
+        assert query.parameters == {}
 
     def test_query_requires_parameters_for_placeholders(self) -> None:
         with pytest.raises(ValueError, match="parameter"):
