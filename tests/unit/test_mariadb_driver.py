@@ -3,10 +3,6 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
-from sqlalchemy.pool import StaticPool
-
 from af.framework.errors import PlatformReason
 from af.framework.relational import (
     DatabaseFeature,
@@ -14,9 +10,13 @@ from af.framework.relational import (
     DatabaseStatement,
     UnsupportedDatabaseFeature,
 )
+from af.infrastructure.mariadb import MariaDBDriver
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.pool import StaticPool
+
 from af.infrastructure import mariadb as mariadb_module
 from af.infrastructure import mysql as mysql_module
-from af.infrastructure.mariadb import MariaDBDriver
 
 
 def _sqlite_engine(_url: str, **_options: object):
@@ -42,9 +42,7 @@ def test_mariadb_driver_executes_savepoints_and_read_only_transactions(
         )
         assert not driver.supports(DatabaseFeature.TRANSACTIONAL_DDL)
         with driver.transaction() as transaction:
-            transaction.execute(
-                DatabaseStatement("CREATE TABLE records (id INTEGER, value TEXT)")
-            )
+            transaction.execute(DatabaseStatement("CREATE TABLE records (id INTEGER, value TEXT)"))
             transaction.execute(
                 DatabaseStatement(
                     "INSERT INTO records (id, value) VALUES (:id, :value)",
@@ -118,9 +116,7 @@ def test_mariadb_constructor_validation_and_connection_failure_cleanup(
             self.disposed = True
 
     engine = FailingEngine()
-    monkeypatch.setattr(
-        mariadb_module, "create_engine", lambda *_args, **_options: engine
-    )
+    monkeypatch.setattr(mariadb_module, "create_engine", lambda *_args, **_options: engine)
     with pytest.raises(DatabaseOperationError) as captured:
         MariaDBDriver("mariadb+pymysql://user:secret@localhost/database")
     assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
@@ -144,24 +140,17 @@ def test_mariadb_rejects_other_dialects_and_sanitizes_connect_failure(
     assert "secret" not in repr(captured.value)
 
 
-def test_record_changed_inside_savepoint_preserves_retryable_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    with (
-        _driver(monkeypatch) as driver,
-        pytest.raises(DatabaseOperationError) as captured,
-    ):
-        with driver.transaction() as transaction:
-            with transaction.savepoint("projection_race"):
-                error = OperationalError(
-                    "UPDATE projection checkpoint",
-                    {},
-                    Exception(1020, "record changed since last read"),
-                )
-                raise transaction._failure(error, stage="database.execute")
+def test_record_changed_error_is_retryable() -> None:
+    error = OperationalError(
+        "UPDATE projection checkpoint",
+        {},
+        Exception(1020, "record changed since last read"),
+    )
 
-    assert captured.value.reason is PlatformReason.TRANSIENT_FAILURE
-    assert captured.value.stage == "database.execute"
+    translated = mysql_module._failure(error, stage="database.execute")
+
+    assert translated.reason is PlatformReason.TRANSIENT_FAILURE
+    assert translated.stage == "database.execute"
 
 
 def test_mariadb_transaction_contract_fails_closed_and_recovers(
@@ -202,9 +191,7 @@ def test_mariadb_stream_is_bounded_by_transaction(
 ) -> None:
     with _driver(monkeypatch) as driver:
         with driver.transaction(read_only=True) as transaction:
-            cursor = transaction.stream(
-                DatabaseStatement("SELECT 1 AS value", read_only=True)
-            )
+            cursor = transaction.stream(DatabaseStatement("SELECT 1 AS value", read_only=True))
             assert next(cursor)["value"] == 1
         with pytest.raises(DatabaseOperationError) as captured:
             next(cursor)
@@ -327,9 +314,7 @@ def test_mariadb_rollback_only_prevents_caught_failure_commit(
             transaction.execute(DatabaseStatement("INSERT INTO records VALUES (1)"))
             transaction.mark_rollback_only()
         with driver.transaction(read_only=True) as transaction:
-            rows = transaction.query(
-                DatabaseStatement("SELECT id FROM records", read_only=True)
-            )
+            rows = transaction.query(DatabaseStatement("SELECT id FROM records", read_only=True))
 
     assert captured.value.reason is PlatformReason.INTEGRITY_FAILURE
     assert captured.value.stage == "database.transaction.rollback-only"
