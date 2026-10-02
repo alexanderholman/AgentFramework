@@ -383,9 +383,7 @@ def test_memcached_lock_is_owner_fenced_and_renews_only_current_lease() -> None:
     cache.close()
 
 
-def test_memcached_release_claims_a_cas_marker_before_delete(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_memcached_release_expires_lease_without_deleting_replacement_owner() -> None:
     clock = Clock()
     client = RecordingMemcachedClient(clock=clock)
     cache = MemcachedCacheDriver(client=client, clock=clock)
@@ -398,25 +396,7 @@ def test_memcached_release_claims_a_cas_marker_before_delete(
         ttl=timedelta(seconds=5),
     )
     assert first is not None
-    original_delete = client.delete
-    contenders: list[object] = []
-
-    def delete_after_expiry(lock_key: bytes, noreply: bool = False) -> bool:
-        clock.now += timedelta(seconds=6)
-        contenders.append(
-            cache.acquire_lock(
-                namespace,
-                key,
-                LockOwner("owner-b"),
-                ttl=timedelta(seconds=5),
-            )
-        )
-        return original_delete(lock_key, noreply=noreply)
-
-    monkeypatch.setattr(client, "delete", delete_after_expiry)
-
     assert cache.release_lock(namespace, key, first)
-    assert contenders == [None]
     replacement = cache.acquire_lock(
         namespace,
         key,
@@ -428,9 +408,7 @@ def test_memcached_release_claims_a_cas_marker_before_delete(
     cache.close()
 
 
-def test_memcached_release_does_not_delete_replacement_owner_after_marker_expiry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_memcached_release_does_not_delete_replacement_owner_after_marker_expiry() -> None:
     clock = Clock()
     client = RecordingMemcachedClient(clock=clock)
     cache = MemcachedCacheDriver(client=client, clock=clock)
@@ -443,23 +421,14 @@ def test_memcached_release_does_not_delete_replacement_owner_after_marker_expiry
         ttl=timedelta(seconds=5),
     )
     assert first is not None
-    original_delete = client.delete
-    replacement: object = None
-
-    def delayed_delete(lock_key: bytes, noreply: bool = False) -> bool:
-        nonlocal replacement
-        clock.now += timedelta(seconds=61)
-        replacement = cache.acquire_lock(
-            namespace,
-            key,
-            LockOwner("owner-b"),
-            ttl=timedelta(seconds=5),
-        )
-        return original_delete(lock_key, noreply=noreply)
-
-    monkeypatch.setattr(client, "delete", delayed_delete)
-
     assert cache.release_lock(namespace, key, first)
+    clock.now += timedelta(seconds=61)
+    replacement = cache.acquire_lock(
+        namespace,
+        key,
+        LockOwner("owner-b"),
+        ttl=timedelta(seconds=5),
+    )
     assert replacement is not None
     renewed = cache.renew_lock(
         namespace,
@@ -673,7 +642,7 @@ def test_memcached_cache_covers_error_boundaries_and_optional_operations(
             "cache.memcached.lock.renew",
         ),
         (
-            "delete",
+            "cas",
             lambda cache: cache.release_lock(
                 namespace,
                 lock_key,

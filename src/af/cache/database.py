@@ -485,9 +485,10 @@ class DatabaseCacheDriver:
                 return False
             try:
                 with self._engine.begin() as connection:
-                    deleted = connection.execute(
+                    released = connection.execute(
                         text(
-                            "DELETE FROM af_cache_locks WHERE application_id = :application_id "
+                            "UPDATE af_cache_locks SET expires_at = :released_at "
+                            "WHERE application_id = :application_id "
                             "AND tenant_id = :tenant_id AND namespace = :namespace AND key = :key "
                             "AND owner = :owner AND fencing_token = :fencing_token "
                             "AND expires_at = :expires_at"
@@ -500,9 +501,10 @@ class DatabaseCacheDriver:
                             "owner": lease.owner.value,
                             "fencing_token": lease.fencing_token,
                             "expires_at": lease.expires_at.isoformat(),
+                            "released_at": now.isoformat(),
                         },
                     )
-                    return deleted.rowcount > 0
+                    return released.rowcount > 0
             except SQLAlchemyError as error:
                 raise _failure(error, stage="cache.database.lock.release") from None
 
