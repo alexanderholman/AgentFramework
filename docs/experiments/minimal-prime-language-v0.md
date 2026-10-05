@@ -72,3 +72,26 @@ complete Swadesh benchmark:
 The deliberate result is that paired surface concepts such as give/receive, come/go,
 in/out, before/after and big/small are candidates for Grimoire-level perspective or ordering,
 not automatically separate semantic primes.
+
+
+## First threshold result: 2026-10-05
+
+The representative executable corpus initially collapses to 18 semantic primes and 12 Grimoire operators:
+
+```text
+BODY CHANGE KNOW LIVING MANY MOVE OTHER PERCEIVE PLACE PROPERTY RELATE SAY
+SELF SPACE SUBSTANCE THING THINK TIME
+
+COMPARE COMPOSE LOCATE NEGATE ORDER PARTITION PERSPECTIVE POSSESS QUANTIFY
+ROLE TEMPORAL TYPE
+```
+
+This is **not yet a valid claim of 40-word coverage**. The run exposed a more important modelling problem: a generic operator such as `TYPE` cannot distinguish PERSON, ANIMAL, TREE, WATER, SEE and HEAR unless its type argument carries semantic information. Treating that argument as free would merely hide vocabulary inside grammar.
+
+Therefore every parameter supplied to a Grimoire operator must itself be one of:
+
+1. a registered Ideon expression constructed from the available core;
+2. structural information already present in the graph; or
+3. explicitly charged extension/domain vocabulary.
+
+The next experiment must distinguish **semantic primes**, **structural Grimoire operators**, and **convenience/extension Ideons**. A small prime core is useful only if extension Ideons have genuine derivations rather than undeclared labels.
